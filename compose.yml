@@ -1,0 +1,22 @@
+services:
+  cairn:
+    build: .
+    container_name: cairn
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "9931:9931"
+    volumes:
+      # Persistent state: cairn.db (SpatiaLite) + disposable tile/osm caches.
+      - ./data:/data
+    networks:
+      - default
+      # Shared with the other home-server services; not strictly needed by Cairn
+      # (it only reaches public Overpass/Terrarium) but kept for parity and
+      # any future container-to-container use.
+      - home-proxy
+
+networks:
+  default:
+  home-proxy:
+    external: true
