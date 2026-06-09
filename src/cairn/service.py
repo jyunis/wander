@@ -9,6 +9,7 @@ the TLC-1 purity rule constrains only the engine's scoring/normalization.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 
@@ -63,10 +64,30 @@ class RunService:
         self._terrain_factory = terrain_factory
 
     async def score_bbox(self, bbox: Bbox, weights: dict[str, float]) -> Run:
-        """Execute UoW-1. Returns the finished (done or failed) Run."""
-        b = validate_request(bbox, weights, self._s)  # raises before any work
+        """Execute UoW-1 synchronously. Returns the finished (done|failed) Run.
+
+        Validation (TLC-4) raises BEFORE any run row or fetch."""
+        b = validate_request(bbox, weights, self._s)
         params = await self._store.scoring_config_params(SCORING_CONFIG_VERSION)
         run_id = await self._store.create_run(b, weights, SCORING_CONFIG_VERSION)
+        await self._execute(run_id, b, weights, params)
+        return await self._store.get_run(run_id)
+
+    async def start_async(self, bbox: Bbox, weights: dict[str, float]) -> int:
+        """Validate, create the run row, and schedule execution in the
+        background (TLC-4 async path). Returns the run_id immediately; the
+        client polls GET /runs/{id}. Validation still raises synchronously."""
+        b = validate_request(bbox, weights, self._s)
+        params = await self._store.scoring_config_params(SCORING_CONFIG_VERSION)
+        run_id = await self._store.create_run(b, weights, SCORING_CONFIG_VERSION)
+        asyncio.create_task(self._execute(run_id, b, weights, params))
+        return run_id
+
+    async def _execute(
+        self, run_id: int, b: Bbox, weights: dict[str, float], params: dict
+    ) -> None:
+        """Run steps 2-8 of UoW-1, persisting status transitions. Never raises
+        out (TLC-10): any failure is recorded on the run row."""
         started = time.monotonic()
 
         def check_clock(stage: str) -> None:
@@ -159,8 +180,6 @@ class RunService:
         except Exception as exc:  # unexpected — still surface, never swallow
             log.exception("run %d crashed", run_id)
             await self._store.fail_run(run_id, f"InternalError: {exc}")
-
-        return await self._store.get_run(run_id)
 
 
 def _feature_row(cid: int, cf: CandidateFeatures) -> tuple:

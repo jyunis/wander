@@ -88,6 +88,9 @@ class Settings(BaseSettings):
     max_bbox_area_km2: float = 2500.0
     max_candidates: int = 5000
     max_wallclock_seconds: float = 120.0
+    # Bboxes at/under this area score synchronously (resolve on the first
+    # poll); larger ones run as a background job the UI polls (TLC-4).
+    sync_area_threshold_km2: float = 200.0
 
     # --- Memory invariants (TLC-13 / TLC-14) -------------------------------
     tile_lru_cap: int = 16
