@@ -22,7 +22,16 @@ import aiosqlite
 
 from cairn.config import Settings
 from cairn.engine.scoring_config import DEFAULT_SCORING_PARAMS, SCORING_CONFIG_VERSION
-from cairn.errors import SchemaVersionError, SpatialiteUnavailable, StoreError
+from cairn.engine.types import Candidate, ScoredCandidate, Way
+from cairn.errors import (
+    RunNotFound,
+    SchemaVersionError,
+    SpatialiteUnavailable,
+    StoreError,
+)
+from cairn.store.types import Bbox, Run
+
+_M_PER_DEG = 111320.0
 
 SCHEMA_VERSION = 1
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
@@ -188,3 +197,349 @@ class Store:
             "caches_writable": caches_writable,
             "db_path": str(s.db_path),
         }
+
+    # --- scoring config ----------------------------------------------------
+
+    async def scoring_config_params(self, version: int) -> dict:
+        cur = await self.db.execute(
+            "SELECT params_json FROM scoring_config WHERE version = ?", (version,)
+        )
+        row = await cur.fetchone()
+        if row is None:
+            raise StoreError(f"no scoring_config version {version}")
+        return json.loads(row[0])
+
+    # --- runs (TLC-9 append-only once done) --------------------------------
+
+    async def create_run(
+        self, bbox: Bbox, weights: dict[str, float], scoring_config_version: int
+    ) -> int:
+        b = bbox.normalized()
+        cur = await self.db.execute(
+            "INSERT INTO runs (min_lon, min_lat, max_lon, max_lat, weights_json, "
+            "scoring_config_version, status) VALUES (?, ?, ?, ?, ?, ?, 'pending')",
+            (
+                b.min_lon,
+                b.min_lat,
+                b.max_lon,
+                b.max_lat,
+                json.dumps(weights),
+                scoring_config_version,
+            ),
+        )
+        await self.db.commit()
+        return int(cur.lastrowid)
+
+    async def set_run_status(self, run_id: int, status: str) -> None:
+        await self.db.execute(
+            "UPDATE runs SET status = ? WHERE id = ?", (status, run_id)
+        )
+        await self.db.commit()
+
+    async def fail_run(self, run_id: int, reason: str) -> None:
+        await self.db.execute(
+            "UPDATE runs SET status = 'failed', failure_reason = ? WHERE id = ?",
+            (reason, run_id),
+        )
+        await self.db.commit()
+
+    async def finish_run(
+        self,
+        run_id: int,
+        *,
+        provenance: dict,
+        candidate_count: int,
+        capped: bool,
+        degraded_features: list[str],
+    ) -> None:
+        await self.db.execute(
+            "UPDATE runs SET status = 'done', provenance_json = ?, candidate_count = ?, "
+            "capped = ?, degraded_features_json = ?, "
+            "done_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
+            (
+                json.dumps(provenance),
+                candidate_count,
+                1 if capped else 0,
+                json.dumps(degraded_features),
+                run_id,
+            ),
+        )
+        await self.db.commit()
+
+    async def get_run(self, run_id: int) -> Run:
+        cur = await self.db.execute(
+            "SELECT id, min_lon, min_lat, max_lon, max_lat, weights_json, "
+            "scoring_config_version, provenance_json, status, failure_reason, "
+            "candidate_count, capped, degraded_features_json, created_at, done_at "
+            "FROM runs WHERE id = ?",
+            (run_id,),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            raise RunNotFound(f"run {run_id} not found")
+        return Run(
+            id=row[0],
+            bbox=Bbox(row[1], row[2], row[3], row[4]),
+            weights=json.loads(row[5]),
+            scoring_config_version=row[6],
+            provenance=json.loads(row[7]) if row[7] else None,
+            status=row[8],
+            failure_reason=row[9],
+            candidate_count=row[10],
+            capped=bool(row[11]),
+            degraded_features=json.loads(row[12]) if row[12] else [],
+            created_at=row[13],
+            done_at=row[14],
+        )
+
+    async def list_runs(self, limit: int = 50) -> list[Run]:
+        cur = await self.db.execute(
+            "SELECT id FROM runs ORDER BY created_at DESC LIMIT ?", (limit,)
+        )
+        ids = [r[0] for r in await cur.fetchall()]
+        return [await self.get_run(i) for i in ids]
+
+    # --- OSM ingest (chunked, idempotent — TLC-11, TLC-14) -----------------
+
+    async def upsert_osm_chunk(self, rows: list[tuple]) -> None:
+        """Upsert a chunk of (osm_type, osm_id, feature_class, tags_json, wkt).
+
+        Keyed on (osm_type, osm_id, feature_class) so re-ingest is a no-op on
+        content match (TLC-11). One commit per chunk (TLC-14).
+        """
+        if not rows:
+            return
+        await self.db.executemany(
+            "INSERT INTO osm_features (osm_type, osm_id, feature_class, tags_json, geom) "
+            "VALUES (?, ?, ?, ?, GeomFromText(?, 4326)) "
+            "ON CONFLICT(osm_type, osm_id, feature_class) DO UPDATE SET "
+            "tags_json = excluded.tags_json, geom = excluded.geom",
+            rows,
+        )
+        await self.db.commit()
+
+    async def classes_present(self, bbox: Bbox) -> set[str]:
+        """Which scored feature classes exist within the bbox (TLC-6 layer
+        availability). Uses the R*Tree MBR filter."""
+        b = bbox.normalized()
+        cur = await self.db.execute(
+            "SELECT DISTINCT feature_class FROM osm_features "
+            "WHERE ROWID IN (SELECT ROWID FROM SpatialIndex "
+            "  WHERE f_table_name = 'osm_features' AND f_geometry_column = 'geom' "
+            "  AND search_frame = BuildMbr(?, ?, ?, ?, 4326))",
+            (b.min_lon, b.min_lat, b.max_lon, b.max_lat),
+        )
+        return {r[0] for r in await cur.fetchall()}
+
+    async def load_drivable_ways(self, bbox: Bbox) -> list[Way]:
+        """Drivable ways CLIPPED to the bbox, as ordered polylines.
+
+        Overpass returns whole way geometries for ways that merely touch the
+        bbox; ST_Intersection clips each to the bbox so candidates never land
+        outside the requested area. A clipped way that splits into disjoint
+        parts becomes several Ways (same osm_id) so sampling never bridges the
+        gap between parts."""
+        b = bbox.normalized()
+        cur = await self.db.execute(
+            "SELECT osm_id, AsGeoJSON(ST_Intersection(geom, "
+            "  BuildMbr(?, ?, ?, ?, 4326))) FROM osm_features "
+            "WHERE feature_class = 'drivable' AND ROWID IN ("
+            "  SELECT ROWID FROM SpatialIndex WHERE f_table_name = 'osm_features' "
+            "  AND f_geometry_column = 'geom' "
+            "  AND search_frame = BuildMbr(?, ?, ?, ?, 4326))",
+            (
+                b.min_lon, b.min_lat, b.max_lon, b.max_lat,
+                b.min_lon, b.min_lat, b.max_lon, b.max_lat,
+            ),
+        )
+        ways: list[Way] = []
+        for osm_id, gj in await cur.fetchall():
+            if not gj:
+                continue
+            for part in _line_parts(json.loads(gj)):
+                if len(part) >= 2:
+                    ways.append(Way(osm_id=int(osm_id), coords=tuple(part)))
+        return ways
+
+    # --- candidates / features / scores ------------------------------------
+
+    async def insert_candidates(
+        self, run_id: int, candidates: list[Candidate], capped: bool
+    ) -> list[tuple[int, Candidate]]:
+        """Insert candidates; return (db_id, Candidate) pairs in insert order."""
+        if not candidates:
+            return []
+        await self.db.executemany(
+            "INSERT INTO candidates (run_id, source_way_id, capped, lon, lat, geom) "
+            "VALUES (?, ?, ?, ?, ?, MakePoint(?, ?, 4326))",
+            [
+                (run_id, c.source_way_id, 1 if capped else 0, c.lon, c.lat, c.lon, c.lat)
+                for c in candidates
+            ],
+        )
+        await self.db.commit()
+        cur = await self.db.execute(
+            "SELECT id, lon, lat, source_way_id FROM candidates "
+            "WHERE run_id = ? ORDER BY id",
+            (run_id,),
+        )
+        return [
+            (row[0], Candidate(lon=row[1], lat=row[2], source_way_id=row[3]))
+            for row in await cur.fetchall()
+        ]
+
+    async def nearest_distance_m(
+        self, lon: float, lat: float, classes: tuple[str, ...], max_radius_m: float
+    ) -> float | None:
+        """Min geodesic distance (m) from a point to any feature in `classes`
+        within `max_radius_m`. None if none found in the search frame.
+
+        Inside a polygon (e.g. a forest) ST_Distance is 0. The R*Tree MBR
+        bounds the work to O(local features), never the whole layer."""
+        import math as _math
+
+        cos_lat = _math.cos(_math.radians(lat))
+        radius_deg = max_radius_m / (_M_PER_DEG * max(cos_lat, 1e-6))
+        placeholders = ",".join("?" for _ in classes)
+        cur = await self.db.execute(
+            f"SELECT MIN(ST_Distance(MakePoint(?, ?, 4326), geom, 1)) "
+            f"FROM osm_features WHERE feature_class IN ({placeholders}) AND ROWID IN ("
+            f"  SELECT ROWID FROM SpatialIndex WHERE f_table_name = 'osm_features' "
+            f"  AND f_geometry_column = 'geom' "
+            f"  AND search_frame = BuildCircleMbr(?, ?, ?, 4326))",
+            (lon, lat, *classes, lon, lat, radius_deg),
+        )
+        row = await cur.fetchone()
+        return None if row is None or row[0] is None else float(row[0])
+
+    async def insert_candidate_features(self, rows: list[tuple]) -> None:
+        """rows: (candidate_id, slope_deg, slope_unavail, dist_water_m,
+        water_unavail, dist_forest_m, forest_unavail, dist_solitude_m,
+        solitude_unavail, near_campsite)."""
+        if not rows:
+            return
+        await self.db.executemany(
+            "INSERT INTO candidate_features (candidate_id, slope_deg, slope_unavailable, "
+            "dist_water_m, water_unavailable, dist_forest_m, forest_unavailable, "
+            "dist_solitude_m, solitude_unavailable, near_campsite) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        await self.db.commit()
+
+    async def insert_candidate_scores(
+        self, scored: list[ScoredCandidate], id_map: dict[tuple, int]
+    ) -> None:
+        rows = []
+        for sc in scored:
+            key = (sc.candidate.lon, sc.candidate.lat, sc.candidate.source_way_id)
+            cid = id_map.get(key)
+            if cid is None:
+                continue
+            contributions = [
+                {
+                    "feature": c.feature,
+                    "normalized": c.normalized,
+                    "weight": c.weight,
+                    "contribution": c.contribution,
+                }
+                for c in sc.contributions
+            ]
+            rows.append(
+                (
+                    cid,
+                    sc.total,
+                    json.dumps(contributions),
+                    json.dumps(sc.degraded_features),
+                )
+            )
+        if not rows:
+            return
+        await self.db.executemany(
+            "INSERT INTO candidate_scores (candidate_id, total, contributions_json, "
+            "degraded_features_json) VALUES (?, ?, ?, ?)",
+            rows,
+        )
+        await self.db.commit()
+
+    async def get_run_geojson(self, run_id: int, top_n: int | None = None) -> dict:
+        """A GeoJSON FeatureCollection of scored candidates, ranked, carrying
+        the TLC-3 disclaimer, TLC-8 contributions, TLC-6 degraded flags, and
+        TLC-2 provenance. Reads committed results from the DB (TLC-7)."""
+        from cairn import DISCLAIMER
+
+        run = await self.get_run(run_id)
+        limit_clause = "LIMIT ?" if top_n else ""
+        params: tuple = (run_id, top_n) if top_n else (run_id,)
+        cur = await self.db.execute(
+            "SELECT c.id, c.lon, c.lat, c.source_way_id, s.total, s.contributions_json, "
+            "s.degraded_features_json, f.slope_deg, f.dist_water_m, f.dist_forest_m, "
+            "f.dist_solitude_m, f.near_campsite "
+            "FROM candidates c JOIN candidate_scores s ON s.candidate_id = c.id "
+            "LEFT JOIN candidate_features f ON f.candidate_id = c.id "
+            f"WHERE c.run_id = ? ORDER BY s.total DESC, c.id {limit_clause}",
+            params,
+        )
+        features = []
+        for rank, row in enumerate(await cur.fetchall(), start=1):
+            features.append(
+                {
+                    "type": "Feature",
+                    "geometry": {"type": "Point", "coordinates": [row[1], row[2]]},
+                    "properties": {
+                        "rank": rank,
+                        "candidate_id": row[0],
+                        "source_way_id": row[3],
+                        "total": row[4],
+                        "contributions": json.loads(row[5]),
+                        "degraded_features": json.loads(row[6]),
+                        "slope_deg": row[7],
+                        "dist_water_m": row[8],
+                        "dist_forest_m": row[9],
+                        "dist_solitude_m": row[10],
+                        "near_campsite": bool(row[11]),
+                        "disclaimer": DISCLAIMER,
+                    },
+                }
+            )
+        return {
+            "type": "FeatureCollection",
+            "disclaimer": DISCLAIMER,
+            "run": {
+                "id": run.id,
+                "status": run.status,
+                "bbox": [
+                    run.bbox.min_lon,
+                    run.bbox.min_lat,
+                    run.bbox.max_lon,
+                    run.bbox.max_lat,
+                ],
+                "weights": run.weights,
+                "scoring_config_version": run.scoring_config_version,
+                "provenance": run.provenance,
+                "candidate_count": run.candidate_count,
+                "capped": run.capped,
+                "degraded_features": run.degraded_features,
+                "failure_reason": run.failure_reason,
+            },
+            "features": features,
+        }
+
+
+def _line_parts(geom: dict) -> list[list[tuple[float, float]]]:
+    """Ordered (lon, lat) parts from a GeoJSON LineString/MultiLineString/
+    GeometryCollection — one list per continuous linestring."""
+    gtype = geom.get("type")
+    if gtype == "LineString":
+        return [[(float(x), float(y)) for x, y in geom.get("coordinates", [])]]
+    if gtype == "MultiLineString":
+        return [
+            [(float(x), float(y)) for x, y in part]
+            for part in geom.get("coordinates", [])
+        ]
+    if gtype == "GeometryCollection":
+        out: list[list[tuple[float, float]]] = []
+        for g in geom.get("geometries", []):
+            out.extend(_line_parts(g))
+        return out
+    return []
