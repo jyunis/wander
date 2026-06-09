@@ -113,3 +113,14 @@ def test_unknown_run_returns_404(client):
     r = client.get("/runs/999999")
     assert r.status_code == 404
     assert r.json()["error"] == "RunNotFound"
+
+
+def test_static_ui_served_and_does_not_shadow_api(client):
+    # FC-9: the static UI is served at / without shadowing the JSON API.
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "Cairn" in r.text and "disclaimer" in r.text.lower()
+    assert client.get("/app.js").status_code == 200
+    assert client.get("/app.css").status_code == 200
+    # API routes still win over the static mount.
+    assert client.get("/config").json()["max_bbox_area_km2"] == 2500.0

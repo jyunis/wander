@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cairn 🪨 — campsite scorer</title>
+
+  <!-- Leaflet + plugins (CDN; the browser fetches these, not the server) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+
+  <link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+  <div id="app">
+    <aside id="panel">
+      <header>
+        <h1>Cairn <span class="cairn">🪨</span></h1>
+        <nav id="tabs">
+          <button class="tab active" data-tab="score">Score</button>
+          <button class="tab disabled" data-tab="triplog" title="Coming later" disabled>
+            Trip log
+          </button>
+        </nav>
+      </header>
+
+      <!-- TLC-3: persistent, non-dismissible legality disclaimer -->
+      <div id="disclaimer" class="disclaimer">Loading…</div>
+
+      <section class="controls">
+        <div class="row">
+          <button id="draw-bbox" class="btn">▭ Draw area</button>
+          <button id="use-view" class="btn ghost">Use current view</button>
+        </div>
+        <div id="bbox-readout" class="hint">No area selected.</div>
+
+        <h2>Weights</h2>
+        <div id="presets" class="presets"></div>
+        <div id="sliders"></div>
+
+        <button id="score-btn" class="btn primary" disabled>Score this area</button>
+        <div id="status" class="status"></div>
+
+        <h2>Runs</h2>
+        <select id="run-history"></select>
+        <div id="provenance" class="provenance"></div>
+        <div id="degraded" class="degraded"></div>
+      </section>
+
+      <section id="breakdown" class="breakdown hidden">
+        <h2>Why this score <button id="bd-close" class="x">×</button></h2>
+        <div id="bd-body"></div>
+      </section>
+
+      <footer class="foot">
+        <a href="/config" target="_blank">config</a> ·
+        <a href="/health" target="_blank">health</a>
+      </footer>
+    </aside>
+
+    <main id="map"></main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
