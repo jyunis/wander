@@ -33,8 +33,11 @@ from cairn.store.types import Bbox, Run
 
 _M_PER_DEG = 111320.0
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
+
+# Sentinel for partial updates: distinguishes "field omitted" from "set to NULL".
+UNSET: object = object()
 
 # Forward migrations keyed by from_version. Each entry is a list of statements
 # ending with `INSERT INTO schema_version (version) VALUES (n+1)`.
@@ -69,6 +72,10 @@ _MIGRATIONS: dict[int, list[str]] = {
         "  lat REAL NOT NULL, lon REAL NOT NULL, payload_json TEXT, note TEXT, "
         "  created_at TEXT NOT NULL)",
         "INSERT INTO schema_version (version) VALUES (6)",
+    ],
+    6: [
+        "ALTER TABLE saved_places ADD COLUMN rating REAL",  # 0-5 stars, nullable
+        "INSERT INTO schema_version (version) VALUES (7)",
     ],
 }
 
@@ -342,23 +349,24 @@ class Store:
         return {
             "id": row[0], "kind": row[1], "name": row[2], "lat": row[3], "lon": row[4],
             "payload": json.loads(row[5]) if row[5] else None,
-            "note": row[6], "created_at": row[7],
+            "note": row[6], "created_at": row[7], "rating": row[8],
         }
 
-    _SAVED_COLS = "id, kind, name, lat, lon, payload_json, note, created_at"
+    _SAVED_COLS = "id, kind, name, lat, lon, payload_json, note, created_at, rating"
 
     async def add_saved(
         self, kind: str, name: str | None, lat: float, lon: float,
-        payload: dict | None = None, note: str | None = None,
+        payload: dict | None = None, note: str | None = None, rating: float | None = None,
     ) -> dict:
         import datetime as _dt
 
         created = _dt.datetime.now(tz=_dt.timezone.utc).replace(microsecond=0).isoformat()
         cur = await self.db.execute(
-            "INSERT INTO saved_places (kind, name, lat, lon, payload_json, note, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO saved_places "
+            "(kind, name, lat, lon, payload_json, note, created_at, rating) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (kind, name, lat, lon,
-             json.dumps(payload) if payload is not None else None, note, created),
+             json.dumps(payload) if payload is not None else None, note, created, rating),
         )
         await self.db.commit()
         return self._saved_row(
@@ -378,11 +386,24 @@ class Store:
         await self.db.commit()
         return cur.rowcount > 0
 
-    async def update_saved(self, saved_id: int, name: str | None) -> dict | None:
-        await self.db.execute(
-            "UPDATE saved_places SET name=? WHERE id=?", (name, saved_id)
-        )
-        await self.db.commit()
+    async def update_saved(
+        self, saved_id: int, name: object = UNSET, rating: object = UNSET
+    ) -> dict | None:
+        """Partial update of a saved place. Only fields not left UNSET are
+        written (so a rating edit doesn't clobber the name, and vice versa)."""
+        sets, params = [], []
+        if name is not UNSET:
+            sets.append("name=?")
+            params.append(name)
+        if rating is not UNSET:
+            sets.append("rating=?")
+            params.append(rating)
+        if sets:
+            params.append(saved_id)
+            await self.db.execute(
+                f"UPDATE saved_places SET {', '.join(sets)} WHERE id=?", params
+            )
+            await self.db.commit()
         row = await (await self.db.execute(
             f"SELECT {self._SAVED_COLS} FROM saved_places WHERE id=?", (saved_id,)
         )).fetchone()
