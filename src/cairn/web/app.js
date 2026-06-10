@@ -166,6 +166,19 @@ async function init() {
     if (el) el.addEventListener("input", applyCampgroundFilters);
   });
   $("sheet-close").onclick = closeSite;
+  // Delegated ★ handler — works for the site sheet and every campground card.
+  document.addEventListener("click", (e) => {
+    const star = e.target.closest(".star");
+    if (!star) return;
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      toggleFav(JSON.parse(star.dataset.fav), star);
+    } catch {
+      /* ignore malformed */
+    }
+  });
+  loadSaved();
 }
 
 function buildSliders() {
@@ -665,7 +678,8 @@ function renderOverlayLayer(layerId, gj) {
     onEachFeature: (feat, lyr) => {
       const p = feat.properties || {};
       if (isPoint) {
-        lyr.bindPopup(() => campgroundCard(p), { maxWidth: 250, className: "cg-popup" });
+        const [clon, clat] = feat.geometry.coordinates;
+        lyr.bindPopup(() => campgroundCard(p, clat, clon), { maxWidth: 250, className: "cg-popup" });
       } else {
         const tip = isOwn
           ? `${p.category || "—"}${p.name ? " · " + p.name + " Co." : ""}`
@@ -751,9 +765,18 @@ function campgroundLink(p) {
 }
 
 // Rich popup card for a campground: badges + facts + blurb + the link.
-function campgroundCard(p) {
+function campgroundCard(p, lat, lon) {
   const m = p.meta || {};
   const { href, label } = campgroundLink(p);
+  const star =
+    lat != null && lon != null
+      ? starButton("campground", lat, lon, p.name, {
+          category: p.category,
+          name: p.name,
+          url: p.url,
+          meta: p.meta,
+        })
+      : "";
   const badges = [];
   if (m.sites) badges.push(`${m.sites} sites`);
   if (typeof m.reservable === "boolean") badges.push(m.reservable ? "✅ reservable" : "🪧 first-come");
@@ -772,7 +795,7 @@ function campgroundCard(p) {
   const acts = (m.activities || []).map(esc).join(" · ");
 
   return (
-    `<div class="cg-pop"><b>${esc(p.name) || "Campground"}</b>` +
+    `<div class="cg-pop">${star}<b>${esc(p.name) || "Campground"}</b>` +
     `<div class="cg-cat">${esc(p.category)}</div>` +
     badgeRow +
     row("cg-facts", types) +
@@ -858,6 +881,94 @@ function amenityChips(meta) {
   );
 }
 
+// --- saved places (favorites; server-side so they sync laptop↔phone) -------
+let savedPlaces = [];
+const savedByKey = new Map(); // key -> id
+const savedKey = (kind, lat, lon) => `${kind}:${(+lat).toFixed(5)}:${(+lon).toFixed(5)}`;
+const isSaved = (kind, lat, lon) => savedByKey.has(savedKey(kind, lat, lon));
+
+async function loadSaved() {
+  try {
+    savedPlaces = (await (await fetch("/saved")).json()).saved || [];
+  } catch {
+    savedPlaces = [];
+  }
+  savedByKey.clear();
+  savedPlaces.forEach((s) => savedByKey.set(savedKey(s.kind, s.lat, s.lon), s.id));
+  renderSavedList();
+}
+
+// A ★/☆ toggle carrying its place as JSON (read by the delegated click handler).
+function starButton(kind, lat, lon, name, payload) {
+  const on = isSaved(kind, lat, lon);
+  const fav = esc(JSON.stringify({ kind, name: name || null, lat, lon, payload: payload || null }));
+  return `<button class="star${on ? " on" : ""}" title="Save" data-fav="${fav}">${on ? "★" : "☆"}</button>`;
+}
+
+async function toggleFav(fav, btn) {
+  const key = savedKey(fav.kind, fav.lat, fav.lon);
+  const id = savedByKey.get(key);
+  if (id != null) {
+    await fetch(`/saved/${id}`, { method: "DELETE" });
+    savedPlaces = savedPlaces.filter((s) => s.id !== id);
+    savedByKey.delete(key);
+  } else {
+    const r = await fetch("/saved", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(fav),
+    });
+    if (r.ok) {
+      const row = await r.json();
+      savedPlaces.unshift(row);
+      savedByKey.set(key, row.id);
+    }
+  }
+  if (btn) {
+    const on = savedByKey.has(key);
+    btn.textContent = on ? "★" : "☆";
+    btn.classList.toggle("on", on);
+  }
+  renderSavedList();
+}
+
+function renderSavedList() {
+  const host = $("saved-list");
+  if (!host) return;
+  $("saved-section").hidden = savedPlaces.length === 0;
+  host.innerHTML = savedPlaces
+    .map((s, i) => {
+      const icon = s.kind === "campground" ? "🏕" : "📍";
+      const label =
+        s.name ||
+        (s.payload && s.payload.total != null ? `Site · ${s.payload.total.toFixed(2)}` : "Site");
+      return (
+        `<div class="saved-row" data-i="${i}">${icon} <span>${esc(label)}</span>` +
+        `<button class="saved-del" title="Remove">×</button></div>`
+      );
+    })
+    .join("");
+  host.querySelectorAll(".saved-row").forEach((row, i) => {
+    row.querySelector("span").onclick = () => reopenSaved(savedPlaces[i]);
+    row.querySelector(".saved-del").onclick = (e) => {
+      e.stopPropagation();
+      toggleFav(savedPlaces[i]);
+    };
+  });
+}
+
+function reopenSaved(s) {
+  map.setView([s.lat, s.lon], 14);
+  if (s.kind === "campground") {
+    L.popup({ className: "cg-popup", maxWidth: 250 })
+      .setLatLng([s.lat, s.lon])
+      .setContent(campgroundCard(s.payload || { name: s.name }, s.lat, s.lon))
+      .openOn(map);
+  } else {
+    showSite(s.payload || {}, s.lat, s.lon);
+  }
+}
+
 // List the nearest campgrounds in the sheet + show their markers on the map.
 // A row or marker tap opens that campground's card as a normal map popup — the
 // site stays in the sheet, so there's no popup conflict. Display-only (TLC-3).
@@ -881,7 +992,7 @@ async function loadNearbyCampgrounds(lat, lon, body) {
         iconSize: [22, 22],
         iconAnchor: [11, 11],
       }),
-    }).bindPopup(() => campgroundCard(cg), { maxWidth: 250, className: "cg-popup" });
+    }).bindPopup(() => campgroundCard(cg, cg.lat, cg.lon), { maxWidth: 250, className: "cg-popup" });
     nearbyCgLayer.addLayer(mk);
     return mk;
   });
@@ -913,7 +1024,8 @@ function breakdownHtml(p, lat, lon, { expanded = false } = {}) {
   const coords = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
   const gmaps = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
   const coordsHtml =
-    `<div class="bd-coords">📍 <span class="bd-ll">${coords}</span>` +
+    `<div class="bd-coords">${starButton("site", lat, lon, null, p)}` +
+    `📍 <span class="bd-ll">${coords}</span>` +
     `<a class="bd-gmaps" href="${gmaps}" target="_blank" rel="noopener">` +
     `Open in Google&nbsp;Maps ↗</a></div>`;
   const rows = (p.contributions || [])

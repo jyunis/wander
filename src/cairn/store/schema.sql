@@ -115,3 +115,17 @@ CREATE TABLE IF NOT EXISTS candidate_scores (
 );
 
 CREATE INDEX IF NOT EXISTS idx_scores_total ON candidate_scores (total DESC);
+
+-- --- Saved places (favorites) — user data, NOT scoring (v6). A starred
+-- dispersed site or campground; payload_json snapshots its detail so the
+-- Saved list can re-open it. Plain relational (no geometry ops needed).
+CREATE TABLE IF NOT EXISTS saved_places (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind         TEXT NOT NULL,            -- 'site' | 'campground'
+    name         TEXT,
+    lat          REAL NOT NULL,
+    lon          REAL NOT NULL,
+    payload_json TEXT,                     -- score breakdown (site) / campground meta
+    note         TEXT,
+    created_at   TEXT NOT NULL
+);
