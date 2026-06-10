@@ -33,7 +33,7 @@ from cairn.store.types import Bbox, Run
 
 _M_PER_DEG = 111320.0
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 # Forward migrations keyed by from_version. Each entry is a list of statements
@@ -62,6 +62,13 @@ _MIGRATIONS: dict[int, list[str]] = {
         "ALTER TABLE candidate_features ADD COLUMN road_end_unavailable "
         "INTEGER NOT NULL DEFAULT 0",
         "INSERT INTO schema_version (version) VALUES (5)",
+    ],
+    5: [
+        "CREATE TABLE IF NOT EXISTS saved_places ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, name TEXT, "
+        "  lat REAL NOT NULL, lon REAL NOT NULL, payload_json TEXT, note TEXT, "
+        "  created_at TEXT NOT NULL)",
+        "INSERT INTO schema_version (version) VALUES (6)",
     ],
 }
 
@@ -327,6 +334,49 @@ class Store:
         )
         ids = [r[0] for r in await cur.fetchall()]
         return [await self.get_run(i) for i in ids]
+
+    # --- Saved places (favorites — user data, never scoring) ----------------
+
+    @staticmethod
+    def _saved_row(row) -> dict:
+        return {
+            "id": row[0], "kind": row[1], "name": row[2], "lat": row[3], "lon": row[4],
+            "payload": json.loads(row[5]) if row[5] else None,
+            "note": row[6], "created_at": row[7],
+        }
+
+    _SAVED_COLS = "id, kind, name, lat, lon, payload_json, note, created_at"
+
+    async def add_saved(
+        self, kind: str, name: str | None, lat: float, lon: float,
+        payload: dict | None = None, note: str | None = None,
+    ) -> dict:
+        import datetime as _dt
+
+        created = _dt.datetime.now(tz=_dt.timezone.utc).replace(microsecond=0).isoformat()
+        cur = await self.db.execute(
+            "INSERT INTO saved_places (kind, name, lat, lon, payload_json, note, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (kind, name, lat, lon,
+             json.dumps(payload) if payload is not None else None, note, created),
+        )
+        await self.db.commit()
+        return self._saved_row(
+            await (await self.db.execute(
+                f"SELECT {self._SAVED_COLS} FROM saved_places WHERE id=?", (cur.lastrowid,)
+            )).fetchone()
+        )
+
+    async def list_saved(self) -> list[dict]:
+        cur = await self.db.execute(
+            f"SELECT {self._SAVED_COLS} FROM saved_places ORDER BY created_at DESC, id DESC"
+        )
+        return [self._saved_row(r) for r in await cur.fetchall()]
+
+    async def delete_saved(self, saved_id: int) -> bool:
+        cur = await self.db.execute("DELETE FROM saved_places WHERE id=?", (saved_id,))
+        await self.db.commit()
+        return cur.rowcount > 0
 
     # --- OSM ingest (chunked, idempotent — TLC-11, TLC-14) -----------------
 

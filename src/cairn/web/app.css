@@ -153,6 +153,23 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 @media (max-width: 640px) {
   .sheet { left: 8px; right: 8px; width: auto; bottom: 8px; max-height: 55vh; border-radius: 14px; }
 }
+/* ★ save toggle (sheet + campground cards) */
+.star { background: none; border: none; cursor: pointer; font-size: 16px; line-height: 1;
+  color: #8a93a0; padding: 0 4px 0 0; vertical-align: middle; }
+.star.on { color: #f3c64b; }
+.star:hover { color: #f3c64b; }
+.cg-pop .star { float: right; margin-left: 6px; }
+/* Saved list in the panel */
+.saved-list { display: flex; flex-direction: column; gap: 2px; }
+.saved-row { display: flex; align-items: center; gap: 6px; font-size: 12.5px;
+  padding: 4px 2px; border-radius: 5px; }
+.saved-row:hover { background: rgba(255, 255, 255, 0.05); }
+.saved-row span { flex: 1; cursor: pointer; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.saved-del { background: none; border: none; color: var(--muted); cursor: pointer;
+  font-size: 15px; line-height: 1; }
+.saved-del:hover { color: #e8786b; }
+
 .bd-toggle { display: block; width: 100%; text-align: left; background: none; border: none;
   border-top: 1px solid var(--line); color: var(--muted); font-size: 10px;
   text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer;

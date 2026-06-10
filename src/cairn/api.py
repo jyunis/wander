@@ -7,8 +7,9 @@ typed engine errors to HTTP codes, and returns `failed` runs as status+reason
 
 Endpoints: POST /score, GET /runs, GET /runs/{id}, GET /runs/{id}/geojson,
 GET /runs/{id}/roads, GET /overlays, GET /overlays/{layer},
-GET /nearby-campgrounds, GET /geocode, GET /config, GET /health, and the static
-UI at / (mounted if web/ exists).
+GET /nearby-campgrounds, GET /saved, POST /saved, DELETE /saved/{id},
+GET /geocode, GET /config, GET /health, and the static UI at / (mounted if
+web/ exists).
 """
 
 from __future__ import annotations
@@ -101,6 +102,15 @@ class ScoreRequest(BaseModel):
     )
 
     model_config = {"populate_by_name": True}
+
+
+class SavedRequest(BaseModel):
+    kind: str = Field(..., description="'site' or 'campground'")
+    name: str | None = None
+    lat: float
+    lon: float
+    payload: dict | None = None
+    note: str | None = None
 
 
 # --- error handling --------------------------------------------------------
@@ -210,6 +220,28 @@ async def get_overlay(layer: str, request: Request, bbox: str) -> dict:
     except ValueError:
         raise ValidationError("bbox must be 'min_lon,min_lat,max_lon,max_lat'") from None
     return await overlays.query(layer, Bbox(*parts))
+
+
+@app.get("/saved")
+async def list_saved(request: Request) -> dict:
+    """The user's saved places (favorites — dispersed sites + campgrounds)."""
+    store: Store = request.app.state.store
+    return {"saved": await store.list_saved()}
+
+
+@app.post("/saved")
+async def add_saved(req: SavedRequest, request: Request) -> JSONResponse:
+    store: Store = request.app.state.store
+    if req.kind not in ("site", "campground"):
+        raise ValidationError("kind must be 'site' or 'campground'")
+    row = await store.add_saved(req.kind, req.name, req.lat, req.lon, req.payload, req.note)
+    return JSONResponse(status_code=201, content=row)
+
+
+@app.delete("/saved/{saved_id}")
+async def delete_saved(saved_id: int, request: Request) -> dict:
+    store: Store = request.app.state.store
+    return {"deleted": await store.delete_saved(saved_id)}
 
 
 @app.get("/nearby-campgrounds")

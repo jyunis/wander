@@ -164,6 +164,29 @@ def test_geocode_normalize_reorders_bbox():
     assert GeocodeClient._normalize({"display_name": "no coords"}) is None
 
 
+def test_saved_places_crud(client):
+    # Save a dispersed site with its score snapshot.
+    r = client.post(
+        "/saved",
+        json={"kind": "site", "name": "Quiet spur", "lat": 47.5, "lon": -94.2,
+              "payload": {"total": 0.78}},
+    )
+    assert r.status_code == 201
+    sid = r.json()["id"]
+    assert r.json()["payload"]["total"] == 0.78 and r.json()["created_at"]
+    # Lists it.
+    saved = client.get("/saved").json()["saved"]
+    assert any(s["id"] == sid and s["name"] == "Quiet spur" for s in saved)
+    # Deletes it.
+    assert client.delete(f"/saved/{sid}").json()["deleted"] is True
+    assert all(s["id"] != sid for s in client.get("/saved").json()["saved"])
+
+
+def test_saved_bad_kind_is_422(client):
+    r = client.post("/saved", json={"kind": "bogus", "lat": 1.0, "lon": 2.0})
+    assert r.status_code == 422
+
+
 def test_runs_list(client):
     client.post("/score", json={"bbox": TEST_BBOX})
     r = client.get("/runs")
