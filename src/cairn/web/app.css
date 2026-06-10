@@ -153,6 +153,7 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
   padding: 9px 0 3px; margin-top: 9px; }
 .bd-toggle:hover { color: var(--ink); }
 .bd-details { margin-top: 3px; }
+.bd-details.collapsed { display: none; }
 .bd-disc { border-top: 1px solid var(--line); padding-top: 8px; }
 .bd-feature { margin: 7px 0; }
 .bd-feature .bd-top { display: flex; justify-content: space-between; font-size: 12.5px; }
