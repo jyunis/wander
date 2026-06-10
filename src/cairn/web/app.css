@@ -101,6 +101,11 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
                font-size: 10.5px; color: var(--muted); }
 .land-key { display: flex; align-items: center; gap: 4px; }
 .land-swatch { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
+.land-swatch.round { border-radius: 50%; }
+.cg-pin { width: 20px; height: 20px; line-height: 20px; text-align: center; font-size: 13px;
+          border-radius: 50%; background: var(--cg, #d96c2c); box-shadow: 0 0 0 2px #fff,
+          0 1px 3px rgba(0,0,0,.5); cursor: pointer; }
+.cg-cat { color: #888; font-size: 11px; }
 .land-hint { font-size: 10.5px; color: var(--muted); margin-top: 6px; min-height: 0; }
 .disclaimer-mini { font-size: 10px; color: var(--muted); opacity: 0.85; margin-top: 6px;
                    line-height: 1.35; }

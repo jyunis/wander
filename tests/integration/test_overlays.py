@@ -39,6 +39,18 @@ def _build_overlays_db(path: str) -> None:
         "('state_park','State Park','Far Park', "
         "CastToMulti(GeomFromText('POLYGON((5 5,5.01 5,5.01 5.01,5 5.01,5 5))',4326)))"
     )
+    # Point layer (campgrounds) lives in overlay_points, with a reservation url.
+    con.execute(
+        "CREATE TABLE overlay_points ("
+        "fid INTEGER PRIMARY KEY AUTOINCREMENT, layer TEXT, category TEXT, name TEXT, url TEXT)"
+    )
+    con.execute("SELECT AddGeometryColumn('overlay_points','geom',4326,'POINT','XY')")
+    con.execute("SELECT CreateSpatialIndex('overlay_points','geom')")
+    con.execute(
+        "INSERT INTO overlay_points(layer, category, name, url, geom) VALUES "
+        "('campground','National / Federal','Faunce CG','https://recreation.gov/x', "
+        "GeomFromText('POINT(0.005 0.005)',4326))"
+    )
     con.commit()
     con.close()
 
@@ -57,8 +69,23 @@ async def test_layers_report_categories(overlay_settings):
     by_id = {layer["id"]: layer for layer in layers}
     assert "ownership" in by_id and "state_park" in by_id
     assert "Tax Forfeit" in by_id["ownership"]["categories"]
-    # national_forest sorts before ownership in LAYER_ORDER; only present ones show.
-    assert [layer["id"] for layer in layers] == ["state_park", "ownership"]
+    # LAYER_ORDER is campground, national_forest, state_forest, state_park,
+    # ownership; only present layers show, in that order.
+    assert [layer["id"] for layer in layers] == ["campground", "state_park", "ownership"]
+    await s.close()
+
+
+async def test_point_layer_query_returns_marker_with_url(overlay_settings):
+    s = await OverlayStore.open(overlay_settings)
+    layers = {layer["id"]: layer for layer in await s.layers()}
+    assert layers["campground"]["geom_type"] == "point"
+    assert layers["state_park"]["geom_type"] == "polygon"
+    fc = await s.query("campground", Bbox(0, 0, 0.01, 0.01))
+    assert fc["geom_type"] == "point"
+    feat = fc["features"][0]
+    assert feat["geometry"]["type"] == "Point"
+    assert feat["properties"]["name"] == "Faunce CG"
+    assert feat["properties"]["url"] == "https://recreation.gov/x"
     await s.close()
 
 
