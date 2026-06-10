@@ -169,7 +169,9 @@ def load_usfs(con) -> int:
         geom = feat.get("geometry")
         if not geom or not geom.get("coordinates"):
             continue
-        name = (feat.get("properties") or {}).get("FORESTNAME")
+        props = feat.get("properties") or {}
+        # ArcGIS f=geojson lowercases property keys -> read case-insensitively.
+        name = next((v for k, v in props.items() if k.lower() == "forestname"), None)
         rows.append((None, name, shape(geom).wkt, 4326))
     _insert(con, layer, rows)
     print(f"[{layer}] loaded {len(rows)} features", flush=True)
@@ -177,13 +179,19 @@ def load_usfs(con) -> int:
 
 
 def main() -> None:
-    print(f"overlays DB: {DB}", flush=True)
+    import sys
+
+    only = set(sys.argv[1:]) or None  # e.g. `... national_forest` reloads one layer
+    print(f"overlays DB: {DB}" + (f" (layers: {sorted(only)})" if only else ""), flush=True)
     con = connect(DB)
     ensure_schema(con)
     total = 0
     for layer, url, base, cat, name, srid in SHP_SOURCES:
+        if only and layer not in only:
+            continue
         total += load_shp(con, layer, url, base, cat, name, srid)
-    total += load_usfs(con)
+    if not only or "national_forest" in only:
+        total += load_usfs(con)
     counts = con.execute(
         "SELECT layer, COUNT(*) FROM overlay_features GROUP BY layer ORDER BY layer"
     ).fetchall()
