@@ -19,7 +19,7 @@ log = logging.getLogger("cairn.ingest")
 
 # Classes whose closed ways/relations are areas (polygon semantics: a point
 # inside has distance 0). Linear/point classes stay lines/points.
-_AREA_CLASSES = {"water", "forest", "builtup", "campsite"}
+_AREA_CLASSES = {"water", "forest", "builtup", "campsite", "building"}
 
 
 def _ring_wkt(points: list[tuple[float, float]]) -> str:

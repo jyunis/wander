@@ -126,6 +126,11 @@ def score(
     for cf in candidates:
         feats = cf.features
 
+        # Hard filter: pre-disqualified candidates (e.g. within the building
+        # setback) are dropped entirely (TLC-4).
+        if cf.disqualified:
+            continue
+
         # Hard filter: drop only when slope is available AND strictly above hard.
         if hard_deg is not None and "flatness" in feats:
             fv = feats["flatness"]

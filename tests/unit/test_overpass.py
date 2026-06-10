@@ -18,15 +18,15 @@ def test_query_is_json_and_versioned_bbox_ordered():
     # Overpass bbox order is (south, west, north, east).
     assert "47.9,-91.88,47.92,-91.86" in q.replace("47.90", "47.9")
     assert q.rstrip().endswith("out geom;")
-    assert QUERY_VERSION == 1
+    assert QUERY_VERSION == 2
 
 
 def test_query_only_requests_scored_classes_tlc14():
     q = build_query(_BBOX)
-    for tag in ("highway", "natural", "waterway", "landuse", "place", "tourism"):
+    for tag in ("highway", "natural", "waterway", "landuse", "place", "tourism", "building"):
         assert tag in q
     # Nothing outside the scored vocabulary should leak into the query.
-    for forbidden in ("amenity", "shop", "building", "leisure", "power", "barrier"):
+    for forbidden in ("amenity", "shop", "leisure", "power", "barrier"):
         assert forbidden not in q
 
 
@@ -43,5 +43,7 @@ def test_classify_disambiguates_by_tag_key():
     assert classify_osm({"tags": {"natural": "wood"}}) == "forest"
     assert classify_osm({"tags": {"place": "village"}}) == "place"
     assert classify_osm({"tags": {"tourism": "camp_site"}}) == "campsite"
+    assert classify_osm({"tags": {"building": "house"}}) == "building"
+    assert classify_osm({"tags": {"building": "yes"}}) == "building"
     assert classify_osm({"tags": {"amenity": "bench"}}) is None
     assert classify_osm({}) is None

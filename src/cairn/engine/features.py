@@ -27,10 +27,13 @@ from cairn.engine.types import Candidate, CandidateFeatures, FeatureValue
 from cairn.errors import TerrainError
 from cairn.store import Store
 
-# Classes that constitute a "disturbance" for solitude.
-_SOLITUDE_CLASSES = ("highway", "builtup", "place")
+# Classes that constitute a "disturbance" for solitude (now incl. individual
+# buildings — a lone cabin matters, not just residential zones).
+_SOLITUDE_CLASSES = ("highway", "builtup", "place", "building")
 # Within this many meters of a known campsite -> the enrichment flag.
 _CAMPSITE_NEAR_M = 250.0
+# Search radius for the building-setback hard filter.
+_BUILDING_SEARCH_M = 400.0
 
 # Name/ref/operator patterns that mark a road as a Forest Service road.
 _FOREST_ROAD_RE = re.compile(
@@ -90,9 +93,17 @@ async def extract_features(
     present_classes: set[str],
     road_tags: dict[int, dict],
     termini: list[tuple[float, float, int]],
+    building_setback_m: float,
 ) -> CandidateFeatures:
     lon, lat = candidate.lon, candidate.lat
     water_r, forest_r, solitude_r = _search_radii(scoring_config)
+
+    # Building setback (hard filter, TLC-4): no camping in someone's yard.
+    disqualified = False
+    if "building" in present_classes:
+        db = await store.nearest_distance_m(lon, lat, ("building",), _BUILDING_SEARCH_M)
+        if db is not None and db < building_setback_m:
+            disqualified = True
 
     # road_end <- distance to the nearest drivable dead-end. Unavailable (and
     # renormalized away, TLC-6) when the bbox has no termini at all.
@@ -155,6 +166,7 @@ async def extract_features(
         },
         near_campsite=near_campsite,
         rough_road=rough,
+        disqualified=disqualified,
     )
 
 

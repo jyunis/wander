@@ -29,7 +29,7 @@ from cairn.store.types import Bbox
 
 log = logging.getLogger("cairn.overpass")
 
-QUERY_VERSION = 1
+QUERY_VERSION = 2  # +building (dispersed sites must avoid houses/cabins)
 
 # --- Scored tag classes (the ONLY things the query asks for — TLC-14) ------
 _DRIVABLE = ("track", "unclassified", "service", "residential", "tertiary")
@@ -79,6 +79,8 @@ def build_query(bbox: Bbox, timeout_s: int = 180) -> str:
         f'node["place"~"{places}"]({box});'
         f'node["tourism"="camp_site"]({box});'
         f'way["tourism"="camp_site"]({box});'
+        f'way["building"]({box});'
+        f'relation["building"]({box});'
         ");"
         "out geom;"
     )
@@ -106,6 +108,8 @@ def classify_osm(element: dict) -> str | None:
         return "builtup"
     if tags.get("place") in _PLACES:
         return "place"
+    if tags.get("building"):
+        return "building"
     return None
 
 
