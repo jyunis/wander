@@ -78,7 +78,7 @@ class RunService:
         b = validate_request(bbox, weights, self._s)
         params = await self._store.scoring_config_params(SCORING_CONFIG_VERSION)
         run_id = await self._store.create_run(b, weights, SCORING_CONFIG_VERSION)
-        await self._execute(run_id, b, weights, params)
+        await self._execute(run_id, b, weights, params, self._s.max_wallclock_seconds)
         return await self._store.get_run(run_id)
 
     async def start_async(self, bbox: Bbox, weights: dict[str, float]) -> int:
@@ -88,19 +88,24 @@ class RunService:
         b = validate_request(bbox, weights, self._s)
         params = await self._store.scoring_config_params(SCORING_CONFIG_VERSION)
         run_id = await self._store.create_run(b, weights, SCORING_CONFIG_VERSION)
-        asyncio.create_task(self._execute(run_id, b, weights, params))
+        asyncio.create_task(
+            self._execute(run_id, b, weights, params, self._s.max_wallclock_async_seconds)
+        )
         return run_id
 
     async def _execute(
-        self, run_id: int, b: Bbox, weights: dict[str, float], params: dict
+        self, run_id: int, b: Bbox, weights: dict[str, float], params: dict,
+        wallclock_s: float,
     ) -> None:
         """Run steps 2-8 of UoW-1, persisting status transitions. Never raises
-        out (TLC-10): any failure is recorded on the run row."""
+        out (TLC-10): any failure is recorded on the run row. `wallclock_s` is
+        the deadline for this run — tight on the sync path, looser for async
+        background jobs (TLC-4)."""
         started = time.monotonic()
 
         def check_clock(stage: str) -> None:
-            if time.monotonic() - started > self._s.max_wallclock_seconds:
-                raise WallClockExceeded(self._s.max_wallclock_seconds)
+            if time.monotonic() - started > wallclock_s:
+                raise WallClockExceeded(wallclock_s)
 
         try:
             await self._store.set_run_status(run_id, "running")
