@@ -67,6 +67,9 @@ class CandidateFeatures:
     features: dict[str, FeatureValue]
     near_campsite: bool = False
     rough_road: bool = False  # informational flag (4WD/rough), not a score input
+    # Hard-disqualified before scoring (e.g. within the building setback — no
+    # camping in someone's yard). Dropped from the output entirely (TLC-4).
+    disqualified: bool = False
 
 
 @dataclass(frozen=True)

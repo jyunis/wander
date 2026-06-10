@@ -365,7 +365,8 @@ function renderResults(gj) {
   const distinct = feats
     .filter((f) => f.properties.distinct && f.properties.distinct_rank != null)
     .sort((a, b) => a.properties.distinct_rank - b.properties.distinct_rank);
-  const pinFeats = distinct.length ? distinct.slice(0, 25) : feats.slice(0, 25);
+  const MAX_PINS = 60;
+  const pinFeats = distinct.length ? distinct.slice(0, MAX_PINS) : feats.slice(0, MAX_PINS);
   pinFeats.forEach((f) => {
     const [lon, lat] = f.geometry.coordinates;
     const p = f.properties;

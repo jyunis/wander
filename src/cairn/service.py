@@ -161,7 +161,8 @@ class RunService:
             try:
                 for cid, cand in id_candidates:
                     cf = await extract_features(
-                        self._store, terrain, cand, params, present, road_tags, termini
+                        self._store, terrain, cand, params, present, road_tags, termini,
+                        self._s.building_setback_m,
                     )
                     cfs.append(cf)
                     feature_rows.append(_feature_row(cid, cf))

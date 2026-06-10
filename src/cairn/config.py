@@ -132,7 +132,10 @@ class Settings(BaseSettings):
     # After scoring, suppress lower-scoring candidates within this radius of a
     # higher-scoring one so ranked "sites" are distinct, not adjacent road
     # samples. Exposed via GET /config so the UI can show/tune it.
-    distinct_radius_m: float = 800.0
+    distinct_radius_m: float = 300.0
+    # Candidates within this distance of any OSM building are dropped — no
+    # camping in someone's yard. Buildings also feed the solitude gradient.
+    building_setback_m: float = 80.0
 
     # --- External-service courtesy (TLC-5) --------------------------------
     osm_cache_ttl_s: int = 7 * 24 * 3600
