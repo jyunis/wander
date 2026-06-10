@@ -171,9 +171,16 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
   border-radius: 6px; padding: 5px 10px; white-space: nowrap; }
 .bd-gmaps:hover { filter: brightness(1.08); }
 .bd-raw { font-size: 11.5px; color: var(--muted); margin-top: 8px; line-height: 1.7; }
-.bd-nearby { font-size: 12px; margin-top: 9px; color: #cfe6cf; }
+.bd-nearby { margin-top: 9px; }
 .bd-nearby:empty { display: none; }
-.bd-nearby a { color: #8fd18f; text-decoration: none; }
+.bd-near-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted); margin-bottom: 3px; }
+.bd-cg { font-size: 12px; padding: 3px 4px; margin: 0 -4px; border-radius: 4px;
+  cursor: pointer; color: #cfe6cf; }
+.bd-cg:hover { background: rgba(255, 255, 255, 0.06); color: #fff; }
+.bd-cg-am { margin-left: 3px; letter-spacing: 1px; }
+.cg-pin.cg-near { box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--accent),
+  0 1px 4px rgba(0, 0, 0, 0.55); }
 
 .foot { margin-top: auto; padding: 12px 16px; font-size: 11.5px; color: var(--muted);
         border-top: 1px solid var(--line); }

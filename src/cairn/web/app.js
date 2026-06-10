@@ -3,6 +3,7 @@
 // --- state -----------------------------------------------------------------
 let CONFIG = null;
 let map, drawnItems, heatLayer, pinLayer, candidatesLayer, roadsLayer, canvasRenderer, gotoMarker;
+let nearbyCgLayer; // ephemeral markers: the campgrounds near the open scored site
 let baseLayers = []; // current basemap tile layer(s): imagery + optional labels
 let bbox = null; // {min_lon,min_lat,max_lon,max_lat}
 let activeRunId = null;
@@ -223,6 +224,7 @@ function setupMap() {
   roadsLayer = new L.LayerGroup();
   candidatesLayer = new L.LayerGroup().addTo(map);
   pinLayer = new L.LayerGroup().addTo(map);
+  nearbyCgLayer = new L.LayerGroup().addTo(map);
 
   map.on(L.Draw.Event.CREATED, (e) => {
     drawnItems.clearLayers();
@@ -845,17 +847,75 @@ function bindBreakdown(layer, p, lat, lon) {
         popup.update(); // reflow to fit; the element (and its state) is preserved
       };
     }
-    nearbyCampgroundHtml(lat, lon).then((near) => {
-      const n = near && el.querySelector(".bd-nearby");
-      if (n) {
-        n.innerHTML = near;
-        popup.update();
-      }
-    });
+    loadNearbyCampgrounds(lat, lon, el, popup);
   });
 }
 
-function breakdownHtml(p, lat, lon, { nearbyHtml = "", expanded = false } = {}) {
+// Amenity icons for a campground's meta (electric, waterfront, pets, ADA, RV).
+function amenityChips(meta) {
+  const m = meta || {};
+  return (
+    (m.electric ? "⚡" : "") +
+    (m.water_front ? "💧" : "") +
+    (m.pets ? "🐾" : "") +
+    (m.ada ? "♿" : "") +
+    (m.max_rv_ft ? "🚐" : "")
+  );
+}
+
+// Fetch the nearest campgrounds, list them in the breakdown, and show their
+// markers on the map (highlighted). A row or marker tap opens that campground's
+// full card (which closes the breakdown — a clean drill-down). Display-only.
+async function loadNearbyCampgrounds(lat, lon, el, popup) {
+  let list;
+  try {
+    list = (await (await fetch(`/nearby-campgrounds?lat=${lat}&lon=${lon}&limit=5`)).json())
+      .campgrounds;
+  } catch {
+    return;
+  }
+  if (!list || !list.length) return;
+
+  nearbyCgLayer.clearLayers();
+  const markers = list.map((cg) => {
+    const color = CAMPGROUND_COLORS[cg.category] || "#d96c2c";
+    const mk = L.marker([cg.lat, cg.lon], {
+      icon: L.divIcon({
+        className: "",
+        html: `<div class="cg-pin cg-near" style="--cg:${color}">🏕️</div>`,
+        iconSize: [22, 22],
+        iconAnchor: [11, 11],
+      }),
+    }).bindPopup(() => campgroundCard(cg), { maxWidth: 250, className: "cg-popup" });
+    nearbyCgLayer.addLayer(mk);
+    return mk;
+  });
+
+  const nearEl = el.querySelector(".bd-nearby");
+  if (!nearEl) return;
+  nearEl.innerHTML =
+    `<div class="bd-near-title">Nearby campgrounds</div>` +
+    list
+      .map((cg, i) => {
+        const mi = (cg.distance_m / 1609.34).toFixed(1);
+        const am = amenityChips(cg.meta);
+        return (
+          `<div class="bd-cg" data-i="${i}">🏕 <b>${esc(cg.name)}</b> · ${mi} mi` +
+          (am ? ` <span class="bd-cg-am">${am}</span>` : "") +
+          `</div>`
+        );
+      })
+      .join("");
+  nearEl.querySelectorAll(".bd-cg").forEach((row, i) => {
+    row.onclick = () => {
+      map.panTo([list[i].lat, list[i].lon]);
+      markers[i].openPopup();
+    };
+  });
+  popup.update();
+}
+
+function breakdownHtml(p, lat, lon, { expanded = false } = {}) {
   const coords = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
   const gmaps = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
   const coordsHtml =
@@ -887,7 +947,7 @@ function breakdownHtml(p, lat, lon, { nearbyHtml = "", expanded = false } = {}) 
   return (
     coordsHtml +
     `<div class="bd-total">Total: ${p.total.toFixed(3)} (rank #${p.rank})${rough}</div>` +
-    `<div class="bd-nearby">${nearbyHtml}</div>` +
+    `<div class="bd-nearby"></div>` +
     `<button type="button" class="bd-toggle">${expanded ? "▾" : "▸"} Why this score</button>` +
     `<div class="bd-details${expanded ? "" : " collapsed"}">` +
     `${rows}<div class="bd-raw">${raw}</div></div>` +
@@ -898,19 +958,6 @@ function breakdownHtml(p, lat, lon, { nearbyHtml = "", expanded = false } = {}) 
 // Display-only "book a spot" fallback: the nearest established campground to a
 // scored dispersed site. Fetched lazily when the breakdown opens (keeps the run
 // geojson lean); never part of scoring (TLC-3).
-async function nearbyCampgroundHtml(lat, lon) {
-  let cg;
-  try {
-    cg = (await (await fetch(`/nearby-campground?lat=${lat}&lon=${lon}`)).json()).campground;
-  } catch {
-    return "";
-  }
-  if (!cg) return "";
-  const mi = (cg.distance_m / 1609.34).toFixed(1);
-  const link = cg.url ? ` <a href="${esc(cg.url)}" target="_blank" rel="noopener">↗</a>` : "";
-  return `🏕 Nearest campground: <b>${esc(cg.name)}</b> · ${mi} mi · ${esc(cg.category)}${link}`;
-}
-
 function fmt(v, unit) {
   return v === null || v === undefined ? "—" : Math.round(v) + unit;
 }

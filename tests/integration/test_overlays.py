@@ -94,14 +94,16 @@ async def test_point_layer_query_returns_marker_with_url(overlay_settings):
     await s.close()
 
 
-async def test_nearest_campground(overlay_settings):
+async def test_nearest_campgrounds(overlay_settings):
     s = await OverlayStore.open(overlay_settings)
-    # The fixture campground sits at (0.005, 0.005).
-    near = await s.nearest_campground(0.005, 0.005)
-    assert near and near["name"] == "Faunce CG"
-    assert near["distance_m"] < 100  # essentially on top of it
+    # The fixture campground sits at (0.005, 0.005), with meta.
+    near = await s.nearest_campgrounds(0.005, 0.005, limit=5)
+    assert len(near) == 1 and near[0]["name"] == "Faunce CG"
+    assert near[0]["distance_m"] < 100  # essentially on top of it
+    assert near[0]["meta"]["sites"] == 50  # full meta comes through
+    assert near[0]["lon"] == pytest.approx(0.005) and near[0]["lat"] == pytest.approx(0.005)
     # Nothing within the search radius far away.
-    assert await s.nearest_campground(10.0, 10.0) is None
+    assert await s.nearest_campgrounds(10.0, 10.0) == []
     await s.close()
 
 
@@ -148,7 +150,7 @@ def test_api_overlays_endpoints_inert_without_db(tmp_path, monkeypatch):
         # bad bbox -> 422 (typed ValidationError)
         assert c.get("/overlays/ownership?bbox=foo").status_code == 422
 
-        # nearby-campground responds (null without an overlays.db)
-        r = c.get("/nearby-campground?lat=47.5&lon=-94.1")
-        assert r.status_code == 200 and r.json()["campground"] is None
+        # nearby-campgrounds responds (empty without an overlays.db)
+        r = c.get("/nearby-campgrounds?lat=47.5&lon=-94.1")
+        assert r.status_code == 200 and r.json()["campgrounds"] == []
     config_module._settings = None
