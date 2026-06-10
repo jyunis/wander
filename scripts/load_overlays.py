@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """Load static land-overlay reference layers into ``/data/overlays.db``.
 
-These are **display-only** layers — public land ownership (incl. tax-forfeited)
-and forest/park boundaries. Per TLC-3 they are NEVER scored or used to assert a
-site is legal; Cairn renders them as visual context only. The data is public
-(MnGeo / MN DNR downloads + the USFS ArcGIS service).
+These are **display-only** layers — public land ownership (incl. tax-forfeited),
+forest/park boundaries, and campgrounds. Per TLC-3 they are NEVER scored or used
+to assert a site is legal; Cairn renders them as visual context only. The data
+is public (per-state DNR downloads + the national USFS / Recreation.gov services).
+
+Sources live in the ``STATES`` registry (near the bottom): adding a state is
+adding a block there. National feeds (USFS national forests, RIDB federal
+campgrounds) cover every configured state automatically; state park/forest
+boundaries and DNR campgrounds are bespoke per state. Every source for a layer
+unions under one shared layer id, so the store/API/UI stay state-blind.
 
 The overlay store is a separate SpatiaLite file from ``cairn.db`` so the scoring
 DB stays lean, and it is fully re-derivable (disposable, excluded from restic) —
-re-running this script drops and reloads each layer.
+re-running this script rebuilds each layer across all configured states.
 
 Run in-image with network access (pyshp + shapely added on the fly):
 
@@ -37,43 +43,23 @@ DB = os.environ.get("OVERLAYS_DB", "/data/overlays.db")
 UA = {"User-Agent": "cairn-overlays-loader (+http://cairn.home.arpa)"}
 GDRS = "https://resources.gisdata.mn.gov/pub/gdrs/data/pub"
 
-# (layer, zip_url, shp_basename, category_field|None, name_field|None, src_srid)
-SHP_SOURCES = [
-    (
-        "ownership",
-        f"{GDRS}/us_mn_state_mngeo/plan_gov_own_open/shp_plan_gov_own_open.zip",
-        "plan_gov_own_open",
-        "govt_own",  # Federal / State / County Fee / Tax Forfeit / Tribal
-        "co_name",
-        26915,
-    ),
-    (
-        "state_forest",
-        f"{GDRS}/us_mn_state_dnr/bdry_state_forest/shp_bdry_state_forest.zip",
-        "state_forest_boundaries",
-        None,
-        "NAME",
-        26915,
-    ),
-    (
-        "state_park",
-        f"{GDRS}/us_mn_state_dnr/bdry_dnr_lrs_prk/shp_bdry_dnr_lrs_prk.zip",
-        "dnr_stat_plan_areas_prk",
-        "AREA_TYPE",  # State Park / State Recreation Area / State Wayside
-        "AREA_NAME",
-        26915,
-    ),
-]
-
-# USFS national forest administrative boundaries — the one live ArcGIS source
-# (keyless). Queried for the Minnesota extent only and returned in EPSG:4326.
-USFS_QUERY = (
+# USFS national-forest administrative boundaries — the one live ArcGIS source
+# (keyless). Queried per a lon/lat envelope and returned in EPSG:4326. The
+# per-state SHP boundary sources live in the STATES registry near the bottom.
+USFS_URL = (
     "https://apps.fs.usda.gov/arcx/rest/services/EDW/"
     "EDW_ForestSystemBoundaries_01/MapServer/0/query"
-    "?where=1%3D1&geometry=-97.5,43.0,-89.0,49.5&geometryType=esriGeometryEnvelope"
-    "&inSR=4326&outSR=4326&spatialRel=esriSpatialRelIntersects"
-    "&outFields=FORESTNAME&returnGeometry=true&f=geojson"
 )
+
+
+def _usfs_query(bbox: tuple[float, float, float, float]) -> str:
+    minlon, minlat, maxlon, maxlat = bbox
+    return (
+        f"{USFS_URL}?where=1%3D1&geometry={minlon},{minlat},{maxlon},{maxlat}"
+        "&geometryType=esriGeometryEnvelope&inSR=4326&outSR=4326"
+        "&spatialRel=esriSpatialRelIntersects&outFields=FORESTNAME"
+        "&returnGeometry=true&f=geojson"
+    )
 
 
 def connect(db: str) -> sqlite3.Connection:
@@ -305,17 +291,26 @@ def load_state_park_campgrounds(con) -> int:
     return len(rows)
 
 
-def load_campgrounds(con) -> int:
-    """The unified `campground` point layer (national/state-park/state-forest).
-    Cleared once, then appended from each best-effort source."""
+def load_campgrounds(con, states) -> int:
+    """The unified `campground` point layer (national/state-park/state-forest),
+    across all `states`. Cleared once, then appended from each best-effort
+    source: federal RIDB (national, looped over states) + each state's bespoke
+    DNR loaders."""
     con.execute("DELETE FROM overlay_points WHERE layer=?", (CAMPGROUND_LAYER,))
     con.commit()
     total = 0
-    for fn in (load_state_forest_campgrounds, load_state_park_campgrounds, load_ridb_campgrounds):
+
+    def run(fn, *a):
+        nonlocal total
         try:
-            total += fn(con)
+            total += fn(*a)
         except Exception as exc:  # best-effort per source
             print(f"[campground]   {fn.__name__} SKIPPED: {exc}", flush=True)
+
+    run(load_ridb_campgrounds, con, states)  # federal, all states
+    for st in states:
+        for fn in STATES[st]["campground_loaders"]:  # bespoke per state DNR
+            run(fn, con)
     print(f"[campground] total: {total}", flush=True)
     return total
 
@@ -367,8 +362,9 @@ def _ridb_campsite_meta(fid: str, key: str) -> dict:
     })
 
 
-def load_ridb_campgrounds(con) -> int:
-    """Recreation.gov RIDB federal campgrounds (national forest/NPS/BLM/Corps).
+def load_ridb_campgrounds(con, states) -> int:
+    """Recreation.gov RIDB federal campgrounds (national forest/NPS/BLM/Corps)
+    across `states` (a national dataset keyed only by the 2-letter state code).
     Keyed: needs RIDB_API_KEY in the env. Skipped (returns 0) without it, so the
     state layers still load — same best-effort posture as MVUM/structures. Each
     facility is enriched with reservable/fee/ADA/phone/activities + a campsite
@@ -378,48 +374,52 @@ def load_ridb_campgrounds(con) -> int:
         print("[campground]   RIDB skipped (no RIDB_API_KEY)", flush=True)
         return 0
 
-    rows, offset = [], 0
-    while True:
-        data = _ridb_get(
-            "https://ridb.recreation.gov/api/v1/facilities?"
-            f"activity=CAMPING&state=MN&limit=50&offset={offset}&full=true",
-            key,
-        )
-        recs = data.get("RECDATA", [])
-        for f in recs:
-            lat, lon = f.get("FacilityLatitude"), f.get("FacilityLongitude")
-            fid = str(f.get("FacilityID", ""))
-            if not lat or not lon or not fid:
-                continue
-            blurb = re.sub(r"<[^>]+>", " ", f.get("FacilityDescription") or "")
-            blurb = re.sub(r"\s+", " ", blurb).strip()
-            meta = {
-                "reservable": bool(f.get("Reservable")),
-                "fee": (f.get("FacilityUseFeeDescription") or "").strip(),
-                "ada": (f.get("FacilityAdaAccess") or "").upper() == "Y",
-                "phone": (f.get("FacilityPhone") or "").strip(),
-                "activities": [
-                    (a.get("ActivityName") or "").title()
-                    for a in (f.get("ACTIVITY") or [])
-                ][:6],
-                "blurb": (blurb[:220] + "…") if len(blurb) > 220 else blurb,
-            }
-            try:
-                meta.update(_ridb_campsite_meta(fid, key))
-            except Exception as exc:  # campsites best-effort; keep facility fields
-                print(f"[campground]     {fid} campsites skipped: {exc}", flush=True)
-            resv = f"https://www.recreation.gov/camping/campgrounds/{fid}"
-            m = _compact(meta)
-            m["reservable"] = bool(f.get("Reservable"))  # keep even when False (first-come)
-            rows.append(("National / Federal", f.get("FacilityName") or "", resv,
-                         m, f"POINT({lon} {lat})", 4326))
-            time.sleep(0.1)
-        offset += len(recs)
-        if not recs or offset >= data.get("METADATA", {}).get("RESULTS", {}).get("TOTAL_COUNT", 0):
-            break
-    _insert_points(con, CAMPGROUND_LAYER, rows)
-    print(f"[campground]   RIDB federal: {len(rows)}", flush=True)
-    return len(rows)
+    total = 0
+    for state in states:
+        rows, offset = [], 0
+        while True:
+            data = _ridb_get(
+                "https://ridb.recreation.gov/api/v1/facilities?"
+                f"activity=CAMPING&state={state}&limit=50&offset={offset}&full=true",
+                key,
+            )
+            recs = data.get("RECDATA", [])
+            for f in recs:
+                lat, lon = f.get("FacilityLatitude"), f.get("FacilityLongitude")
+                fid = str(f.get("FacilityID", ""))
+                if not lat or not lon or not fid:
+                    continue
+                blurb = re.sub(r"<[^>]+>", " ", f.get("FacilityDescription") or "")
+                blurb = re.sub(r"\s+", " ", blurb).strip()
+                meta = {
+                    "reservable": bool(f.get("Reservable")),
+                    "fee": (f.get("FacilityUseFeeDescription") or "").strip(),
+                    "ada": (f.get("FacilityAdaAccess") or "").upper() == "Y",
+                    "phone": (f.get("FacilityPhone") or "").strip(),
+                    "activities": [
+                        (a.get("ActivityName") or "").title()
+                        for a in (f.get("ACTIVITY") or [])
+                    ][:6],
+                    "blurb": (blurb[:220] + "…") if len(blurb) > 220 else blurb,
+                }
+                try:
+                    meta.update(_ridb_campsite_meta(fid, key))
+                except Exception as exc:  # campsites best-effort; keep facility fields
+                    print(f"[campground]     {fid} campsites skipped: {exc}", flush=True)
+                resv = f"https://www.recreation.gov/camping/campgrounds/{fid}"
+                m = _compact(meta)
+                m["reservable"] = bool(f.get("Reservable"))  # keep even when False (first-come)
+                rows.append(("National / Federal", f.get("FacilityName") or "", resv,
+                             m, f"POINT({lon} {lat})", 4326))
+                time.sleep(0.1)
+            total_count = data.get("METADATA", {}).get("RESULTS", {}).get("TOTAL_COUNT", 0)
+            offset += len(recs)
+            if not recs or offset >= total_count:
+                break
+        _insert_points(con, CAMPGROUND_LAYER, rows)
+        print(f"[campground]   RIDB federal {state}: {len(rows)}", flush=True)
+        total += len(rows)
+    return total
 
 
 def load_shp(con, layer, zip_url, base, cat_field, name_field, srid) -> int:
@@ -434,7 +434,8 @@ def load_shp(con, layer, zip_url, base, cat_field, name_field, srid) -> int:
         flds = [f[0] for f in rdr.fields[1:]]
         ci = flds.index(cat_field) if cat_field and cat_field in flds else None
         ni = flds.index(name_field) if name_field and name_field in flds else None
-        clear_layer(con, layer)
+        # NB: the caller clears the layer once before appending all its sources
+        # (so MN + WI can union under a shared layer id) — don't clear here.
         batch, n = [], 0
         for sr in rdr.iterShapeRecords():
             geom = sr.shape.__geo_interface__
@@ -456,13 +457,13 @@ def load_shp(con, layer, zip_url, base, cat_field, name_field, srid) -> int:
     return n
 
 
-def load_usfs(con) -> int:
+def load_usfs(con, bbox) -> int:
     import json
 
     layer = "national_forest"
-    print(f"[{layer}] querying USFS ArcGIS (MN extent) …", flush=True)
+    print(f"[{layer}] querying USFS ArcGIS over {bbox} …", flush=True)
     try:
-        req = urllib.request.Request(USFS_QUERY, headers=UA)
+        req = urllib.request.Request(_usfs_query(bbox), headers=UA)
         with urllib.request.urlopen(req, timeout=120) as r:
             fc = json.load(r)
     except Exception as exc:  # best-effort: skip if USFS is unreachable
@@ -483,22 +484,80 @@ def load_usfs(con) -> int:
     return len(rows)
 
 
+# --- per-state source registry ---------------------------------------------
+# Adding a state = adding a block here. Serving (store/API/UI) is state-blind;
+# every source for a layer unions under one shared layer id. Federal sources
+# (RIDB campgrounds, USFS forests) are national datasets that need only the
+# `bbox` (USFS envelope) and the 2-letter code (RIDB). State boundary SHPs and
+# DNR campgrounds are bespoke per state's open-data product.
+#   SHP source tuple: (layer, zip_url, shp_basename, cat_field|None, name_field|None, srid)
+STATES: dict[str, dict] = {
+    "MN": {
+        "name": "Minnesota",
+        "bbox": (-97.5, 43.0, -89.0, 49.5),
+        "shp_sources": [
+            # govt_own categories: Federal / State / County Fee / Tax Forfeit / Tribal
+            ("ownership",
+             f"{GDRS}/us_mn_state_mngeo/plan_gov_own_open/shp_plan_gov_own_open.zip",
+             "plan_gov_own_open", "govt_own", "co_name", 26915),
+            ("state_forest",
+             f"{GDRS}/us_mn_state_dnr/bdry_state_forest/shp_bdry_state_forest.zip",
+             "state_forest_boundaries", None, "NAME", 26915),
+            ("state_park",
+             f"{GDRS}/us_mn_state_dnr/bdry_dnr_lrs_prk/shp_bdry_dnr_lrs_prk.zip",
+             "dnr_stat_plan_areas_prk", "AREA_TYPE", "AREA_NAME", 26915),
+        ],
+        "campground_loaders": [load_state_forest_campgrounds, load_state_park_campgrounds],
+    },
+    "WI": {
+        "name": "Wisconsin",
+        "bbox": (-92.9, 42.4, -86.8, 47.1),  # covers Chequamegon-Nicolet NF
+        # TODO(phase 2): WI DNR park/forest boundary SHPs + state campground loaders.
+        "shp_sources": [],
+        "campground_loaders": [],
+    },
+}
+
+
 def main() -> None:
     import sys
 
     only = set(sys.argv[1:]) or None  # e.g. `... national_forest` reloads one layer
-    print(f"overlays DB: {DB}" + (f" (layers: {sorted(only)})" if only else ""), flush=True)
+    states = list(STATES)  # every configured state; layers union across them
+    print(
+        f"overlays DB: {DB} | states: {states}"
+        + (f" | layers: {sorted(only)}" if only else ""),
+        flush=True,
+    )
     con = connect(DB)
     ensure_schema(con)
     total = 0
-    for layer, url, base, cat, name, srid in SHP_SOURCES:
-        if only and layer not in only:
-            continue
-        total += load_shp(con, layer, url, base, cat, name, srid)
+
+    # Polygon boundary layers, unioned across states under shared layer ids.
+    # Clear each selected layer ONCE, then append every state's sources.
+    shp = [
+        src
+        for st in states
+        for src in STATES[st]["shp_sources"]
+        if not only or src[0] in only
+    ]
+    for layer in dict.fromkeys(src[0] for src in shp):
+        clear_layer(con, layer)
+    for src in shp:
+        total += load_shp(con, *src)
+
+    # National forests — one USFS query over the union of state envelopes
+    # (a single query avoids returning a cross-border forest twice).
     if not only or "national_forest" in only:
-        total += load_usfs(con)
+        bbs = [STATES[s]["bbox"] for s in states]
+        union = (
+            min(b[0] for b in bbs), min(b[1] for b in bbs),
+            max(b[2] for b in bbs), max(b[3] for b in bbs),
+        )
+        total += load_usfs(con, union)
+
     if not only or CAMPGROUND_LAYER in only:
-        total += load_campgrounds(con)
+        total += load_campgrounds(con, states)
     print("--- overlay_features (polygons) ---", flush=True)
     for lyr, c in con.execute(
         "SELECT layer, COUNT(*) FROM overlay_features GROUP BY layer ORDER BY layer"
