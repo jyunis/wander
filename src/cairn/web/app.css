@@ -60,6 +60,11 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
              font-size: 18px; float: right; line-height: 1; }
 
 .hint { font-size: 12px; color: var(--muted); margin: 8px 0; }
+.goto-row { margin-top: 6px; }
+.goto-row input { flex: 1; min-width: 0; background: #313942; color: var(--ink);
+  border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; font-size: 12.5px; }
+.goto-row input::placeholder { color: var(--muted); }
+.goto-row input.bad { border-color: #e8786b; }
 .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .preset { font-size: 12px; padding: 4px 9px; border-radius: 12px;
           background: #313942; border: 1px solid var(--line); color: var(--muted); cursor: pointer; }

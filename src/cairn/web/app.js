@@ -2,7 +2,7 @@
 
 // --- state -----------------------------------------------------------------
 let CONFIG = null;
-let map, drawnItems, heatLayer, pinLayer, candidatesLayer, canvasRenderer;
+let map, drawnItems, heatLayer, pinLayer, candidatesLayer, canvasRenderer, gotoMarker;
 let baseLayers = []; // current basemap tile layer(s): imagery + optional labels
 let bbox = null; // {min_lon,min_lat,max_lon,max_lat}
 let activeRunId = null;
@@ -112,6 +112,10 @@ async function init() {
 
   $("draw-bbox").onclick = startDraw;
   $("use-view").onclick = useCurrentView;
+  $("goto-btn").onclick = gotoCoords;
+  $("goto-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") gotoCoords();
+  });
   $("score-btn").onclick = runScore;
   $("run-history").onchange = (e) => {
     if (e.target.value) loadRun(parseInt(e.target.value, 10));
@@ -212,6 +216,41 @@ function startDraw() {
   if (drawHandler) drawHandler.disable();
   drawHandler = new L.Draw.Rectangle(map, { shapeOptions: { color: "#5b9c5a" } });
   drawHandler.enable();
+}
+
+// Parse "lat, lon" forgivingly — grabs the first two numbers (commas, spaces,
+// or labels all fine). Returns [lat, lon] or null.
+function parseLatLon(s) {
+  const nums = (s || "").match(/-?\d+(?:\.\d+)?/g);
+  if (!nums || nums.length < 2) return null;
+  const lat = parseFloat(nums[0]);
+  const lon = parseFloat(nums[1]);
+  if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+    return null;
+  }
+  return [lat, lon];
+}
+
+function gotoCoords() {
+  const input = $("goto-input");
+  const ll = parseLatLon(input.value);
+  if (!ll) {
+    input.classList.add("bad");
+    return;
+  }
+  input.classList.remove("bad");
+  const [lat, lon] = ll;
+  map.setView([lat, lon], 15);
+  if (gotoMarker) map.removeLayer(gotoMarker);
+  gotoMarker = L.circleMarker([lat, lon], {
+    radius: 10,
+    color: "#22d3ee",
+    weight: 3,
+    fill: false,
+  })
+    .addTo(map)
+    .bindPopup(`${lat.toFixed(6)}, ${lon.toFixed(6)}`)
+    .openPopup();
 }
 
 function useCurrentView() {
