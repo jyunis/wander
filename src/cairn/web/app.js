@@ -959,6 +959,16 @@ function starButton(kind, lat, lon, name, payload) {
   return `<button class="star${on ? " on" : ""}" title="Save" data-fav="${fav}">${on ? "★" : "☆"}</button>`;
 }
 
+// Make a name unique within the saved list by appending " (2)", " (3)"…
+function uniqueName(base) {
+  if (!base) return base;
+  const taken = new Set(savedPlaces.map((s) => (s.name || "").toLowerCase()));
+  if (!taken.has(base.toLowerCase())) return base;
+  let n = 2;
+  while (taken.has(`${base} (${n})`.toLowerCase())) n++;
+  return `${base} (${n})`;
+}
+
 async function toggleFav(fav, btn) {
   // For a site, the live name input wins over the baked-in (stale) name.
   if (fav.kind === "site") {
@@ -972,6 +982,7 @@ async function toggleFav(fav, btn) {
     savedPlaces = savedPlaces.filter((s) => s.id !== id);
     savedByKey.delete(key);
   } else {
+    fav.name = uniqueName(fav.name); // dedupe "Near Mallard Lake" -> " (2)"
     const r = await fetch("/saved", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -981,6 +992,9 @@ async function toggleFav(fav, btn) {
       const row = await r.json();
       savedPlaces.unshift(row);
       savedByKey.set(key, row.id);
+      // Reflect the deduped name back into the sheet's name field.
+      const nameEl = fav.kind === "site" && $("site-name");
+      if (nameEl) nameEl.value = row.name || "";
     }
   }
   if (btn) {
@@ -1001,14 +1015,17 @@ function renderSavedList() {
       const label =
         s.name ||
         (s.payload && s.payload.total != null ? `Site · ${s.payload.total.toFixed(2)}` : "Site");
+      const coords = `${(+s.lat).toFixed(4)}, ${(+s.lon).toFixed(4)}`;
       return (
-        `<div class="saved-row" data-i="${i}">${icon} <span>${esc(label)}</span>` +
+        `<div class="saved-row" data-i="${i}"><div class="saved-main">` +
+        `<div class="saved-name">${icon} ${esc(label)}</div>` +
+        `<div class="saved-coords">${coords}</div></div>` +
         `<button class="saved-del" title="Remove">×</button></div>`
       );
     })
     .join("");
   host.querySelectorAll(".saved-row").forEach((row, i) => {
-    row.querySelector("span").onclick = () => reopenSaved(savedPlaces[i]);
+    row.querySelector(".saved-main").onclick = () => reopenSaved(savedPlaces[i]);
     row.querySelector(".saved-del").onclick = (e) => {
       e.stopPropagation();
       toggleFav(savedPlaces[i]);

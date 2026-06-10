@@ -186,11 +186,13 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .cg-pop .star { float: right; margin-left: 6px; }
 /* Saved list in the panel */
 .saved-list { display: flex; flex-direction: column; gap: 2px; }
-.saved-row { display: flex; align-items: center; gap: 6px; font-size: 12.5px;
-  padding: 4px 2px; border-radius: 5px; }
+.saved-row { display: flex; align-items: center; gap: 6px;
+  padding: 5px 2px; border-radius: 5px; }
 .saved-row:hover { background: rgba(255, 255, 255, 0.05); }
-.saved-row span { flex: 1; cursor: pointer; overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap; }
+.saved-main { flex: 1; cursor: pointer; overflow: hidden; }
+.saved-name { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.saved-coords { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums;
+  margin-top: 1px; }
 .saved-del { background: none; border: none; color: var(--muted); cursor: pointer;
   font-size: 15px; line-height: 1; }
 .saved-del:hover { color: #e8786b; }
