@@ -2,7 +2,7 @@
 
 // --- state -----------------------------------------------------------------
 let CONFIG = null;
-let map, drawnItems, heatLayer, pinLayer;
+let map, drawnItems, heatLayer, pinLayer, candidatesLayer, canvasRenderer;
 let bbox = null; // {min_lon,min_lat,max_lon,max_lat}
 let activeRunId = null;
 
@@ -52,6 +52,9 @@ async function init() {
     if (e.target.value) loadRun(parseInt(e.target.value, 10));
   };
   $("bd-close").onclick = () => $("breakdown").classList.add("hidden");
+  ["layer-pins", "layer-dots", "layer-heat"].forEach((id) => {
+    $(id).onchange = updateLayerVisibility;
+  });
 }
 
 function buildSliders() {
@@ -105,6 +108,9 @@ function setupMap() {
   }).addTo(map);
 
   drawnItems = new L.FeatureGroup().addTo(map);
+  // Canvas renderer so thousands of candidate dots stay smooth.
+  canvasRenderer = L.canvas({ padding: 0.5 });
+  candidatesLayer = new L.LayerGroup().addTo(map);
   pinLayer = new L.LayerGroup().addTo(map);
 
   map.on(L.Draw.Event.CREATED, (e) => {
@@ -223,19 +229,47 @@ function renderMeta(run) {
     : "";
 }
 
+// Score -> colour on a red->amber->green ramp. Normalized to THIS run's score
+// range so the spread is visible even when totals cluster; the absolute total
+// is always shown in the breakdown panel.
+function scoreColor(t) {
+  const hue = 120 * Math.max(0, Math.min(1, t));
+  return `hsl(${hue}, 68%, 47%)`;
+}
+
 function renderResults(gj) {
-  if (heatLayer) map.removeLayer(heatLayer);
+  candidatesLayer.clearLayers();
   pinLayer.clearLayers();
+  if (heatLayer) {
+    map.removeLayer(heatLayer);
+    heatLayer = null;
+  }
   const feats = gj.features || [];
-  if (!feats.length) return;
+  if (!feats.length) {
+    updateLayerVisibility();
+    return;
+  }
 
-  const heat = feats.map((f) => [
-    f.geometry.coordinates[1],
-    f.geometry.coordinates[0],
-    Math.max(0.05, f.properties.total),
-  ]);
-  heatLayer = L.heatLayer(heat, { radius: 22, blur: 16, max: 1.0 }).addTo(map);
+  const totals = feats.map((f) => f.properties.total);
+  const min = Math.min(...totals), max = Math.max(...totals);
+  const norm = (t) => (max > min ? (t - min) / (max - min) : 0.5);
 
+  // Default lens: every passing candidate as a score-coloured dot.
+  feats.forEach((f) => {
+    const [lon, lat] = f.geometry.coordinates;
+    const p = f.properties;
+    const dot = L.circleMarker([lat, lon], {
+      renderer: canvasRenderer,
+      radius: 4,
+      weight: 0,
+      fillColor: scoreColor(norm(p.total)),
+      fillOpacity: 0.85,
+    });
+    dot.on("click", () => showBreakdown(p));
+    candidatesLayer.addLayer(dot);
+  });
+
+  // Numbered pins for the top 25.
   feats.slice(0, 25).forEach((f) => {
     const [lon, lat] = f.geometry.coordinates;
     const p = f.properties;
@@ -246,8 +280,29 @@ function renderResults(gj) {
     pinLayer.addLayer(marker);
   });
 
+  // Heatmap is built but only shown when its checkbox is on.
+  const heat = feats.map((f) => [
+    f.geometry.coordinates[1],
+    f.geometry.coordinates[0],
+    Math.max(0.05, f.properties.total),
+  ]);
+  heatLayer = L.heatLayer(heat, { radius: 22, blur: 16, max: 1.0 });
+
+  updateLayerVisibility();
   const b = gj.run.bbox;
   map.fitBounds([[b[1], b[0]], [b[3], b[2]]], { padding: [20, 20] });
+}
+
+function updateLayerVisibility() {
+  toggleLayer(pinLayer, $("layer-pins").checked);
+  toggleLayer(candidatesLayer, $("layer-dots").checked);
+  toggleLayer(heatLayer, $("layer-heat").checked);
+}
+
+function toggleLayer(layer, on) {
+  if (!layer) return;
+  if (on && !map.hasLayer(layer)) map.addLayer(layer);
+  else if (!on && map.hasLayer(layer)) map.removeLayer(layer);
 }
 
 function showBreakdown(p) {
