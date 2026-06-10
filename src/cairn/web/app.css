@@ -25,6 +25,7 @@ body {
   border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
+  overflow-x: hidden;  /* no sideways rubber-band/wobble; scrolls vertically only */
   overflow-y: auto;
 }
 #map { flex: 1; height: 100%; min-width: 0; }
@@ -76,7 +77,7 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 }
 
 .controls { padding: 0 16px 8px; }
-.row { display: flex; gap: 8px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; }  /* wrap on narrow screens, don't overflow */
 .btn { background: #313942; color: var(--ink); border: 1px solid var(--line);
        padding: 8px 12px; border-radius: 7px; cursor: pointer; font-size: 13px; }
 .btn:hover { border-color: var(--accent); }
@@ -110,7 +111,7 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .basemap-row select { flex: 1; background: #313942; color: var(--ink);
   border: 1px solid var(--line); border-radius: 6px; padding: 5px; }
 
-.layers { display: flex; gap: 14px; font-size: 12.5px; }
+.layers { display: flex; flex-wrap: wrap; gap: 8px 14px; font-size: 12.5px; }
 .layers label { cursor: pointer; display: flex; align-items: center; gap: 5px; }
 .layers input { accent-color: var(--accent); }
 .legend { display: flex; align-items: center; gap: 6px; margin-top: 8px;
