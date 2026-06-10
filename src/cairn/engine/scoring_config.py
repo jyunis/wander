@@ -24,7 +24,7 @@ Normalization conventions (every feature maps a raw value -> [0, 1]):
 
 from __future__ import annotations
 
-SCORING_CONFIG_VERSION = 5
+SCORING_CONFIG_VERSION = 6
 
 DEFAULT_SCORING_PARAMS: dict = {
     "version": SCORING_CONFIG_VERSION,
@@ -37,13 +37,15 @@ DEFAULT_SCORING_PARAMS: dict = {
         },
         "water_proximity": {
             "input": "dist_water_m",
-            # Lakeside setback: a campsite 30-150 m from the shore is ideal
-            # (not in the water, not a hike away). Tightened fall-off (600 m,
-            # was 1500) so "leads to a lake" means actually near water, not
-            # "vaguely in lake country".
+            # On-the-water is GOOD: dispersed lakeside / boat-landing sites sit
+            # right at the shore. Only a tiny rising edge (0-10 m) avoids
+            # literally-in-the-water points; 10-150 m is full marks; fall-off to
+            # 600 m so "leads to a lake" means actually near water. (Earlier the
+            # rise went to 30 m and dinged true shoreline sites — a boat landing
+            # 14 m from the water lost to a point 130 m inland.)
             "shape": "trapezoid",
             "rise_start": 0.0,
-            "plateau_lo": 30.0,
+            "plateau_lo": 10.0,
             "plateau_hi": 150.0,
             "fall_end": 600.0,
         },
