@@ -17,7 +17,7 @@ body {
   background: var(--bg);
 }
 
-#app { display: flex; height: 100vh; }
+#app { display: flex; height: 100vh; position: relative; }
 #panel {
   width: 340px;
   flex: 0 0 340px;
@@ -140,13 +140,19 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .provenance, .degraded { font-size: 11.5px; color: var(--muted); margin-top: 8px; }
 .degraded { color: var(--warn); }
 
-/* Scored-site "why this score" rendered as a dark map popup (app theme). */
-.bd-popup .leaflet-popup-content-wrapper { background: var(--panel); color: var(--ink);
-  border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5); }
-.bd-popup .leaflet-popup-tip { background: var(--panel); border: 1px solid var(--line); }
-.bd-popup .leaflet-popup-content { margin: 11px 13px; }
-.bd-popup .leaflet-popup-close-button { color: var(--muted); }
-.bd-popup .leaflet-popup-close-button:hover { color: var(--ink); }
+/* Selected-site detail as a bottom sheet — docked card on desktop, full-width
+   on mobile. Persistent (stays while campground popups open); easy to return to. */
+.sheet { position: absolute; z-index: 1000; left: 352px; bottom: 12px; width: 330px;
+  max-height: 52vh; overflow-y: auto; background: var(--panel); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px 16px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.55); }
+.sheet.hidden { display: none; }
+.sheet-x { position: absolute; top: 7px; right: 11px; background: none; border: none;
+  color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer; padding: 2px; }
+.sheet-x:hover { color: var(--ink); }
+@media (max-width: 640px) {
+  .sheet { left: 8px; right: 8px; width: auto; bottom: 8px; max-height: 55vh; border-radius: 14px; }
+}
 .bd-toggle { display: block; width: 100%; text-align: left; background: none; border: none;
   border-top: 1px solid var(--line); color: var(--muted); font-size: 10px;
   text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer;

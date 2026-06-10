@@ -165,6 +165,7 @@ async function init() {
     const el = $(id);
     if (el) el.addEventListener("input", applyCampgroundFilters);
   });
+  $("sheet-close").onclick = closeSite;
 }
 
 function buildSliders() {
@@ -516,7 +517,7 @@ function renderResults(gj) {
       fillColor: scoreColor(norm(p.total)),
       fillOpacity: 0.85,
     });
-    bindBreakdown(dot, p, lat, lon);
+    dot.on("click", () => showSite(p, lat, lon));
     candidatesLayer.addLayer(dot);
   });
 
@@ -534,7 +535,7 @@ function renderResults(gj) {
     const marker = L.marker([lat, lon], {
       icon: L.divIcon({ className: "", html: `<div class="rank-pin">${label}</div>`, iconSize: [22, 22] }),
     });
-    bindBreakdown(marker, p, lat, lon);
+    marker.on("click", () => showSite(p, lat, lon));
     pinLayer.addLayer(marker);
   });
 
@@ -821,34 +822,28 @@ function updateLandHint() {
 
 // Bind the "why this score" breakdown to a scored marker as a map popup, and
 // fill in the nearest-campground line once the popup opens (lazy — TLC-3).
-function bindBreakdown(layer, p, lat, lon) {
-  // Bind a persistent DOM element (not a string/function): the expand toggle and
-  // the lazy nearest-campground line mutate it in place, and popup.update() only
-  // reflows — it never re-renders the content. (Re-rendering on click removed the
-  // button mid-event and let the tap reach the map, closing the popup.)
-  const el = document.createElement("div");
-  el.innerHTML = breakdownHtml(p, lat, lon);
-  layer.bindPopup(el, {
-    className: "bd-popup",
-    maxWidth: 300,
-    maxHeight: 460,
-    autoPanPadding: [24, 24],
-  });
-  layer.on("popupopen", (e) => {
-    const popup = e.popup;
-    const btn = el.querySelector(".bd-toggle");
-    const details = el.querySelector(".bd-details");
-    if (btn && details) {
-      btn.onclick = (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        const collapsed = details.classList.toggle("collapsed");
-        btn.textContent = (collapsed ? "▸" : "▾") + " Why this score";
-        popup.update(); // reflow to fit; the element (and its state) is preserved
-      };
-    }
-    loadNearbyCampgrounds(lat, lon, el, popup);
-  });
+// Show a scored site's "why this score" in the bottom sheet — a persistent,
+// mobile-friendly panel that stays put while you explore nearby campground
+// popups (easy to return to), instead of a map popup.
+function showSite(p, lat, lon) {
+  const body = $("sheet-body");
+  body.innerHTML = breakdownHtml(p, lat, lon);
+  $("sheet").classList.remove("hidden");
+  const btn = body.querySelector(".bd-toggle");
+  const details = body.querySelector(".bd-details");
+  if (btn && details) {
+    btn.onclick = () => {
+      const collapsed = details.classList.toggle("collapsed");
+      btn.textContent = (collapsed ? "▸" : "▾") + " Why this score";
+    };
+  }
+  loadNearbyCampgrounds(lat, lon, body);
+}
+
+function closeSite() {
+  $("sheet").classList.add("hidden");
+  nearbyCgLayer.clearLayers();
+  map.closePopup();
 }
 
 // Amenity icons for a campground's meta (electric, waterfront, pets, ADA, RV).
@@ -863,10 +858,10 @@ function amenityChips(meta) {
   );
 }
 
-// Fetch the nearest campgrounds, list them in the breakdown, and show their
-// markers on the map (highlighted). A row or marker tap opens that campground's
-// full card (which closes the breakdown — a clean drill-down). Display-only.
-async function loadNearbyCampgrounds(lat, lon, el, popup) {
+// List the nearest campgrounds in the sheet + show their markers on the map.
+// A row or marker tap opens that campground's card as a normal map popup — the
+// site stays in the sheet, so there's no popup conflict. Display-only (TLC-3).
+async function loadNearbyCampgrounds(lat, lon, body) {
   let list;
   try {
     list = (await (await fetch(`/nearby-campgrounds?lat=${lat}&lon=${lon}&limit=5`)).json())
@@ -874,9 +869,9 @@ async function loadNearbyCampgrounds(lat, lon, el, popup) {
   } catch {
     return;
   }
+  nearbyCgLayer.clearLayers();
   if (!list || !list.length) return;
 
-  nearbyCgLayer.clearLayers();
   const markers = list.map((cg) => {
     const color = CAMPGROUND_COLORS[cg.category] || "#d96c2c";
     const mk = L.marker([cg.lat, cg.lon], {
@@ -891,7 +886,7 @@ async function loadNearbyCampgrounds(lat, lon, el, popup) {
     return mk;
   });
 
-  const nearEl = el.querySelector(".bd-nearby");
+  const nearEl = body.querySelector(".bd-nearby");
   if (!nearEl) return;
   nearEl.innerHTML =
     `<div class="bd-near-title">Nearby campgrounds</div>` +
@@ -912,7 +907,6 @@ async function loadNearbyCampgrounds(lat, lon, el, popup) {
       markers[i].openPopup();
     };
   });
-  popup.update();
 }
 
 function breakdownHtml(p, lat, lon, { expanded = false } = {}) {
