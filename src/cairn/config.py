@@ -27,42 +27,47 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # solitude second. flatness/water/trees discriminate little in flat lake
 # country, so they're secondary.
 DEFAULT_WEIGHTS: dict[str, float] = {
-    "road_character": 0.30,
-    "remoteness": 0.30,
-    "solitude": 0.15,
-    "flatness": 0.10,
-    "water_proximity": 0.10,
+    "road_end": 0.25,  # the spur-end premium ("drive to the end of the road")
+    "road_character": 0.20,  # forest-road class
+    "remoteness": 0.20,  # isolation (low local road density)
+    "water_proximity": 0.15,  # ... that ends near a lake
+    "solitude": 0.10,
+    "flatness": 0.05,
     "tree_cover": 0.05,
 }
 
 # UI weight presets — each just sets slider values (FC-9). Served via
 # GET /config so the client never invents its own. Every preset names all
-# features so a switch sets every slider deterministically.
+# features so a switch sets every slider deterministically. (The scorer
+# renormalizes, so these need not sum to exactly 1.)
 WEIGHT_PRESETS: dict[str, dict[str, float]] = {
     "dispersed": DEFAULT_WEIGHTS,
     "deep_woods": {
-        "road_character": 0.30,
-        "remoteness": 0.45,
+        "road_end": 0.25,
+        "road_character": 0.20,
+        "remoteness": 0.30,
+        "water_proximity": 0.05,
         "solitude": 0.15,
         "flatness": 0.05,
-        "water_proximity": 0.05,
         "tree_cover": 0.00,
     },
-    "lakeside": {
-        "road_character": 0.25,
-        "remoteness": 0.15,
-        "solitude": 0.10,
-        "flatness": 0.10,
+    "lakeside_spur": {
+        "road_end": 0.30,
+        "road_character": 0.15,
+        "remoteness": 0.10,
         "water_proximity": 0.35,
-        "tree_cover": 0.05,
+        "solitude": 0.05,
+        "flatness": 0.05,
+        "tree_cover": 0.00,
     },
     "flat_and_easy": {
-        "road_character": 0.20,
-        "remoteness": 0.15,
-        "solitude": 0.10,
-        "flatness": 0.45,
+        "road_end": 0.15,
+        "road_character": 0.15,
+        "remoteness": 0.10,
         "water_proximity": 0.10,
-        "tree_cover": 0.00,
+        "solitude": 0.05,
+        "flatness": 0.40,
+        "tree_cover": 0.05,
     },
 }
 
@@ -120,7 +125,7 @@ class Settings(BaseSettings):
     # After scoring, suppress lower-scoring candidates within this radius of a
     # higher-scoring one so ranked "sites" are distinct, not adjacent road
     # samples. Exposed via GET /config so the UI can show/tune it.
-    distinct_radius_m: float = 400.0
+    distinct_radius_m: float = 800.0
 
     # --- External-service courtesy (TLC-5) --------------------------------
     osm_cache_ttl_s: int = 7 * 24 * 3600

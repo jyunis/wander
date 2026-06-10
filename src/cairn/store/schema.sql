@@ -16,6 +16,8 @@
 --      (forest-road class + roughness from the source way's OSM tags).
 -- v=4: remoteness feature (local_road_m/remoteness_unavailable — local road
 --      density) + road_rough informational flag.
+-- v=5: road_end feature — candidate_features.dist_terminus_m /
+--      road_end_unavailable (distance to nearest drivable dead-end).
 
 CREATE TABLE IF NOT EXISTS schema_version (
     version     INTEGER PRIMARY KEY,
@@ -97,7 +99,9 @@ CREATE TABLE IF NOT EXISTS candidate_features (
     road_unavailable        INTEGER NOT NULL DEFAULT 0,
     local_road_m            REAL,                 -- local drivable road length (v4, remoteness)
     remoteness_unavailable  INTEGER NOT NULL DEFAULT 0,
-    road_rough              INTEGER NOT NULL DEFAULT 0    -- informational rough/4WD flag (v4)
+    road_rough              INTEGER NOT NULL DEFAULT 0,   -- informational rough/4WD flag (v4)
+    dist_terminus_m         REAL,                 -- distance to nearest dead-end (v5, road_end)
+    road_end_unavailable    INTEGER NOT NULL DEFAULT 0
 );
 
 -- --- Per-candidate scores (UoW-7). Append-only for done runs (TLC-9).

@@ -11,10 +11,51 @@ INTERFACE ONLY — implemented under the tester/implementer barrier.
 from __future__ import annotations
 
 import math
+from collections import defaultdict
 
 from cairn.engine.types import Candidate, Way
+from cairn.store.types import Bbox
 
 _M_PER_DEG = 111320.0
+
+
+def grid_cell(lon: float, lat: float, grid_m: float) -> tuple[int, int]:
+    """The dedup grid cell a point snaps to (shared by generation + injection)."""
+    dlat = grid_m / _M_PER_DEG
+    cos_lat = math.cos(math.radians(lat))
+    dlon = grid_m / (_M_PER_DEG * cos_lat) if cos_lat else 0.0
+    cell_lon = round(lon / dlon) if dlon else 0
+    cell_lat = round(lat / dlat) if dlat else 0
+    return (cell_lon, cell_lat)
+
+
+def find_termini(
+    ways: list[Way], bbox: Bbox, tol_m: float = 20.0
+) -> list[tuple[float, float, int]]:
+    """Drivable DEAD-ENDS within the bbox: way endpoints not shared with any
+    other way. Pure; computed on UNCLIPPED geometry so bbox-edge cuts aren't
+    mistaken for real termini. Returns (lon, lat, source_way_id).
+
+    Endpoints are matched by rounding to ~tol_m (OSM shares exact node coords),
+    so an endpoint touched only by its own way is a terminus.
+    """
+    decimals = max(0, round(math.log10(_M_PER_DEG / max(tol_m, 1.0))))
+    vertex_ways: dict[tuple, set[int]] = defaultdict(set)
+    for w in ways:
+        for lon, lat in w.coords:
+            vertex_ways[(round(lon, decimals), round(lat, decimals))].add(w.osm_id)
+
+    b = bbox.normalized()
+    termini: list[tuple[float, float, int]] = []
+    for w in ways:
+        if len(w.coords) < 2:
+            continue
+        for lon, lat in (w.coords[0], w.coords[-1]):
+            key = (round(lon, decimals), round(lat, decimals))
+            if vertex_ways[key] == {w.osm_id}:  # only this way touches it
+                if b.min_lon <= lon <= b.max_lon and b.min_lat <= lat <= b.max_lat:
+                    termini.append((lon, lat, w.osm_id))
+    return termini
 
 
 def _segment_length_m(

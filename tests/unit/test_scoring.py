@@ -117,17 +117,18 @@ def test_flatness_linear_decreasing():
 
 
 def test_water_trapezoid_shape():
+    # Lakeside curve (v4 params): rise [0,30], plateau [30,150], fall [150,600].
     for d, expected in [
         (0.0, 0.0),
-        (30.0, 0.5),
-        (60.0, 1.0),
+        (15.0, 0.5),
+        (30.0, 1.0),
         (150.0, 1.0),
-        (825.0, 0.5),
-        (1500.0, 0.0),
+        (375.0, 0.5),
+        (600.0, 0.0),
         (2000.0, 0.0),
     ]:
         assert math.isclose(norm_water(d), expected, abs_tol=1e-9), d
-    cf = make_cf(0.0, 0.0, dist_water=825.0)
+    cf = make_cf(0.0, 0.0, dist_water=375.0)
     out = score([cf], {"water_proximity": 1.0}, PARAMS)
     c = contributions_by_feature(out[0])["water_proximity"]
     assert math.isclose(c.normalized, 0.5, abs_tol=1e-9)

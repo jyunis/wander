@@ -18,6 +18,7 @@ This module has no clock/random (TLC-1 purity rule applies to its inputs).
 
 from __future__ import annotations
 
+import math
 import re
 
 from cairn.clients.terrain import TerrainSampler
@@ -74,6 +75,13 @@ def _search_radii(scoring_config: dict) -> tuple[float, float, float]:
     return water, forest, solitude
 
 
+def _dist_m(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
+    mean_lat = math.radians((lat1 + lat2) / 2.0)
+    dx = (lon2 - lon1) * 111320.0 * math.cos(mean_lat)
+    dy = (lat2 - lat1) * 111320.0
+    return math.hypot(dx, dy)
+
+
 async def extract_features(
     store: Store,
     terrain: TerrainSampler,
@@ -81,9 +89,18 @@ async def extract_features(
     scoring_config: dict,
     present_classes: set[str],
     road_tags: dict[int, dict],
+    termini: list[tuple[float, float, int]],
 ) -> CandidateFeatures:
     lon, lat = candidate.lon, candidate.lat
     water_r, forest_r, solitude_r = _search_radii(scoring_config)
+
+    # road_end <- distance to the nearest drivable dead-end. Unavailable (and
+    # renormalized away, TLC-6) when the bbox has no termini at all.
+    if termini:
+        dist_terminus = min(_dist_m(lon, lat, tl, ta) for tl, ta, _ in termini)
+        road_end = FeatureValue(dist_terminus, True)
+    else:
+        road_end = FeatureValue(None, False)
 
     # road_character <- the candidate's source way tags (always available when
     # the source road resolved; degraded only if its tags went missing).
@@ -134,6 +151,7 @@ async def extract_features(
             "solitude": solitude,
             "road_character": road,
             "remoteness": remoteness,
+            "road_end": road_end,
         },
         near_campsite=near_campsite,
         rough_road=rough,
