@@ -184,7 +184,10 @@ async function runScore() {
     if (run.status === "failed") {
       setStatus("Run failed: " + run.failure_reason, "err");
     } else {
-      setStatus(`Done — ${run.candidate_count} candidates.`, "ok");
+      setStatus(
+        `Done — ${run.distinct_count} distinct sites (${run.candidate_count} scored points).`,
+        "ok"
+      );
       await loadRun(run.id);
     }
   } catch (e) {
@@ -219,10 +222,11 @@ async function loadRun(runId) {
 function renderMeta(run) {
   const prov = run.provenance || {};
   const osm = prov.osm || {}, elev = prov.elevation || {};
+  const sites = `<b>${run.distinct_count}</b> distinct sites · ${run.candidate_count} scored points`;
   $("provenance").innerHTML = run.provenance
-    ? `OSM ${osm.from_cache ? "cached" : "fetched"} ${(osm.fetched_at || "").slice(0, 10)} · ` +
+    ? `${sites}<br>OSM ${osm.from_cache ? "cached" : "fetched"} ${(osm.fetched_at || "").slice(0, 10)} · ` +
       `elevation z${(elev.covering || {}).zoom ?? "?"}${run.capped ? " · capped" : ""}`
-    : "";
+    : sites;
   const deg = run.degraded_features || [];
   $("degraded").textContent = deg.length
     ? "⚠ degraded (scored on the rest): " + deg.map((d) => FEATURE_LABELS[d] || d).join(", ")
@@ -269,12 +273,18 @@ function renderResults(gj) {
     candidatesLayer.addLayer(dot);
   });
 
-  // Numbered pins for the top 25.
-  feats.slice(0, 25).forEach((f) => {
+  // Numbered pins for the top 25 DISTINCT sites (spatial NMS, not adjacent
+  // road samples). Fall back to plain rank for pre-NMS runs (no distinct_rank).
+  const distinct = feats
+    .filter((f) => f.properties.distinct && f.properties.distinct_rank != null)
+    .sort((a, b) => a.properties.distinct_rank - b.properties.distinct_rank);
+  const pinFeats = distinct.length ? distinct.slice(0, 25) : feats.slice(0, 25);
+  pinFeats.forEach((f) => {
     const [lon, lat] = f.geometry.coordinates;
     const p = f.properties;
+    const label = p.distinct_rank != null ? p.distinct_rank : p.rank;
     const marker = L.marker([lat, lon], {
-      icon: L.divIcon({ className: "", html: `<div class="rank-pin">${p.rank}</div>`, iconSize: [22, 22] }),
+      icon: L.divIcon({ className: "", html: `<div class="rank-pin">${label}</div>`, iconSize: [22, 22] }),
     });
     marker.on("click", () => showBreakdown(p));
     pinLayer.addLayer(marker);

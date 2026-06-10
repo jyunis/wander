@@ -10,6 +10,8 @@
 -- it is safe to run through executescript() and idempotent (IF NOT EXISTS).
 --
 -- v=1: initial schema.
+-- v=2: distinct-site selection — candidate_scores.is_distinct/distinct_rank
+--      (spatial NMS over the ranked candidates) + runs.distinct_count.
 
 CREATE TABLE IF NOT EXISTS schema_version (
     version     INTEGER PRIMARY KEY,
@@ -40,6 +42,7 @@ CREATE TABLE IF NOT EXISTS runs (
                               CHECK (status IN ('pending','running','done','failed')),
     failure_reason          TEXT,                 -- typed reason when failed (TLC-10)
     candidate_count         INTEGER NOT NULL DEFAULT 0,
+    distinct_count          INTEGER NOT NULL DEFAULT 0,   -- distinct sites after NMS
     capped                  INTEGER NOT NULL DEFAULT 0,   -- bool: MAX_CANDIDATES hit (TLC-4)
     degraded_features_json  TEXT,                 -- run-level degraded list (TLC-6)
     created_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -93,7 +96,9 @@ CREATE TABLE IF NOT EXISTS candidate_scores (
     candidate_id        INTEGER PRIMARY KEY REFERENCES candidates(id) ON DELETE CASCADE,
     total               REAL NOT NULL,
     contributions_json  TEXT NOT NULL,            -- [{feature, normalized, weight, contribution}] (TLC-8)
-    degraded_features_json TEXT NOT NULL DEFAULT '[]'
+    degraded_features_json TEXT NOT NULL DEFAULT '[]',
+    is_distinct         INTEGER NOT NULL DEFAULT 1,   -- bool: distinct site after NMS
+    distinct_rank       INTEGER                       -- 1-based over distinct sites; NULL if suppressed
 );
 
 CREATE INDEX IF NOT EXISTS idx_scores_total ON candidate_scores (total DESC);

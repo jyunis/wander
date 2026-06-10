@@ -18,7 +18,7 @@ from cairn.clients.terrain import TerrainSampler, tile_covering
 from cairn.config import Settings
 from cairn.engine.candidates import generate_candidates
 from cairn.engine.features import extract_features
-from cairn.engine.scoring import score
+from cairn.engine.scoring import score, select_distinct
 from cairn.engine.scoring_config import SCORING_CONFIG_VERSION
 from cairn.engine.types import CandidateFeatures
 from cairn.errors import (
@@ -138,8 +138,10 @@ class RunService:
                 await terrain.aclose()
             await self._store.insert_candidate_features(feature_rows)
 
-            # 7: score (pure) + persist.
+            # 7: score (pure) + distinct-site selection (pure NMS) + persist.
             scored = score(cfs, weights, params)
+            scored = select_distinct(scored, self._s.distinct_radius_m)
+            distinct_count = sum(1 for sc in scored if sc.distinct)
             id_map = {
                 (c.lon, c.lat, c.source_way_id): cid for cid, c in id_candidates
             }
@@ -151,6 +153,7 @@ class RunService:
                 "generated_at": _now_iso(),
                 "scoring_config_version": SCORING_CONFIG_VERSION,
                 "weights": weights,
+                "distinct_radius_m": self._s.distinct_radius_m,
                 "bbox": [b.min_lon, b.min_lat, b.max_lon, b.max_lat],
                 "osm": {
                     "source": "overpass",
@@ -170,6 +173,7 @@ class RunService:
                 run_id,
                 provenance=provenance,
                 candidate_count=len(candidates),
+                distinct_count=distinct_count,
                 capped=capped,
                 degraded_features=run_degraded,
             )

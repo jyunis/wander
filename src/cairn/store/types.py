@@ -54,6 +54,7 @@ class Run:
     provenance: dict | None = None
     failure_reason: str | None = None
     candidate_count: int = 0
+    distinct_count: int = 0
     capped: bool = False
     degraded_features: list[str] = field(default_factory=list)
     created_at: str | None = None

@@ -18,12 +18,16 @@ INTERFACE ONLY — implemented under the tester/implementer barrier.
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 from cairn.engine.types import (
+    Candidate,
     CandidateFeatures,
     Contribution,
     ScoredCandidate,
 )
+
+_M_PER_DEG = 111320.0
 
 
 def _normalize(shape: str, value: float, params: dict) -> float:
@@ -173,3 +177,45 @@ def score(
         )
     )
     return scored
+
+
+def _distance_m(a: Candidate, b: Candidate) -> float:
+    """Equirectangular distance in meters between two candidate points. Pure."""
+    mean_lat = math.radians((a.lat + b.lat) / 2.0)
+    dx = (a.lon - b.lon) * _M_PER_DEG * math.cos(mean_lat)
+    dy = (a.lat - b.lat) * _M_PER_DEG
+    return math.hypot(dx, dy)
+
+
+def select_distinct(
+    scored: list[ScoredCandidate], radius_m: float
+) -> list[ScoredCandidate]:
+    """Greedy spatial non-maximum suppression over already-ranked candidates.
+
+    `scored` must be in descending score order (as `score()` returns it).
+    Walking highest-first, a candidate is a *distinct site* if it is at least
+    `radius_m` from every higher-scoring distinct site already kept; otherwise
+    it is suppressed (represented by that nearby better site). Returns a new
+    list, same order, with `distinct` / `distinct_rank` set (rank is 1-based
+    over distinct sites; None when suppressed).
+
+    Pure + deterministic given the (deterministic) input order. `radius_m <= 0`
+    keeps every candidate distinct (no suppression).
+    """
+    kept: list[ScoredCandidate] = []
+    out: list[ScoredCandidate] = []
+    next_rank = 1
+    for sc in scored:
+        is_distinct = True
+        if radius_m > 0.0:
+            for k in kept:
+                if _distance_m(sc.candidate, k.candidate) < radius_m:
+                    is_distinct = False
+                    break
+        if is_distinct:
+            kept.append(sc)
+            out.append(replace(sc, distinct=True, distinct_rank=next_rank))
+            next_rank += 1
+        else:
+            out.append(replace(sc, distinct=False, distinct_rank=None))
+    return out
