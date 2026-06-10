@@ -651,14 +651,7 @@ async function fetchOverlay(layerId) {
     onEachFeature: (feat, lyr) => {
       const p = feat.properties || {};
       if (isPoint) {
-        const { href, label } = campgroundLink(p);
-        const link = href
-          ? `<a class="cg-link" href="${esc(href)}" target="_blank" rel="noopener">${label} ↗</a>`
-          : "";
-        lyr.bindPopup(
-          `<div class="cg-pop"><b>${esc(p.name) || "Campground"}</b>` +
-            `<div class="cg-cat">${esc(p.category)}</div>${link}</div>`
-        );
+        lyr.bindPopup(() => campgroundCard(p), { maxWidth: 250, className: "cg-popup" });
       } else {
         const tip = isOwn
           ? `${p.category || "—"}${p.name ? " · " + p.name + " Co." : ""}`
@@ -693,6 +686,40 @@ function campgroundLink(p) {
   return isForest
     ? { href: "https://www.dnr.state.mn.us/state_forests/index.html", label: "MN DNR State Forests" }
     : { href: "https://www.dnr.state.mn.us/state_parks/index.html", label: "MN DNR State Parks" };
+}
+
+// Rich popup card for a campground: badges + facts + blurb + the link.
+function campgroundCard(p) {
+  const m = p.meta || {};
+  const { href, label } = campgroundLink(p);
+  const badges = [];
+  if (m.sites) badges.push(`${m.sites} sites`);
+  if (typeof m.reservable === "boolean") badges.push(m.reservable ? "✅ reservable" : "🪧 first-come");
+  if (m.electric) badges.push("🔌 electric");
+  if (m.max_rv_ft) badges.push(`🚐 ${m.max_rv_ft} ft`);
+  if (m.water_front) badges.push("💧 waterfront");
+  if (m.pets) badges.push("🐾 pets");
+  if (m.ada) badges.push("♿ ADA");
+  if (m.fee) badges.push("💲 " + esc(m.fee).replace(/\s*per night/i, "/night"));
+
+  const row = (cls, txt) => (txt ? `<div class="${cls}">${txt}</div>` : "");
+  const badgeRow = badges.length
+    ? `<div class="cg-badges">${badges.map((b) => `<span>${b}</span>`).join("")}</div>`
+    : "";
+  const types = (m.site_types || []).map(esc).join(" · ");
+  const acts = (m.activities || []).map(esc).join(" · ");
+
+  return (
+    `<div class="cg-pop"><b>${esc(p.name) || "Campground"}</b>` +
+    `<div class="cg-cat">${esc(p.category)}</div>` +
+    badgeRow +
+    row("cg-facts", types) +
+    row("cg-facts cg-acts", acts) +
+    row("cg-facts", m.phone ? "☎ " + esc(m.phone) : "") +
+    row("cg-blurb", esc(m.blurb)) +
+    (href ? `<a class="cg-link" href="${esc(href)}" target="_blank" rel="noopener">${label} ↗</a>` : "") +
+    `</div>`
+  );
 }
 
 function overlayStyle(layerId, feat) {

@@ -129,7 +129,7 @@ class OverlayStore:
         is_point = layer in POINT_LAYERS
         if is_point:
             sql = (
-                "SELECT category, name, url, AsGeoJSON(geom) FROM overlay_points "
+                "SELECT category, name, url, meta, AsGeoJSON(geom) FROM overlay_points "
                 "WHERE layer=? AND ROWID IN ("
                 "  SELECT ROWID FROM SpatialIndex WHERE f_table_name='overlay_points' "
                 "  AND f_geometry_column='geom' AND search_frame=BuildMbr(?, ?, ?, ?, 4326)) "
@@ -138,7 +138,7 @@ class OverlayStore:
             params = (layer, *frame, self._max + 1)
         else:
             sql = (
-                "SELECT category, name, NULL, "
+                "SELECT category, name, NULL, NULL, "
                 "  AsGeoJSON(ST_Intersection(geom, BuildMbr(?, ?, ?, ?, 4326))) "
                 "FROM overlay_features WHERE layer=? AND ROWID IN ("
                 "  SELECT ROWID FROM SpatialIndex WHERE f_table_name='overlay_features' "
@@ -149,12 +149,14 @@ class OverlayStore:
         rows = await (await self._db.execute(sql, params)).fetchall()
         truncated = len(rows) > self._max
         features = []
-        for category, name, url, gj in rows[: self._max]:
+        for category, name, url, meta, gj in rows[: self._max]:
             if not gj:
                 continue
             props = {"layer": layer, "category": category, "name": name}
             if url:
                 props["url"] = url
+            if meta:
+                props["meta"] = json.loads(meta)
             features.append({"type": "Feature", "geometry": json.loads(gj), "properties": props})
         return {
             "type": "FeatureCollection",

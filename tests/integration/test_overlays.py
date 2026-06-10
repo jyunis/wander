@@ -42,13 +42,15 @@ def _build_overlays_db(path: str) -> None:
     # Point layer (campgrounds) lives in overlay_points, with a reservation url.
     con.execute(
         "CREATE TABLE overlay_points ("
-        "fid INTEGER PRIMARY KEY AUTOINCREMENT, layer TEXT, category TEXT, name TEXT, url TEXT)"
+        "fid INTEGER PRIMARY KEY AUTOINCREMENT, layer TEXT, category TEXT, name TEXT, "
+        "url TEXT, meta TEXT)"
     )
     con.execute("SELECT AddGeometryColumn('overlay_points','geom',4326,'POINT','XY')")
     con.execute("SELECT CreateSpatialIndex('overlay_points','geom')")
     con.execute(
-        "INSERT INTO overlay_points(layer, category, name, url, geom) VALUES "
+        "INSERT INTO overlay_points(layer, category, name, url, meta, geom) VALUES "
         "('campground','National / Federal','Faunce CG','https://recreation.gov/x', "
+        "'{\"sites\": 50, \"electric\": true, \"max_rv_ft\": 30}', "
         "GeomFromText('POINT(0.005 0.005)',4326))"
     )
     con.commit()
@@ -86,6 +88,9 @@ async def test_point_layer_query_returns_marker_with_url(overlay_settings):
     assert feat["geometry"]["type"] == "Point"
     assert feat["properties"]["name"] == "Faunce CG"
     assert feat["properties"]["url"] == "https://recreation.gov/x"
+    # Phase-1 enrichment: meta passes through as a parsed object.
+    assert feat["properties"]["meta"]["sites"] == 50
+    assert feat["properties"]["meta"]["electric"] is True
     await s.close()
 
 

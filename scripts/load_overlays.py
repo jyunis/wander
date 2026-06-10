@@ -21,6 +21,7 @@ Env: OVERLAYS_DB (default /data/overlays.db).
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
@@ -104,16 +105,20 @@ def ensure_schema(con: sqlite3.Connection) -> None:
         cur.execute("SELECT AddGeometryColumn('overlay_features','geom',4326,'MULTIPOLYGON','XY')")
         cur.execute("SELECT CreateSpatialIndex('overlay_features','geom')")
         cur.execute("CREATE INDEX idx_overlay_layer ON overlay_features(layer)")
-    # Point layers (campgrounds; `url` carries a reservation link where known).
+    # Point layers (campgrounds; `url` = reservation link, `meta` = JSON detail).
     if not exists("overlay_points"):
         cur.execute(
             "CREATE TABLE overlay_points ("
             "  fid INTEGER PRIMARY KEY AUTOINCREMENT,"
-            "  layer TEXT NOT NULL, category TEXT, name TEXT, url TEXT)"
+            "  layer TEXT NOT NULL, category TEXT, name TEXT, url TEXT, meta TEXT)"
         )
         cur.execute("SELECT AddGeometryColumn('overlay_points','geom',4326,'POINT','XY')")
         cur.execute("SELECT CreateSpatialIndex('overlay_points','geom')")
         cur.execute("CREATE INDEX idx_overlay_pts_layer ON overlay_points(layer)")
+    else:  # migrate: add the meta column to a pre-existing table
+        cols = [r[1] for r in cur.execute("PRAGMA table_info(overlay_points)").fetchall()]
+        if "meta" not in cols:
+            cur.execute("ALTER TABLE overlay_points ADD COLUMN meta TEXT")
     con.commit()
 
 
@@ -136,13 +141,25 @@ CAMPGROUND_LAYER = "campground"
 
 
 def _insert_points(con, layer, rows):
-    """rows: iterable of (category, name, url, wkt, srid)."""
+    """rows: iterable of (category, name, url, meta_dict|None, wkt, srid)."""
     con.executemany(
-        "INSERT INTO overlay_points(layer, category, name, url, geom) "
-        "VALUES (?, ?, ?, ?, Transform(GeomFromText(?, ?), 4326))",
-        [(layer, c, n, u, wkt, srid) for (c, n, u, wkt, srid) in rows],
+        "INSERT INTO overlay_points(layer, category, name, url, meta, geom) "
+        "VALUES (?, ?, ?, ?, ?, Transform(GeomFromText(?, ?), 4326))",
+        [
+            (layer, c, n, u, json.dumps(m) if m else None, wkt, srid)
+            for (c, n, u, m, wkt, srid) in rows
+        ],
     )
     con.commit()
+
+
+def _truthy(v) -> bool:
+    return str(v).strip().lower() in ("y", "yes", "1", "true", "t") if v is not None else False
+
+
+def _compact(d: dict) -> dict:
+    """Drop empty/None/0-ish values so sparse sources only emit what they have."""
+    return {k: v for k, v in d.items() if v not in (None, "", 0, 0.0, [], {}, False)}
 
 
 def _download(url: str, dest: str) -> None:
@@ -173,7 +190,9 @@ def load_state_forest_campgrounds(con) -> int:
             site_type = str(sr.record[ti] or "")
             if "camp" not in site_type.lower():  # skip day-use / picnic
                 continue
-            rows.append(("State Forest", str(sr.record[ni] or ""), None, shape(geom).wkt, 26915))
+            rows.append(
+                ("State Forest", str(sr.record[ni] or ""), None, None, shape(geom).wkt, 26915)
+            )
         _insert_points(con, CAMPGROUND_LAYER, rows)
     print(f"[campground]   state-forest: {len(rows)}", flush=True)
     return len(rows)
@@ -237,23 +256,49 @@ def load_state_park_campgrounds(con) -> int:
         zipfile.ZipFile(zp).extractall(td)
         gpkg = os.path.join(td, "struc_parks_and_trails_campsites.gpkg")
         g = connect(gpkg)  # SpatiaLite reads GPKG blobs via GeomFromGPB
-        seen: dict[str, tuple] = {}
-        for cg, park, srid, wkt in g.execute(
-            "SELECT CAMPGROUND_NAME, CONTAINING_MGMT_UNIT_NAME, "
+        groups: dict[str, dict] = {}  # one entry per campground, aggregating its sites
+        for cg, park, ctype, a30, a50, pad, ada, pets, wf, srid, wkt in g.execute(
+            "SELECT CAMPGROUND_NAME, CONTAINING_MGMT_UNIT_NAME, CAMPSITE_TYPE_NAME, "
+            "  AMPS_30_FLAG, AMPS_50_FLAG, SITE_PAD_LENGTH_FT, ADA_ACCESSIBLE_FLAG, "
+            "  PETS_ALLOWED_FLAG, WATER_FRONT_FLAG, "
             "  ST_Srid(GeomFromGPB(Shape)), AsText(GeomFromGPB(Shape)) "
             "FROM struc_parks_and_trails_campsites WHERE Shape IS NOT NULL"
         ):
             if not cg or not wkt:
                 continue
             key = f"{park}|{cg}"
-            if key not in seen:  # first site's location represents the campground
+            grp = groups.get(key)
+            if grp is None:  # first site's location represents the campground
                 name = f"{cg}" + (f" — {park}" if park and park not in cg else "")
-                seen[key] = (park, ("State Park", name, None, wkt, srid))
+                grp = groups[key] = {
+                    "park": park, "name": name, "wkt": wkt, "srid": srid,
+                    "sites": 0, "electric": False, "max_rv_ft": 0, "ada": False,
+                    "pets": False, "water_front": False, "types": set(),
+                }
+            grp["sites"] += 1
+            if _truthy(a30) or _truthy(a50):
+                grp["electric"] = True
+            for flag, k in ((ada, "ada"), (pets, "pets"), (wf, "water_front")):
+                if _truthy(flag):
+                    grp[k] = True
+            if ctype:
+                grp["types"].add(str(ctype))
+            try:
+                grp["max_rv_ft"] = max(grp["max_rv_ft"], int(float(pad)))
+            except (TypeError, ValueError):
+                pass
         g.close()
-        # Resolve each distinct park's page once (verified), then attach.
-        park_url = {p: _resolve_dnr_park_url(p) for p in {p for p, _ in seen.values()}}
-        rows = [(cat, name, park_url.get(park), wkt, srid)
-                for park, (cat, name, _u, wkt, srid) in seen.values()]
+        # Resolve each distinct park's page once (verified), then build rows.
+        park_url = {p: _resolve_dnr_park_url(p) for p in {grp["park"] for grp in groups.values()}}
+        rows = []
+        for grp in groups.values():
+            meta = _compact({
+                "sites": grp["sites"], "electric": grp["electric"],
+                "max_rv_ft": grp["max_rv_ft"], "ada": grp["ada"], "pets": grp["pets"],
+                "water_front": grp["water_front"], "site_types": sorted(grp["types"]),
+            })
+            rows.append(("State Park", grp["name"], park_url.get(grp["park"]), meta,
+                         grp["wkt"], grp["srid"]))
         _insert_points(con, CAMPGROUND_LAYER, rows)
     linked = sum(1 for r in rows if r[2])
     print(f"[campground]   state-park: {len(rows)} ({linked} linked)", flush=True)
@@ -275,36 +320,102 @@ def load_campgrounds(con) -> int:
     return total
 
 
+def _ridb_get(url: str, key: str) -> dict:
+    req = urllib.request.Request(url, headers={**UA, "apikey": key})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.load(r)
+
+
+def _ridb_campsite_meta(fid: str, key: str) -> dict:
+    """Aggregate a facility's campsites: usable site count, types, electric,
+    max RV length, pets. Pages through all sites (campgrounds are small)."""
+    types, max_rv, electric, pets, sites = set(), 0, False, False, 0
+    offset = 0
+    while offset < 1000:  # safety cap
+        d = _ridb_get(
+            "https://ridb.recreation.gov/api/v1/facilities/"
+            f"{fid}/campsites?limit=50&offset={offset}",
+            key,
+        )
+        recs = d.get("RECDATA", [])
+        for c in recs:
+            if (c.get("TypeOfUse") or "").lower() != "overnight":
+                continue  # skip day-use / management sites
+            sites += 1
+            t = (c.get("CampsiteType") or "").strip()
+            if t:
+                types.add(t.title())
+            tu = t.upper().replace("-", "").replace(" ", "")
+            if "ELECTRIC" in tu and "NONELECTRIC" not in tu:  # avoid "Standard Nonelectric"
+                electric = True
+            for e in c.get("PERMITTEDEQUIPMENT", []) or []:
+                if (e.get("EquipmentName") or "").upper() in ("RV", "TRAILER", "FIFTH WHEEL"):
+                    try:
+                        max_rv = max(max_rv, int(float(e.get("MaxLength") or 0)))
+                    except (TypeError, ValueError):
+                        pass
+            for a in c.get("ATTRIBUTES", []) or []:
+                if a.get("AttributeName") == "Pets Allowed" and _truthy(a.get("AttributeValue")):
+                    pets = True
+        offset += len(recs)
+        if not recs or offset >= d.get("METADATA", {}).get("RESULTS", {}).get("TOTAL_COUNT", 0):
+            break
+        time.sleep(0.1)
+    return _compact({
+        "sites": sites, "site_types": sorted(types), "electric": electric,
+        "max_rv_ft": max_rv, "pets": pets,
+    })
+
+
 def load_ridb_campgrounds(con) -> int:
     """Recreation.gov RIDB federal campgrounds (national forest/NPS/BLM/Corps).
     Keyed: needs RIDB_API_KEY in the env. Skipped (returns 0) without it, so the
-    state layers still load — same best-effort posture as MVUM/structures."""
+    state layers still load — same best-effort posture as MVUM/structures. Each
+    facility is enriched with reservable/fee/ADA/phone/activities + a campsite
+    aggregate (count/types/electric/max-RV)."""
     key = os.environ.get("RIDB_API_KEY")
     if not key:
         print("[campground]   RIDB skipped (no RIDB_API_KEY)", flush=True)
         return 0
-    import json as _json
 
-    rows, offset, full = [], 0, 0
+    rows, offset = [], 0
     while True:
-        u = (
+        data = _ridb_get(
             "https://ridb.recreation.gov/api/v1/facilities?"
-            f"activity=CAMPING&state=MN&limit=50&offset={offset}&full=false"
+            f"activity=CAMPING&state=MN&limit=50&offset={offset}&full=true",
+            key,
         )
-        req = urllib.request.Request(u, headers={**UA, "apikey": key})
-        with urllib.request.urlopen(req, timeout=60) as r:
-            data = _json.load(r)
         recs = data.get("RECDATA", [])
         for f in recs:
             lat, lon = f.get("FacilityLatitude"), f.get("FacilityLongitude")
-            if not lat or not lon:
+            fid = str(f.get("FacilityID", ""))
+            if not lat or not lon or not fid:
                 continue
-            name = f.get("FacilityName") or ""
-            resv = "https://www.recreation.gov/camping/campgrounds/" + str(f.get("FacilityID", ""))
-            rows.append(("National / Federal", name, resv, f"POINT({lon} {lat})", 4326))
-        full = data.get("METADATA", {}).get("RESULTS", {}).get("TOTAL_COUNT", 0)
+            blurb = re.sub(r"<[^>]+>", " ", f.get("FacilityDescription") or "")
+            blurb = re.sub(r"\s+", " ", blurb).strip()
+            meta = {
+                "reservable": bool(f.get("Reservable")),
+                "fee": (f.get("FacilityUseFeeDescription") or "").strip(),
+                "ada": (f.get("FacilityAdaAccess") or "").upper() == "Y",
+                "phone": (f.get("FacilityPhone") or "").strip(),
+                "activities": [
+                    (a.get("ActivityName") or "").title()
+                    for a in (f.get("ACTIVITY") or [])
+                ][:6],
+                "blurb": (blurb[:220] + "…") if len(blurb) > 220 else blurb,
+            }
+            try:
+                meta.update(_ridb_campsite_meta(fid, key))
+            except Exception as exc:  # campsites best-effort; keep facility fields
+                print(f"[campground]     {fid} campsites skipped: {exc}", flush=True)
+            resv = f"https://www.recreation.gov/camping/campgrounds/{fid}"
+            m = _compact(meta)
+            m["reservable"] = bool(f.get("Reservable"))  # keep even when False (first-come)
+            rows.append(("National / Federal", f.get("FacilityName") or "", resv,
+                         m, f"POINT({lon} {lat})", 4326))
+            time.sleep(0.1)
         offset += len(recs)
-        if not recs or offset >= full:
+        if not recs or offset >= data.get("METADATA", {}).get("RESULTS", {}).get("TOTAL_COUNT", 0):
             break
     _insert_points(con, CAMPGROUND_LAYER, rows)
     print(f"[campground]   RIDB federal: {len(rows)}", flush=True)
