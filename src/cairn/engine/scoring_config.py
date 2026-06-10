@@ -24,7 +24,7 @@ Normalization conventions (every feature maps a raw value -> [0, 1]):
 
 from __future__ import annotations
 
-SCORING_CONFIG_VERSION = 3
+SCORING_CONFIG_VERSION = 4
 
 DEFAULT_SCORING_PARAMS: dict = {
     "version": SCORING_CONFIG_VERSION,
@@ -37,11 +37,15 @@ DEFAULT_SCORING_PARAMS: dict = {
         },
         "water_proximity": {
             "input": "dist_water_m",
+            # Lakeside setback: a campsite 30-150 m from the shore is ideal
+            # (not in the water, not a hike away). Tightened fall-off (600 m,
+            # was 1500) so "leads to a lake" means actually near water, not
+            # "vaguely in lake country".
             "shape": "trapezoid",
             "rise_start": 0.0,
-            "plateau_lo": 60.0,
+            "plateau_lo": 30.0,
             "plateau_hi": 150.0,
-            "fall_end": 1500.0,
+            "fall_end": 600.0,
         },
         "tree_cover": {
             "input": "dist_forest_m",
@@ -87,6 +91,18 @@ DEFAULT_SCORING_PARAMS: dict = {
             "shape": "distance_decay",
             "decay_m": 2500.0,
             "radius_m": 1500.0,
+        },
+        # road_end <- distance to the nearest drivable DEAD-END (a road that
+        # branches off and terminates). The classic dispersed pattern is "drive
+        # the spur to where it ends." exp(-d/decay): at a dead-end -> 1, far up
+        # a through-road -> ~0. Unavailable only if the bbox has no dead-ends.
+        "road_end": {
+            "input": "dist_terminus_m",
+            "shape": "distance_decay",
+            "decay_m": 400.0,
+            # An endpoint is a terminus if no OTHER drivable way has a vertex
+            # within this many meters (computed on UNCLIPPED geometry).
+            "terminus_tol_m": 20.0,
         },
     },
 }

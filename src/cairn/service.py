@@ -16,11 +16,11 @@ import time
 from cairn.clients.overpass import OverpassClient
 from cairn.clients.terrain import TerrainSampler, tile_covering
 from cairn.config import Settings
-from cairn.engine.candidates import generate_candidates
+from cairn.engine.candidates import find_termini, generate_candidates, grid_cell
 from cairn.engine.features import extract_features
 from cairn.engine.scoring import score, select_distinct
 from cairn.engine.scoring_config import SCORING_CONFIG_VERSION
-from cairn.engine.types import CandidateFeatures
+from cairn.engine.types import Candidate, CandidateFeatures
 from cairn.errors import (
     BboxTooLarge,
     CairnError,
@@ -104,7 +104,7 @@ class RunService:
             )
             check_clock("ingest")
 
-            # 5: candidates.
+            # 5: candidates (uniform sampling + injected dead-end termini).
             ways = await self._store.load_drivable_ways(b)
             candidates, capped = generate_candidates(
                 ways,
@@ -112,12 +112,19 @@ class RunService:
                 grid_m=self._s.candidate_grid_m,
                 max_candidates=self._s.max_candidates,
             )
+            ways_full = await self._store.load_drivable_ways(b, clip=False)
+            tol = params["features"]["road_end"].get("terminus_tol_m", 20.0)
+            termini = find_termini(ways_full, b, tol_m=tol)
+            candidates = _inject_termini(
+                candidates, termini, self._s.candidate_grid_m, self._s.max_candidates
+            )
             id_candidates = await self._store.insert_candidates(run_id, candidates, capped)
             log.info(
-                "run %d: %d ways -> %d candidates (capped=%s)",
+                "run %d: %d ways -> %d candidates (%d termini, capped=%s)",
                 run_id,
                 len(ways),
                 len(candidates),
+                len(termini),
                 capped,
             )
 
@@ -130,7 +137,7 @@ class RunService:
             try:
                 for cid, cand in id_candidates:
                     cf = await extract_features(
-                        self._store, terrain, cand, params, present, road_tags
+                        self._store, terrain, cand, params, present, road_tags, termini
                     )
                     cfs.append(cf)
                     feature_rows.append(_feature_row(cid, cf))
@@ -187,15 +194,36 @@ class RunService:
             await self._store.fail_run(run_id, f"InternalError: {exc}")
 
 
+def _inject_termini(
+    candidates: list[Candidate],
+    termini: list[tuple[float, float, int]],
+    grid_m: float,
+    max_candidates: int,
+) -> list[Candidate]:
+    """Add dead-end terminus points as candidates (grid-deduped against the
+    uniform samples) so every spur-end is a scored, recommendable site."""
+    cells = {grid_cell(c.lon, c.lat, grid_m) for c in candidates}
+    out = list(candidates)
+    for lon, lat, way_id in termini:
+        if len(out) >= max_candidates:
+            break
+        cell = grid_cell(lon, lat, grid_m)
+        if cell not in cells:
+            cells.add(cell)
+            out.append(Candidate(lon=lon, lat=lat, source_way_id=way_id))
+    return out
+
+
 def _feature_row(cid: int, cf: CandidateFeatures) -> tuple:
     f = cf.features
-    fl, wa, fo, so, rd, rm = (
+    fl, wa, fo, so, rd, rm, re = (
         f["flatness"],
         f["water_proximity"],
         f["tree_cover"],
         f["solitude"],
         f["road_character"],
         f["remoteness"],
+        f["road_end"],
     )
     return (
         cid,
@@ -212,6 +240,8 @@ def _feature_row(cid: int, cf: CandidateFeatures) -> tuple:
         0 if rd.available else 1,
         rm.value,
         1 if cf.rough_road else 0,
+        re.value,
+        0 if re.available else 1,
     )
 
 

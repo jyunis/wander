@@ -33,7 +33,7 @@ from cairn.store.types import Bbox, Run
 
 _M_PER_DEG = 111320.0
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 # Forward migrations keyed by from_version. Each entry is a list of statements
@@ -56,6 +56,12 @@ _MIGRATIONS: dict[int, list[str]] = {
         "INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE candidate_features ADD COLUMN road_rough INTEGER NOT NULL DEFAULT 0",
         "INSERT INTO schema_version (version) VALUES (4)",
+    ],
+    4: [
+        "ALTER TABLE candidate_features ADD COLUMN dist_terminus_m REAL",
+        "ALTER TABLE candidate_features ADD COLUMN road_end_unavailable "
+        "INTEGER NOT NULL DEFAULT 0",
+        "INSERT INTO schema_version (version) VALUES (5)",
     ],
 }
 
@@ -354,26 +360,30 @@ class Store:
         )
         return {r[0] for r in await cur.fetchall()}
 
-    async def load_drivable_ways(self, bbox: Bbox) -> list[Way]:
-        """Drivable ways CLIPPED to the bbox, as ordered polylines.
+    async def load_drivable_ways(self, bbox: Bbox, clip: bool = True) -> list[Way]:
+        """Drivable ways intersecting the bbox, as ordered polylines.
 
-        Overpass returns whole way geometries for ways that merely touch the
-        bbox; ST_Intersection clips each to the bbox so candidates never land
-        outside the requested area. A clipped way that splits into disjoint
-        parts becomes several Ways (same osm_id) so sampling never bridges the
-        gap between parts."""
+        `clip=True` (default): clip each way to the bbox (ST_Intersection) so
+        candidates never land outside the requested area; a clipped way that
+        splits into disjoint parts becomes several Ways (same osm_id).
+        `clip=False`: return whole (unclipped) geometry — used for terminus
+        detection, where bbox-edge cuts must not be mistaken for dead-ends."""
         b = bbox.normalized()
+        geom_expr = (
+            "AsGeoJSON(ST_Intersection(geom, BuildMbr(?, ?, ?, ?, 4326)))"
+            if clip
+            else "AsGeoJSON(geom)"
+        )
+        clip_params = (
+            (b.min_lon, b.min_lat, b.max_lon, b.max_lat) if clip else ()
+        )
         cur = await self.db.execute(
-            "SELECT osm_id, AsGeoJSON(ST_Intersection(geom, "
-            "  BuildMbr(?, ?, ?, ?, 4326))) FROM osm_features "
+            f"SELECT osm_id, {geom_expr} FROM osm_features "
             "WHERE feature_class = 'drivable' AND ROWID IN ("
             "  SELECT ROWID FROM SpatialIndex WHERE f_table_name = 'osm_features' "
             "  AND f_geometry_column = 'geom' "
             "  AND search_frame = BuildMbr(?, ?, ?, ?, 4326))",
-            (
-                b.min_lon, b.min_lat, b.max_lon, b.max_lat,
-                b.min_lon, b.min_lat, b.max_lon, b.max_lat,
-            ),
+            (*clip_params, b.min_lon, b.min_lat, b.max_lon, b.max_lat),
         )
         ways: list[Way] = []
         for osm_id, gj in await cur.fetchall():
@@ -483,15 +493,16 @@ class Store:
         """rows: (candidate_id, slope_deg, slope_unavail, dist_water_m,
         water_unavail, dist_forest_m, forest_unavail, dist_solitude_m,
         solitude_unavail, near_campsite, road_score, road_unavail,
-        local_road_m, road_rough)."""
+        local_road_m, road_rough, dist_terminus_m, road_end_unavail)."""
         if not rows:
             return
         await self.db.executemany(
             "INSERT INTO candidate_features (candidate_id, slope_deg, slope_unavailable, "
             "dist_water_m, water_unavailable, dist_forest_m, forest_unavailable, "
             "dist_solitude_m, solitude_unavailable, near_campsite, road_score, "
-            "road_unavailable, local_road_m, road_rough) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "road_unavailable, local_road_m, road_rough, dist_terminus_m, "
+            "road_end_unavailable) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rows,
         )
         await self.db.commit()
@@ -546,7 +557,7 @@ class Store:
             "SELECT c.id, c.lon, c.lat, c.source_way_id, s.total, s.contributions_json, "
             "s.degraded_features_json, f.slope_deg, f.dist_water_m, f.dist_forest_m, "
             "f.dist_solitude_m, f.near_campsite, s.is_distinct, s.distinct_rank, "
-            "f.road_score, f.local_road_m, f.road_rough "
+            "f.road_score, f.local_road_m, f.road_rough, f.dist_terminus_m "
             "FROM candidates c JOIN candidate_scores s ON s.candidate_id = c.id "
             "LEFT JOIN candidate_features f ON f.candidate_id = c.id "
             f"WHERE c.run_id = ? ORDER BY s.total DESC, c.id {limit_clause}",
@@ -575,6 +586,7 @@ class Store:
                         "road_score": row[14],
                         "local_road_m": row[15],
                         "rough": bool(row[16]),
+                        "dist_terminus_m": row[17],
                         "disclaimer": DISCLAIMER,
                     },
                 }
