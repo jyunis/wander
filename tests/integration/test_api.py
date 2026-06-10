@@ -89,6 +89,28 @@ def test_score_sync_then_fetch_and_geojson(client):
     assert props["contributions"] and "total" in props
 
 
+def test_run_roads_geojson(client):
+    # The drivable-ways overlay: a LineString FeatureCollection of the run's
+    # scored roads (OSM ∪ MVUM), carrying the TLC-3 disclaimer.
+    run_id = client.post("/score", json={"bbox": TEST_BBOX}).json()["id"]
+    r = client.get(f"/runs/{run_id}/roads")
+    assert r.status_code == 200
+    gj = r.json()
+    assert gj["type"] == "FeatureCollection"
+    assert "physical suitability only" in gj["disclaimer"].lower()
+    assert len(gj["features"]) > 0
+    geom = gj["features"][0]["geometry"]
+    assert geom["type"] == "LineString" and len(geom["coordinates"]) >= 2
+    props = gj["features"][0]["properties"]
+    assert "forest_road" in props and "rough" in props
+
+
+def test_roads_unknown_run_returns_404(client):
+    r = client.get("/runs/999999/roads")
+    assert r.status_code == 404
+    assert r.json()["error"] == "RunNotFound"
+
+
 def test_runs_list(client):
     client.post("/score", json={"bbox": TEST_BBOX})
     r = client.get("/runs")

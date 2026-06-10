@@ -6,7 +6,8 @@ typed engine errors to HTTP codes, and returns `failed` runs as status+reason
 (not a 500, TLC-10). Every results response carries the TLC-3 disclaimer.
 
 Endpoints: POST /score, GET /runs, GET /runs/{id}, GET /runs/{id}/geojson,
-GET /config, GET /health, and the static UI at / (mounted if web/ exists).
+GET /runs/{id}/roads, GET /config, GET /health, and the static UI at /
+(mounted if web/ exists).
 """
 
 from __future__ import annotations
@@ -170,6 +171,13 @@ async def get_run_geojson(run_id: int, request: Request, top_n: int | None = Non
     store: Store = request.app.state.store
     await store.get_run(run_id)  # 404 if missing
     return await store.get_run_geojson(run_id, top_n=top_n)
+
+
+@app.get("/runs/{run_id}/roads")
+async def get_run_roads(run_id: int, request: Request) -> dict:
+    store: Store = request.app.state.store
+    await store.get_run(run_id)  # 404 if missing
+    return await store.get_run_roads_geojson(run_id)
 
 
 @app.get("/config")
