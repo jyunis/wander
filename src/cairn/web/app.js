@@ -356,7 +356,7 @@ function renderResults(gj) {
       fillColor: scoreColor(norm(p.total)),
       fillOpacity: 0.85,
     });
-    dot.on("click", () => showBreakdown(p));
+    dot.on("click", () => showBreakdown(p, lat, lon));
     candidatesLayer.addLayer(dot);
   });
 
@@ -374,7 +374,7 @@ function renderResults(gj) {
     const marker = L.marker([lat, lon], {
       icon: L.divIcon({ className: "", html: `<div class="rank-pin">${label}</div>`, iconSize: [22, 22] }),
     });
-    marker.on("click", () => showBreakdown(p));
+    marker.on("click", () => showBreakdown(p, lat, lon));
     pinLayer.addLayer(marker);
   });
 
@@ -403,8 +403,14 @@ function toggleLayer(layer, on) {
   else if (!on && map.hasLayer(layer)) map.removeLayer(layer);
 }
 
-function showBreakdown(p) {
+function showBreakdown(p, lat, lon) {
   const body = $("bd-body");
+  const coords = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+  const gmaps = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
+  const coordsHtml =
+    `<div class="bd-coords">📍 <span class="bd-ll">${coords}</span>` +
+    `<a class="bd-gmaps" href="${gmaps}" target="_blank" rel="noopener">` +
+    `Open in Google&nbsp;Maps ↗</a></div>`;
   const rows = (p.contributions || [])
     .map((c) => {
       const pct = Math.round(c.normalized * 100);
@@ -428,6 +434,7 @@ function showBreakdown(p) {
     `forest ${fmt(p.dist_forest_m, " m")} · solitude ${fmt(p.dist_solitude_m, " m")}` +
     (p.near_campsite ? " · near a known campsite" : "");
   body.innerHTML =
+    coordsHtml +
     rows +
     `<div class="bd-total">Total: ${p.total.toFixed(3)} (rank #${p.rank})${rough}</div>` +
     `<div class="bd-raw">${raw}</div>` +

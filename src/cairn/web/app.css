@@ -102,6 +102,14 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .bd-total { margin-top: 10px; font-weight: 600; }
 .rough-badge { font-weight: 600; font-size: 11px; color: #1d2227;
   background: var(--warn); border-radius: 4px; padding: 1px 6px; margin-left: 6px; }
+
+.bd-coords { display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.bd-ll { font-variant-numeric: tabular-nums; font-size: 12.5px; user-select: all; }
+.bd-gmaps { margin-left: auto; font-size: 12.5px; font-weight: 600; text-decoration: none;
+  color: var(--accent-ink); background: var(--accent); border: 1px solid var(--accent);
+  border-radius: 6px; padding: 5px 10px; white-space: nowrap; }
+.bd-gmaps:hover { filter: brightness(1.08); }
 .bd-raw { font-size: 11.5px; color: var(--muted); margin-top: 8px; line-height: 1.7; }
 
 .foot { margin-top: auto; padding: 12px 16px; font-size: 11.5px; color: var(--muted);
