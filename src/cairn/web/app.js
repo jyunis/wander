@@ -2,9 +2,43 @@
 
 // --- state -----------------------------------------------------------------
 let CONFIG = null;
-let map, drawnItems, heatLayer, pinLayer, candidatesLayer, canvasRenderer;
+let map, drawnItems, heatLayer, pinLayer, candidatesLayer, canvasRenderer, baseLayer;
 let bbox = null; // {min_lon,min_lat,max_lon,max_lat}
 let activeRunId = null;
+
+// Keyless basemap sources. Add more here — the selector is data-driven.
+// maxNativeZoom = the source's real max; maxZoom lets Leaflet over-zoom
+// (blurry but navigable) so switching sources never loses the current zoom.
+const BASEMAPS = [
+  {
+    id: "topo",
+    name: "Topographic",
+    url: "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+    options: {
+      maxNativeZoom: 17,
+      maxZoom: 19,
+      attribution:
+        'Map © <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA), ' +
+        "data © OpenStreetMap contributors",
+    },
+  },
+  {
+    id: "satellite",
+    name: "Satellite",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    options: {
+      maxNativeZoom: 19,
+      maxZoom: 19,
+      attribution: "Imagery © Esri — Esri, Maxar, Earthstar Geographics, and the GIS community",
+    },
+  },
+  {
+    id: "streets",
+    name: "Streets",
+    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    options: { maxNativeZoom: 19, maxZoom: 19, attribution: "© OpenStreetMap contributors" },
+  },
+];
 
 const FEATURE_LABELS = {
   flatness: "Flatness",
@@ -42,6 +76,7 @@ async function init() {
   $("disclaimer").textContent = CONFIG.disclaimer;
   buildSliders();
   buildPresets();
+  buildBasemaps();
   setupMap();
   await loadRuns();
 
@@ -100,12 +135,7 @@ function buildPresets() {
 
 function setupMap() {
   map = L.map("map").setView([47.9, -91.86], 11);
-  L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
-    maxZoom: 17,
-    attribution:
-      'Map © <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA), ' +
-      'data © OpenStreetMap contributors',
-  }).addTo(map);
+  setBasemap(BASEMAPS[0].id);
 
   drawnItems = new L.FeatureGroup().addTo(map);
   // Canvas renderer so thousands of candidate dots stay smooth.
@@ -118,6 +148,27 @@ function setupMap() {
     drawnItems.addLayer(e.layer);
     setBboxFromBounds(e.layer.getBounds());
   });
+}
+
+function buildBasemaps() {
+  const sel = $("basemap");
+  sel.innerHTML = "";
+  BASEMAPS.forEach((b) => {
+    const opt = document.createElement("option");
+    opt.value = b.id;
+    opt.textContent = b.name;
+    sel.appendChild(opt);
+  });
+  sel.value = BASEMAPS[0].id;
+  sel.onchange = (e) => setBasemap(e.target.value);
+}
+
+function setBasemap(id) {
+  const def = BASEMAPS.find((b) => b.id === id) || BASEMAPS[0];
+  const next = L.tileLayer(def.url, def.options).addTo(map);
+  if (baseLayer) map.removeLayer(baseLayer);
+  baseLayer = next;
+  baseLayer.bringToBack(); // keep imagery/tiles under the dots and pins
 }
 
 let drawHandler = null;
