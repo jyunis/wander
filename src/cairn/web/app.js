@@ -2,7 +2,7 @@
 
 // --- state -----------------------------------------------------------------
 let CONFIG = null;
-let map, drawnItems, heatLayer, pinLayer, candidatesLayer, canvasRenderer, gotoMarker;
+let map, drawnItems, heatLayer, pinLayer, candidatesLayer, roadsLayer, canvasRenderer, gotoMarker;
 let baseLayers = []; // current basemap tile layer(s): imagery + optional labels
 let bbox = null; // {min_lon,min_lat,max_lon,max_lat}
 let activeRunId = null;
@@ -121,7 +121,7 @@ async function init() {
     if (e.target.value) loadRun(parseInt(e.target.value, 10));
   };
   $("bd-close").onclick = () => $("breakdown").classList.add("hidden");
-  ["layer-pins", "layer-dots", "layer-heat"].forEach((id) => {
+  ["layer-pins", "layer-dots", "layer-heat", "layer-roads"].forEach((id) => {
     $(id).onchange = updateLayerVisibility;
   });
 }
@@ -174,6 +174,9 @@ function setupMap() {
   drawnItems = new L.FeatureGroup().addTo(map);
   // Canvas renderer so thousands of candidate dots stay smooth.
   canvasRenderer = L.canvas({ padding: 0.5 });
+  // roadsLayer holds Cairn's own drivable ways (OSM ∪ MVUM) as vector lines —
+  // off by default. Added before candidates/pins so it renders beneath them.
+  roadsLayer = new L.LayerGroup();
   candidatesLayer = new L.LayerGroup().addTo(map);
   pinLayer = new L.LayerGroup().addTo(map);
 
@@ -343,6 +346,37 @@ async function loadRun(runId) {
   const gj = await (await fetch(`/runs/${runId}/geojson`)).json();
   renderResults(gj);
   renderMeta(gj.run);
+  loadRoads(runId);
+}
+
+// Cairn's own scored road network (OSM ∪ MVUM forest spurs) as vector lines.
+// Far better than the satellite basemap's transportation overlay, which is
+// blank in the forest and drops linework above z18. Best-effort: a roads
+// fetch failure just leaves the overlay empty, never blocks results.
+async function loadRoads(runId) {
+  roadsLayer.clearLayers();
+  let gj;
+  try {
+    gj = await (await fetch(`/runs/${runId}/roads`)).json();
+  } catch {
+    return;
+  }
+  (gj.features || []).forEach((f) => {
+    const p = f.properties || {};
+    const forest = p.forest_road;
+    const line = L.geoJSON(f, {
+      style: {
+        color: forest ? "#ff7a00" : "#ffd23d",
+        weight: forest ? 3 : 2,
+        opacity: 0.9,
+        dashArray: p.rough ? "5 4" : null,
+        lineCap: "round",
+      },
+    });
+    if (p.name) line.bindTooltip(String(p.name), { sticky: true });
+    roadsLayer.addLayer(line);
+  });
+  updateLayerVisibility();
 }
 
 function renderMeta(run) {
@@ -434,6 +468,7 @@ function updateLayerVisibility() {
   toggleLayer(pinLayer, $("layer-pins").checked);
   toggleLayer(candidatesLayer, $("layer-dots").checked);
   toggleLayer(heatLayer, $("layer-heat").checked);
+  toggleLayer(roadsLayer, $("layer-roads").checked);
 }
 
 function toggleLayer(layer, on) {

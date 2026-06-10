@@ -615,6 +615,48 @@ class Store:
             "features": features,
         }
 
+    async def get_run_roads_geojson(self, run_id: int) -> dict:
+        """The run's drivable ways (OSM ∪ MVUM) as a GeoJSON LineString
+        FeatureCollection, clipped to the run bbox — the road data Cairn
+        actually scored. Rendered as a vector overlay so forest spurs show
+        crisply at every zoom and on the satellite basemap, where Esri's
+        transportation reference layer carries no forest roads. Carries the
+        TLC-3 disclaimer; suitability not legality."""
+        from cairn import DISCLAIMER
+        from cairn.engine.features import road_is_rough
+
+        run = await self.get_run(run_id)
+        ways = await self.load_drivable_ways(run.bbox, clip=True)
+        tags_by_id = await self.drivable_way_tags(run.bbox)
+
+        features = []
+        for way in ways:
+            tags = tags_by_id.get(way.osm_id, {})
+            operator = (tags.get("operator") or "").lower()
+            is_forest = "mvum_access" in tags or "forest service" in operator
+            features.append(
+                {
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": [list(c) for c in way.coords],
+                    },
+                    "properties": {
+                        "osm_id": way.osm_id,
+                        "highway": tags.get("highway"),
+                        "name": tags.get("name") or tags.get("ref"),
+                        "forest_road": is_forest,
+                        "rough": road_is_rough(tags),
+                    },
+                }
+            )
+        return {
+            "type": "FeatureCollection",
+            "disclaimer": DISCLAIMER,
+            "run": {"id": run.id, "status": run.status},
+            "features": features,
+        }
+
 
 def _line_parts(geom: dict) -> list[list[tuple[float, float]]]:
     """Ordered (lon, lat) parts from a GeoJSON LineString/MultiLineString/

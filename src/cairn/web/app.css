@@ -88,6 +88,11 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .legend-bar { flex: 1; height: 7px; border-radius: 4px;
               background: linear-gradient(to right,
                 hsl(0,70%,47%), hsl(60,70%,47%), hsl(120,55%,45%)); }
+.roads-legend { gap: 5px; }
+.rd-swatch { width: 16px; height: 0; border-top: 3px solid; border-radius: 2px; }
+.rd-swatch.rd-forest { border-color: #ff7a00; }
+.rd-swatch.rd-other  { border-color: #ffd23d; }
+.roads-legend span:not(.rd-swatch) { margin-right: 8px; }
 
 .status { font-size: 12px; margin-top: 10px; min-height: 16px; }
 .status.err { color: #e8786b; }
