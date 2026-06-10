@@ -105,7 +105,12 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .cg-pin { width: 20px; height: 20px; line-height: 20px; text-align: center; font-size: 13px;
           border-radius: 50%; background: var(--cg, #d96c2c); box-shadow: 0 0 0 2px #fff,
           0 1px 3px rgba(0,0,0,.5); cursor: pointer; }
+.cg-pop { min-width: 130px; }
 .cg-cat { color: #888; font-size: 11px; }
+.cg-link { display: inline-block; margin-top: 7px; padding: 4px 9px; border-radius: 5px;
+           background: #2e7d32; color: #fff !important; font-size: 12px; font-weight: 600;
+           text-decoration: none; }
+.cg-link:hover { background: #256628; }
 .land-hint { font-size: 10.5px; color: var(--muted); margin-top: 6px; min-height: 0; }
 .disclaimer-mini { font-size: 10px; color: var(--muted); opacity: 0.85; margin-top: 6px;
                    line-height: 1.35; }
