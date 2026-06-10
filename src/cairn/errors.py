@@ -76,6 +76,22 @@ class OverpassBadResponse(OverpassError):
         self.status_code = status_code
 
 
+# --- MVUM client (USFS Motor Vehicle Use Map roads) ----------------------
+
+
+class MvumError(CairnError):
+    """Base for USFS MVUM road-source failures. Non-fatal: a run degrades to
+    OSM-only roads when MVUM is unavailable."""
+
+
+class MvumUnreachable(MvumError):
+    """Could not reach the USFS MVUM ArcGIS service."""
+
+
+class MvumBadResponse(MvumError):
+    """MVUM returned a non-2xx or unparseable/error response."""
+
+
 # --- Terrain client (FC-2) -----------------------------------------------
 
 
