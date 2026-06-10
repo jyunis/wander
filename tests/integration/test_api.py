@@ -111,6 +111,59 @@ def test_roads_unknown_run_returns_404(client):
     assert r.json()["error"] == "RunNotFound"
 
 
+class _FakeGeocoder:
+    def __init__(self, results):
+        self._r = results
+        self.last = None
+
+    async def search(self, q, viewbox=None):
+        self.last = (q, viewbox)
+        return self._r
+
+
+def test_geocode_returns_results(client):
+    from cairn.api import app
+
+    fake = _FakeGeocoder(
+        [{"display_name": "Chippewa National Forest", "lat": 47.5, "lon": -94.2,
+          "bbox": [-94.7, 47.0, -93.7, 48.0]}]
+    )
+    app.state.geocoder = fake
+    r = client.get("/geocode?q=chippewa&viewbox=-95,46,-93,48")
+    assert r.status_code == 200
+    res = r.json()["results"]
+    assert res[0]["lat"] == 47.5 and res[0]["bbox"][0] == -94.7
+    assert fake.last == ("chippewa", "-95,46,-93,48")  # query + viewbox forwarded
+
+
+def test_geocode_empty_q_is_422(client):
+    r = client.get("/geocode?q=%20")
+    assert r.status_code == 422
+
+
+def test_geocode_disabled_is_404(client):
+    from cairn.api import app
+
+    app.state.geocoder = None
+    r = client.get("/geocode?q=anything")
+    assert r.status_code == 404
+    assert r.json()["error"] == "GeocodeDisabled"
+
+
+def test_geocode_normalize_reorders_bbox():
+    # Nominatim boundingbox is [south, north, west, east] strings; we expose
+    # [min_lon, min_lat, max_lon, max_lat] and drop entries without coords.
+    from cairn.clients.nominatim import GeocodeClient
+
+    out = GeocodeClient._normalize(
+        {"display_name": "X", "lat": "47.5", "lon": "-94.2",
+         "boundingbox": ["47.0", "48.0", "-94.7", "-93.7"]}
+    )
+    assert out["lat"] == 47.5 and out["lon"] == -94.2
+    assert out["bbox"] == [-94.7, 47.0, -93.7, 48.0]
+    assert GeocodeClient._normalize({"display_name": "no coords"}) is None
+
+
 def test_runs_list(client):
     client.post("/score", json={"bbox": TEST_BBOX})
     r = client.get("/runs")

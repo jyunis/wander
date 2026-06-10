@@ -108,6 +108,22 @@ class StructuresBadResponse(StructuresError):
     """USA Structures returned a non-2xx or unparseable/error response."""
 
 
+# --- Nominatim geocoder (forward place-name lookup) ----------------------
+
+
+class GeocodeError(CairnError):
+    """Base for Nominatim forward-geocoder failures (the place-name lookup
+    behind the jump-to field). Non-fatal to scoring."""
+
+
+class GeocodeUnreachable(GeocodeError):
+    """Could not reach the Nominatim service."""
+
+
+class GeocodeBadResponse(GeocodeError):
+    """Nominatim returned a non-2xx or unparseable response."""
+
+
 # --- Terrain client (FC-2) -----------------------------------------------
 
 
