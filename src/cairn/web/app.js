@@ -161,6 +161,10 @@ async function init() {
   ["layer-pins", "layer-dots", "layer-heat", "layer-roads"].forEach((id) => {
     $(id).onchange = updateLayerVisibility;
   });
+  ["f-firstcome", "f-electric", "f-water", "f-pets", "f-ada", "f-rv"].forEach((id) => {
+    const el = $(id);
+    if (el) el.addEventListener("input", applyCampgroundFilters);
+  });
 }
 
 function buildSliders() {
@@ -593,6 +597,7 @@ function toggleOverlay(layerId, on) {
     map.removeLayer(overlayLayers[layerId]);
     delete overlayLayers[layerId];
   }
+  if (layerId === "campground" && $("cg-filters")) $("cg-filters").hidden = !on;
   if (on) fetchOverlay(layerId);
   renderLandLegend();
   updateLandHint();
@@ -628,12 +633,19 @@ async function fetchOverlay(layerId) {
   if (!overlayActive.has(layerId)) return; // toggled off mid-fetch
   if (gj.truncated) overlayTruncated.add(layerId);
   else overlayTruncated.delete(layerId);
+  renderOverlayLayer(layerId, gj);
+}
+
+let campgroundGj = null; // last fetched campground FeatureCollection (for re-filtering)
+
+function renderOverlayLayer(layerId, gj) {
   if (overlayLayers[layerId]) map.removeLayer(overlayLayers[layerId]);
   const isOwn = layerId === "ownership";
   const isPoint =
     (gj.geom_type || overlayDefs.find((d) => d.id === layerId)?.geom_type) === "point";
   const gjLayer = L.geoJSON(gj, {
     pane: "land",
+    filter: isPoint ? (feat) => matchesCampground(feat.properties) : undefined,
     style: isPoint ? undefined : (feat) => overlayStyle(layerId, feat),
     pointToLayer: isPoint
       ? (feat, latlng) => {
@@ -661,6 +673,54 @@ async function fetchOverlay(layerId) {
     },
   });
   overlayLayers[layerId] = gjLayer.addTo(map);
+  if (layerId === "campground") {
+    campgroundGj = gj;
+    updateCgCount(gj);
+  }
+}
+
+// --- campground filters (Phase 2; client-side over meta) -------------------
+function campgroundFilters() {
+  return {
+    firstcome: $("f-firstcome").checked,
+    electric: $("f-electric").checked,
+    water: $("f-water").checked,
+    pets: $("f-pets").checked,
+    ada: $("f-ada").checked,
+    rv: parseFloat($("f-rv").value) || 0,
+  };
+}
+
+function matchesCampground(props) {
+  if (!$("f-firstcome")) return true; // panel not built yet
+  const f = campgroundFilters();
+  const m = props.meta || {};
+  // First-come = known not-reservable (RIDB) or a state-forest campground
+  // (MN state-forest campgrounds are rustic / first-come, no reservation).
+  if (f.firstcome && !(m.reservable === false || props.category === "State Forest")) return false;
+  if (f.electric && !m.electric) return false;
+  if (f.water && !m.water_front) return false;
+  if (f.pets && !m.pets) return false;
+  if (f.ada && !m.ada) return false;
+  if (f.rv > 0 && !(m.max_rv_ft >= f.rv)) return false;
+  return true;
+}
+
+function applyCampgroundFilters() {
+  if (overlayActive.has("campground") && campgroundGj) {
+    renderOverlayLayer("campground", campgroundGj);
+  }
+}
+
+function updateCgCount(gj) {
+  const el = $("cg-filt-count");
+  if (!el) return;
+  const feats = gj.features || [];
+  const shown = feats.filter((f) => matchesCampground(f.properties)).length;
+  const active = ["f-firstcome", "f-electric", "f-water", "f-pets", "f-ada"].some(
+    (id) => $(id) && $(id).checked
+  ) || ($("f-rv") && $("f-rv").value);
+  el.textContent = active ? `${shown} of ${feats.length} shown` : "";
 }
 
 // A campground's link: the specific reservation/park page when we have a
