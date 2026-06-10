@@ -18,6 +18,8 @@ This module has no clock/random (TLC-1 purity rule applies to its inputs).
 
 from __future__ import annotations
 
+import re
+
 from cairn.clients.terrain import TerrainSampler
 from cairn.engine.types import Candidate, CandidateFeatures, FeatureValue
 from cairn.errors import TerrainError
@@ -27,6 +29,36 @@ from cairn.store import Store
 _SOLITUDE_CLASSES = ("highway", "builtup", "place")
 # Within this many meters of a known campsite -> the enrichment flag.
 _CAMPSITE_NEAR_M = 250.0
+
+# Name/ref/operator patterns that mark a road as a Forest Service road.
+_FOREST_ROAD_RE = re.compile(
+    r"forest\s*(road|rd|service|route)|national\s*forest|\bf\.?\s?r\.?\s*\d|\bfs[rh]?\s*\d",
+    re.IGNORECASE,
+)
+_ROUGH_SMOOTHNESS = {"very_bad", "horrible", "very_horrible", "impassable"}
+
+
+def compute_road_score(tags: dict, cfg: dict) -> float:
+    """Map a source way's OSM tags to a [0,1] 'dispersed-camping-ish' score.
+
+    Pure (TLC-1). Driven by the scoring-config `road_character` block: base
+    score by highway class, a floor for Forest-Service-named roads, and a MILD
+    roughness factor (4WD-capable, decent clearance — ordinary unpaved/gravel
+    forest roads are NOT penalized; only genuinely rough/impassable is).
+    """
+    classes = cfg["class_scores"]
+    base = classes.get(tags.get("highway"), classes["_default"])
+    name = f"{tags.get('name', '')} {tags.get('ref', '')}"
+    operator = tags.get("operator", "").lower()
+    if _FOREST_ROAD_RE.search(name) or "forest service" in operator:
+        base = max(base, cfg.get("forest_named_score", 1.0))
+    rough = cfg.get("rough", {})
+    factor = 1.0
+    if tags.get("4wd_only") == "yes" or tags.get("tracktype") == "grade5":
+        factor *= rough.get("fourwd_factor", 0.9)
+    if tags.get("smoothness") in _ROUGH_SMOOTHNESS:
+        factor *= rough.get("impassable_factor", 0.8)
+    return max(0.0, min(1.0, base * factor))
 
 
 def _search_radii(scoring_config: dict) -> tuple[float, float, float]:
@@ -43,9 +75,20 @@ async def extract_features(
     candidate: Candidate,
     scoring_config: dict,
     present_classes: set[str],
+    road_tags: dict[int, dict],
 ) -> CandidateFeatures:
     lon, lat = candidate.lon, candidate.lat
     water_r, forest_r, solitude_r = _search_radii(scoring_config)
+
+    # road_character <- the candidate's source way tags (always available when
+    # the source road resolved; degraded only if its tags went missing).
+    tags = road_tags.get(candidate.source_way_id)
+    if tags is None:
+        road = FeatureValue(None, False)
+    else:
+        road = FeatureValue(
+            compute_road_score(tags, scoring_config["features"]["road_character"]), True
+        )
 
     # flatness <- slope (tile fetch may fail -> unavailable for this candidate)
     try:
@@ -77,6 +120,7 @@ async def extract_features(
             "water_proximity": water,
             "tree_cover": forest,
             "solitude": solitude,
+            "road_character": road,
         },
         near_campsite=near_campsite,
     )

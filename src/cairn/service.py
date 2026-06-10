@@ -123,13 +123,14 @@ class RunService:
 
             # 6: features.
             present = await self._store.classes_present(b)
+            road_tags = await self._store.drivable_way_tags(b)
             terrain = self._terrain_factory(self._s, zoom=self._s.terrarium_zoom)
             feature_rows: list[tuple] = []
             cfs: list[CandidateFeatures] = []
             try:
                 for cid, cand in id_candidates:
                     cf = await extract_features(
-                        self._store, terrain, cand, params, present
+                        self._store, terrain, cand, params, present, road_tags
                     )
                     cfs.append(cf)
                     feature_rows.append(_feature_row(cid, cf))
@@ -188,11 +189,12 @@ class RunService:
 
 def _feature_row(cid: int, cf: CandidateFeatures) -> tuple:
     f = cf.features
-    fl, wa, fo, so = (
+    fl, wa, fo, so, rd = (
         f["flatness"],
         f["water_proximity"],
         f["tree_cover"],
         f["solitude"],
+        f["road_character"],
     )
     return (
         cid,
@@ -205,6 +207,8 @@ def _feature_row(cid: int, cf: CandidateFeatures) -> tuple:
         so.value,
         0 if so.available else 1,
         1 if cf.near_campsite else 0,
+        rd.value,
+        0 if rd.available else 1,
     )
 
 

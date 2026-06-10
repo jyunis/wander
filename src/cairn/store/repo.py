@@ -33,7 +33,7 @@ from cairn.store.types import Bbox, Run
 
 _M_PER_DEG = 111320.0
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 # Forward migrations keyed by from_version. Each entry is a list of statements
@@ -44,6 +44,11 @@ _MIGRATIONS: dict[int, list[str]] = {
         "ALTER TABLE candidate_scores ADD COLUMN distinct_rank INTEGER",
         "ALTER TABLE runs ADD COLUMN distinct_count INTEGER NOT NULL DEFAULT 0",
         "INSERT INTO schema_version (version) VALUES (2)",
+    ],
+    2: [
+        "ALTER TABLE candidate_features ADD COLUMN road_score REAL",
+        "ALTER TABLE candidate_features ADD COLUMN road_unavailable INTEGER NOT NULL DEFAULT 0",
+        "INSERT INTO schema_version (version) VALUES (3)",
     ],
 }
 
@@ -372,6 +377,26 @@ class Store:
                     ways.append(Way(osm_id=int(osm_id), coords=tuple(part)))
         return ways
 
+    async def drivable_way_tags(self, bbox: Bbox) -> dict[int, dict]:
+        """`{osm_id: tags}` for drivable ways in the bbox — the source-road tags
+        the road_character feature reads (FC-4). Fetched once per run."""
+        b = bbox.normalized()
+        cur = await self.db.execute(
+            "SELECT osm_id, tags_json FROM osm_features "
+            "WHERE feature_class = 'drivable' AND ROWID IN ("
+            "  SELECT ROWID FROM SpatialIndex WHERE f_table_name = 'osm_features' "
+            "  AND f_geometry_column = 'geom' "
+            "  AND search_frame = BuildMbr(?, ?, ?, ?, 4326))",
+            (b.min_lon, b.min_lat, b.max_lon, b.max_lat),
+        )
+        out: dict[int, dict] = {}
+        for osm_id, tags_json in await cur.fetchall():
+            try:
+                out[int(osm_id)] = json.loads(tags_json) if tags_json else {}
+            except (ValueError, TypeError):
+                out[int(osm_id)] = {}
+        return out
+
     # --- candidates / features / scores ------------------------------------
 
     async def insert_candidates(
@@ -426,14 +451,15 @@ class Store:
     async def insert_candidate_features(self, rows: list[tuple]) -> None:
         """rows: (candidate_id, slope_deg, slope_unavail, dist_water_m,
         water_unavail, dist_forest_m, forest_unavail, dist_solitude_m,
-        solitude_unavail, near_campsite)."""
+        solitude_unavail, near_campsite, road_score, road_unavail)."""
         if not rows:
             return
         await self.db.executemany(
             "INSERT INTO candidate_features (candidate_id, slope_deg, slope_unavailable, "
             "dist_water_m, water_unavailable, dist_forest_m, forest_unavailable, "
-            "dist_solitude_m, solitude_unavailable, near_campsite) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "dist_solitude_m, solitude_unavailable, near_campsite, road_score, "
+            "road_unavailable) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rows,
         )
         await self.db.commit()
@@ -487,7 +513,8 @@ class Store:
         cur = await self.db.execute(
             "SELECT c.id, c.lon, c.lat, c.source_way_id, s.total, s.contributions_json, "
             "s.degraded_features_json, f.slope_deg, f.dist_water_m, f.dist_forest_m, "
-            "f.dist_solitude_m, f.near_campsite, s.is_distinct, s.distinct_rank "
+            "f.dist_solitude_m, f.near_campsite, s.is_distinct, s.distinct_rank, "
+            "f.road_score "
             "FROM candidates c JOIN candidate_scores s ON s.candidate_id = c.id "
             "LEFT JOIN candidate_features f ON f.candidate_id = c.id "
             f"WHERE c.run_id = ? ORDER BY s.total DESC, c.id {limit_clause}",
@@ -513,6 +540,7 @@ class Store:
                         "near_campsite": bool(row[11]),
                         "distinct": bool(row[12]),
                         "distinct_rank": row[13],
+                        "road_score": row[14],
                         "disclaimer": DISCLAIMER,
                     },
                 }

@@ -22,34 +22,43 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Default feature weights (sum need not be 1; the scorer renormalizes). Keys
 # are the canonical feature names used throughout the engine. flatness is the
 # highest-signal feature (Architecture § Feature set).
+# Defaults lean toward forest-road dispersed camping: road_character is the
+# dominant signal (ground truth: 18/25 drive-in sites on Forest Roads), with
+# solitude second. flatness/water/trees discriminate little in flat lake
+# country, so they're secondary.
 DEFAULT_WEIGHTS: dict[str, float] = {
-    "flatness": 0.40,
-    "water_proximity": 0.25,
-    "tree_cover": 0.15,
+    "road_character": 0.40,
     "solitude": 0.20,
+    "flatness": 0.15,
+    "water_proximity": 0.15,
+    "tree_cover": 0.10,
 }
 
 # UI weight presets — each just sets slider values (FC-9). Served via
-# GET /config so the client never invents its own.
+# GET /config so the client never invents its own. Every preset names all
+# features so a switch sets every slider deterministically.
 WEIGHT_PRESETS: dict[str, dict[str, float]] = {
-    "balanced": DEFAULT_WEIGHTS,
-    "max_solitude": {
-        "flatness": 0.25,
-        "water_proximity": 0.10,
-        "tree_cover": 0.15,
-        "solitude": 0.50,
+    "dispersed": DEFAULT_WEIGHTS,
+    "deep_woods": {
+        "road_character": 0.45,
+        "solitude": 0.35,
+        "flatness": 0.10,
+        "water_proximity": 0.05,
+        "tree_cover": 0.05,
     },
     "lakeside": {
-        "flatness": 0.30,
-        "water_proximity": 0.45,
-        "tree_cover": 0.10,
-        "solitude": 0.15,
+        "road_character": 0.30,
+        "solitude": 0.10,
+        "flatness": 0.15,
+        "water_proximity": 0.40,
+        "tree_cover": 0.05,
     },
     "flat_and_easy": {
-        "flatness": 0.60,
-        "water_proximity": 0.15,
-        "tree_cover": 0.10,
+        "road_character": 0.25,
         "solitude": 0.15,
+        "flatness": 0.45,
+        "water_proximity": 0.10,
+        "tree_cover": 0.05,
     },
 }
 
