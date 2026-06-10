@@ -245,6 +245,8 @@ function setupMap() {
   map.createPane("land");
   map.getPane("land").style.zIndex = 250;
   map.on("moveend", refreshActiveOverlays);
+  // Keep info windows from opening hidden behind the bottom sheet.
+  map.on("popupopen", (e) => keepPopupClearOfSheet(e.popup));
 
   drawnItems = new L.FeatureGroup().addTo(map);
   // Canvas renderer so thousands of candidate dots stay smooth.
@@ -924,6 +926,28 @@ function closeSite() {
   nearbyCgLayer.clearLayers();
   clearSelectedMarker();
   map.closePopup();
+}
+
+// A popup can open hidden behind the bottom sheet — the sheet floats above the
+// map's z-index, so a marker sitting under it opens its info window out of
+// sight. When an opening popup overlaps the sheet, nudge the map so it clears:
+// past the sheet's right edge on desktop, above it on mobile (full-width sheet).
+function keepPopupClearOfSheet(popup) {
+  const sheet = $("sheet");
+  if (!sheet || sheet.classList.contains("hidden")) return;
+  const el = popup.getElement && popup.getElement();
+  if (!el) return;
+  const p = el.getBoundingClientRect();
+  const s = sheet.getBoundingClientRect();
+  const overlapX = Math.min(p.right, s.right) - Math.max(p.left, s.left);
+  const overlapY = Math.min(p.bottom, s.bottom) - Math.max(p.top, s.top);
+  if (overlapX <= 0 || overlapY <= 0) return; // not hidden by the sheet
+  const margin = 14;
+  if (window.matchMedia("(max-width: 640px)").matches) {
+    map.panBy([0, p.bottom - s.top + margin], { animate: true }); // lift above the sheet
+  } else {
+    map.panBy([-(s.right - p.left + margin), 0], { animate: true }); // shift past its right edge
+  }
 }
 
 // Emoji+label amenity badges from a campground's meta — the shared vocabulary
