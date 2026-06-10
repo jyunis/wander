@@ -2,7 +2,8 @@
 
 // --- state -----------------------------------------------------------------
 let CONFIG = null;
-let map, drawnItems, heatLayer, pinLayer, candidatesLayer, canvasRenderer, baseLayer;
+let map, drawnItems, heatLayer, pinLayer, candidatesLayer, canvasRenderer;
+let baseLayers = []; // current basemap tile layer(s): imagery + optional labels
 let bbox = null; // {min_lon,min_lat,max_lon,max_lat}
 let activeRunId = null;
 
@@ -44,13 +45,19 @@ const BASEMAPS = [
   },
   {
     id: "satellite",
-    name: "Satellite",
+    name: "Satellite (labeled)",
     url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
     options: {
       maxNativeZoom: 19,
       maxZoom: 19,
       attribution: "Imagery © Esri — Esri, Maxar, Earthstar Geographics, and the GIS community",
     },
+    // Transparent reference overlays stacked on the imagery: roads +
+    // place/water labels (the standard Esri imagery hybrid).
+    labels: [
+      "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}",
+      "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+    ],
   },
   {
     id: "streets",
@@ -185,10 +192,16 @@ function buildBasemaps() {
 
 function setBasemap(id) {
   const def = BASEMAPS.find((b) => b.id === id) || BASEMAPS[0];
-  const next = L.tileLayer(def.url, def.options).addTo(map);
-  if (baseLayer) map.removeLayer(baseLayer);
-  baseLayer = next;
-  baseLayer.bringToBack(); // keep imagery/tiles under the dots and pins
+  // Build the new layer set: imagery/base first, then any transparent label
+  // overlays on top of it. All live in Leaflet's tilePane, which sits below
+  // the markers/canvas (dots + pins), so the data stays on top.
+  const next = [L.tileLayer(def.url, def.options)];
+  (def.labels || []).forEach((u) => {
+    next.push(L.tileLayer(u, { maxNativeZoom: 18, maxZoom: 19, attribution: def.options.attribution }));
+  });
+  next.forEach((l) => l.addTo(map)); // add new (on top of old) ...
+  baseLayers.forEach((l) => map.removeLayer(l)); // ... then drop the old set
+  baseLayers = next;
 }
 
 let drawHandler = null;
