@@ -92,6 +92,22 @@ class MvumBadResponse(MvumError):
     """MVUM returned a non-2xx or unparseable/error response."""
 
 
+# --- USA Structures client (national building footprints) ----------------
+
+
+class StructuresError(CairnError):
+    """Base for USA Structures building-source failures. Non-fatal: a run
+    degrades to OSM-only buildings when the service is unavailable."""
+
+
+class StructuresUnreachable(StructuresError):
+    """Could not reach the USA Structures ArcGIS service."""
+
+
+class StructuresBadResponse(StructuresError):
+    """USA Structures returned a non-2xx or unparseable/error response."""
+
+
 # --- Terrain client (FC-2) -----------------------------------------------
 
 

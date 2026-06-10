@@ -27,10 +27,12 @@ from cairn.errors import (
     InvalidBbox,
     InvalidWeights,
     MvumError,
+    StructuresError,
     WallClockExceeded,
 )
 from cairn.ingest.mvum import ingest_mvum
 from cairn.ingest.osm import ingest_osm
+from cairn.ingest.usa_structures import ingest_structures
 from cairn.store import Store
 from cairn.store.types import Bbox, Run
 
@@ -60,12 +62,14 @@ class RunService:
         overpass: OverpassClient,
         terrain_factory=TerrainSampler,
         mvum=None,
+        structures=None,
     ) -> None:
         self._store = store
         self._s = settings
         self._overpass = overpass
         self._terrain_factory = terrain_factory
         self._mvum = mvum  # USFS forest roads; None => OSM-only
+        self._structures = structures  # USA Structures buildings; None => OSM-only
 
     async def score_bbox(self, bbox: Bbox, weights: dict[str, float]) -> Run:
         """Execute UoW-1 synchronously. Returns the finished (done|failed) Run.
@@ -126,6 +130,26 @@ class RunService:
                 except MvumError as exc:
                     log.warning("MVUM unavailable, OSM-only roads: %s", exc)
                     mvum_provenance = {"source": "usfs_mvum", "error": str(exc)}
+
+            # 4c: USA Structures buildings (fills OSM's rural building gaps so
+            # the no-camping-near-houses setback works). Best effort (TLC-10).
+            struct_provenance: dict | None = None
+            if self._structures is not None:
+                try:
+                    st = await self._structures.fetch(b)
+                    st_count = await ingest_structures(
+                        self._store, st.features, chunk_size=self._s.ingest_chunk_size
+                    )
+                    struct_provenance = {
+                        "source": "usa_structures",
+                        "cache_key": st.cache_key,
+                        "fetched_at": st.fetched_at,
+                        "from_cache": st.from_cache,
+                        "building_count": st_count,
+                    }
+                except StructuresError as exc:
+                    log.warning("USA Structures unavailable, OSM-only buildings: %s", exc)
+                    struct_provenance = {"source": "usa_structures", "error": str(exc)}
             check_clock("ingest")
 
             # 5: candidates (uniform sampling + injected dead-end termini).
@@ -197,6 +221,7 @@ class RunService:
                     "class_counts": counts,
                 },
                 "mvum": mvum_provenance,
+                "structures": struct_provenance,
                 "elevation": {
                     "source": "terrarium",
                     "covering": tile_covering(b, self._s.terrarium_zoom),
