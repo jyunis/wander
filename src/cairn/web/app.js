@@ -940,7 +940,64 @@ function showSite(p, lat, lon, presetName) {
     };
   }
   wireSiteName(body.querySelector("#site-name"), lat, lon, presetName);
+  body.querySelectorAll(".bd-rating .rstar").forEach((el, i) => {
+    el.onclick = () => setRating(lat, lon, i + 1);
+  });
   loadNearbyCampgrounds(lat, lon, body);
+}
+
+// A 1-5 star rating for the open site. Stars reflect the saved record's rating
+// (0 if unsaved). Rating a site saves it first (rating implies you want it kept);
+// clicking the current rating again clears it.
+function ratingRowHtml(lat, lon) {
+  const id = savedByKey.get(savedKey("site", lat, lon));
+  const cur = id != null ? Math.round(savedPlaces.find((s) => s.id === id)?.rating || 0) : 0;
+  const stars = [1, 2, 3, 4, 5]
+    .map((n) => `<span class="rstar${n <= cur ? " on" : ""}" data-n="${n}">★</span>`)
+    .join("");
+  return `<div class="bd-rating" title="Rate this site">${stars}</div>`;
+}
+
+function paintRating(r) {
+  const n = Math.round(r || 0);
+  document
+    .querySelectorAll(".bd-rating .rstar")
+    .forEach((el, i) => el.classList.toggle("on", i < n));
+}
+
+async function setRating(lat, lon, n) {
+  const id = await ensureSavedFromSheet(); // rating a site keeps it
+  if (id == null) return;
+  const s = savedPlaces.find((x) => x.id === id);
+  const next = s && Math.round(s.rating || 0) === n ? null : n; // click current => clear
+  const r = await fetch(`/saved/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rating: next }),
+  });
+  if (!r.ok) return;
+  const updated = await r.json();
+  const i = savedPlaces.findIndex((x) => x.id === id);
+  if (i >= 0) savedPlaces[i] = updated;
+  paintRating(updated.rating);
+  renderSavedList();
+}
+
+// Ensure the open site is saved (saving it if needed via the sheet's ★ data),
+// returning its saved id. Reuses toggleFav's save path (name dedupe, ★ flip).
+async function ensureSavedFromSheet() {
+  const btn = document.querySelector(".bd-namebar .star");
+  if (!btn) return null;
+  let fav;
+  try {
+    fav = JSON.parse(btn.dataset.fav);
+  } catch {
+    return null;
+  }
+  if (!isSaved(fav.kind, fav.lat, fav.lon)) {
+    await toggleFav(fav, btn); // saves it
+  }
+  return savedByKey.get(savedKey(fav.kind, fav.lat, fav.lon)) ?? null;
 }
 
 // Editable site name: a saved place keeps its stored name; a fresh site is
@@ -1117,10 +1174,13 @@ function renderSavedList() {
       const score = scored
         ? ` · <span class="saved-score">score ${s.payload.total.toFixed(2)}</span>`
         : "";
+      const stars = s.rating
+        ? ` · <span class="saved-stars">${"★".repeat(Math.round(s.rating))}</span>`
+        : "";
       return (
         `<div class="saved-row" data-i="${i}"><div class="saved-main">` +
         `<div class="saved-name">${icon} ${esc(label)}</div>` +
-        `<div class="saved-coords">${coords}${score}</div></div>` +
+        `<div class="saved-coords">${coords}${score}${stars}</div></div>` +
         `<button class="saved-del" title="Remove">×</button></div>`
       );
     })
@@ -1225,14 +1285,15 @@ function breakdownHtml(p, lat, lon, { expanded = false } = {}) {
     `<input id="site-name" class="bd-name" placeholder="${
       hasScore ? "Name this site…" : "Name this location…"
     }" autocomplete="off" /></div>`;
+  const ratingRow = ratingRowHtml(lat, lon);
   const coordsHtml =
     `<div class="bd-coords">📍 <span class="bd-ll">${coords}</span>` +
     `<a class="bd-gmaps" href="${gmaps}" target="_blank" rel="noopener">` +
     `Open in Google&nbsp;Maps ↗</a></div>`;
-  // A dropped pin has no score — just name it, see nearby campgrounds, save it.
+  // A dropped pin has no score — just name it, rate it, see nearby, save it.
   if (!hasScore) {
     return (
-      nameBar + coordsHtml +
+      nameBar + ratingRow + coordsHtml +
       `<div class="bd-nearby"></div>` +
       `<div class="bd-raw bd-disc">${CONFIG.disclaimer}</div>`
     );
@@ -1261,6 +1322,7 @@ function breakdownHtml(p, lat, lon, { expanded = false } = {}) {
     (p.near_campsite ? " · near a known campsite" : "");
   return (
     nameBar +
+    ratingRow +
     coordsHtml +
     `<div class="bd-total">Total: ${p.total.toFixed(3)} (rank #${p.rank})${rough}</div>` +
     `<div class="bd-nearby"></div>` +

@@ -35,6 +35,7 @@ from cairn.service import RunService
 from cairn.store import Store
 from cairn.store.overlays import DISCLAIMER as OVERLAY_DISCLAIMER
 from cairn.store.overlays import OverlayStore
+from cairn.store.repo import UNSET
 from cairn.store.types import Bbox
 
 log = logging.getLogger("cairn.api")
@@ -111,10 +112,14 @@ class SavedRequest(BaseModel):
     lon: float
     payload: dict | None = None
     note: str | None = None
+    rating: float | None = Field(default=None, description="quality rating, 0-5 stars")
 
 
-class SavedNameRequest(BaseModel):
+class SavedUpdateRequest(BaseModel):
+    # Partial update: a field left unset is not written (model_fields_set tracks
+    # which were sent), so renaming doesn't clear the rating and vice versa.
     name: str | None = None
+    rating: float | None = Field(default=None, description="quality rating, 0-5 stars")
 
 
 # --- error handling --------------------------------------------------------
@@ -233,12 +238,20 @@ async def list_saved(request: Request) -> dict:
     return {"saved": await store.list_saved()}
 
 
+def _check_rating(rating: float | None) -> None:
+    if rating is not None and not (0 <= rating <= 5):
+        raise ValidationError("rating must be between 0 and 5")
+
+
 @app.post("/saved")
 async def add_saved(req: SavedRequest, request: Request) -> JSONResponse:
     store: Store = request.app.state.store
     if req.kind not in ("site", "campground"):
         raise ValidationError("kind must be 'site' or 'campground'")
-    row = await store.add_saved(req.kind, req.name, req.lat, req.lon, req.payload, req.note)
+    _check_rating(req.rating)
+    row = await store.add_saved(
+        req.kind, req.name, req.lat, req.lon, req.payload, req.note, req.rating
+    )
     return JSONResponse(status_code=201, content=row)
 
 
@@ -249,9 +262,16 @@ async def delete_saved(saved_id: int, request: Request) -> dict:
 
 
 @app.patch("/saved/{saved_id}")
-async def update_saved(saved_id: int, req: SavedNameRequest, request: Request) -> JSONResponse:
+async def update_saved(saved_id: int, req: SavedUpdateRequest, request: Request) -> JSONResponse:
     store: Store = request.app.state.store
-    row = await store.update_saved(saved_id, req.name)
+    _check_rating(req.rating)
+    # Only write fields the client actually sent (partial update).
+    sent = req.model_fields_set
+    row = await store.update_saved(
+        saved_id,
+        name=req.name if "name" in sent else UNSET,
+        rating=req.rating if "rating" in sent else UNSET,
+    )
     if row is None:
         return JSONResponse(status_code=404, content={"error": "NotFound"})
     return JSONResponse(status_code=200, content=row)

@@ -197,6 +197,27 @@ def test_saved_patch_renames(client):
     assert client.patch("/saved/999999", json={"name": "x"}).status_code == 404
 
 
+def test_saved_rating_and_partial_update(client):
+    # Save with a star rating.
+    r = client.post(
+        "/saved", json={"kind": "site", "name": "Glove Lake", "lat": 47.79, "lon": -94.1, "rating": 4}
+    )
+    assert r.status_code == 201 and r.json()["rating"] == 4
+    sid = r.json()["id"]
+    # PATCH rating only — name is preserved (partial update doesn't clobber).
+    r = client.patch(f"/saved/{sid}", json={"rating": 5})
+    assert r.status_code == 200 and r.json()["rating"] == 5 and r.json()["name"] == "Glove Lake"
+    # PATCH name only — rating is preserved.
+    r = client.patch(f"/saved/{sid}", json={"name": "Glove"})
+    assert r.json()["name"] == "Glove" and r.json()["rating"] == 5
+    # Clearing the rating explicitly is allowed.
+    assert client.patch(f"/saved/{sid}", json={"rating": None}).json()["rating"] is None
+    # Out-of-range rating -> 422.
+    assert client.post(
+        "/saved", json={"kind": "site", "lat": 1.0, "lon": 2.0, "rating": 9}
+    ).status_code == 422
+
+
 def test_suggest_name_uses_reverse_when_no_local_feature(client):
     # No scored run -> no osm_features near the point -> reverse-geocode fallback.
     from cairn.api import app

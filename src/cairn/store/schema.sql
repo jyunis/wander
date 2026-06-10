@@ -127,5 +127,6 @@ CREATE TABLE IF NOT EXISTS saved_places (
     lon          REAL NOT NULL,
     payload_json TEXT,                     -- score breakdown (site) / campground meta
     note         TEXT,
-    created_at   TEXT NOT NULL
+    created_at   TEXT NOT NULL,
+    rating       REAL                      -- user quality rating, 0-5 stars (nullable)
 );
