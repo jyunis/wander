@@ -166,3 +166,26 @@ class OverlayStore:
             "features": features,
             "disclaimer": DISCLAIMER,
         }
+
+    async def nearest_campground(
+        self, lat: float, lon: float, max_km: float = 40.0
+    ) -> dict | None:
+        """The nearest campground point to (lat, lon) within `max_km`, as
+        `{name, category, url, distance_m}`, or None. Display-only (TLC-3): used
+        to annotate a scored dispersed site with a 'book a spot' fallback —
+        NEVER read by scoring."""
+        if self._db is None:
+            return None
+        rdeg = max_km / 111.0  # ~deg of latitude; generous R*Tree search frame
+        cur = await self._db.execute(
+            "SELECT name, category, url, ST_Distance(MakePoint(?, ?, 4326), geom, 1) AS d "
+            "FROM overlay_points WHERE layer='campground' AND ROWID IN ("
+            "  SELECT ROWID FROM SpatialIndex WHERE f_table_name='overlay_points' "
+            "  AND f_geometry_column='geom' AND search_frame=BuildCircleMbr(?, ?, ?, 4326)) "
+            "ORDER BY d LIMIT 1",
+            (lon, lat, lon, lat, rdeg),
+        )
+        row = await cur.fetchone()
+        if row is None or row[3] is None:
+            return None
+        return {"name": row[0], "category": row[1], "url": row[2], "distance_m": float(row[3])}
