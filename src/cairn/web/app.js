@@ -67,6 +67,31 @@ const BASEMAPS = [
   },
 ];
 
+// --- land overlays (display-only reference layers; TLC-3) ------------------
+// Ownership categories colour-coded; Tax Forfeit is the highlight (often
+// open to dispersed use, the layer onX charges for). Boundaries draw as
+// outlines. All off by default, fetched per current map view.
+const OWNERSHIP_COLORS = {
+  "Tax Forfeit": "#ff7a00",
+  State: "#2e8b57",
+  Federal: "#3a6ea5",
+  "County Fee": "#8a5fb0",
+  Tribal: "#0f9b8e",
+};
+const OWNERSHIP_FALLBACK = "#8a8a8a";
+const BOUNDARY_COLORS = {
+  national_forest: "#1f7a1f",
+  state_forest: "#6b8e23",
+  state_park: "#b5651d",
+};
+// Below this zoom, ownership parcels are too numerous/tiny to fetch usefully.
+const OWNERSHIP_MIN_ZOOM = 11;
+
+let overlayDefs = []; // from GET /overlays
+const overlayLayers = {}; // id -> L.GeoJSON
+const overlayActive = new Set();
+const overlayTruncated = new Set(); // layers whose last fetch hit the cap
+
 const FEATURE_LABELS = {
   road_end: "Road end",
   road_character: "Forest road",
@@ -109,6 +134,7 @@ async function init() {
   buildBasemaps();
   setupMap();
   await loadRuns();
+  await initLandOverlays();
 
   $("draw-bbox").onclick = startDraw;
   $("use-view").onclick = useCurrentView;
@@ -170,6 +196,10 @@ function buildPresets() {
 function setupMap() {
   map = L.map("map").setView([47.9, -91.86], 11);
   setBasemap(BASEMAPS[0].id);
+  // Land overlays sit above the basemap but below roads/dots/pins.
+  map.createPane("land");
+  map.getPane("land").style.zIndex = 250;
+  map.on("moveend", refreshActiveOverlays);
 
   drawnItems = new L.FeatureGroup().addTo(map);
   // Canvas renderer so thousands of candidate dots stay smooth.
@@ -475,6 +505,124 @@ function toggleLayer(layer, on) {
   if (!layer) return;
   if (on && !map.hasLayer(layer)) map.addLayer(layer);
   else if (!on && map.hasLayer(layer)) map.removeLayer(layer);
+}
+
+// --- land overlays ---------------------------------------------------------
+async function initLandOverlays() {
+  let data;
+  try {
+    data = await (await fetch("/overlays")).json();
+  } catch {
+    return; // overlays unavailable — leave the Land section hidden
+  }
+  overlayDefs = data.layers || [];
+  if (!overlayDefs.length) return;
+  $("land-disclaimer").textContent = data.disclaimer || "";
+  buildLandToggles();
+  $("land-section").hidden = false;
+}
+
+function buildLandToggles() {
+  const host = $("land-layers");
+  host.innerHTML = "";
+  overlayDefs.forEach((def) => {
+    const id = "ov-" + def.id;
+    const label = document.createElement("label");
+    label.innerHTML = `<input type="checkbox" id="${id}"> ${def.title}`;
+    host.appendChild(label);
+    label.querySelector("input").onchange = (e) => toggleOverlay(def.id, e.target.checked);
+  });
+}
+
+function toggleOverlay(layerId, on) {
+  if (on) overlayActive.add(layerId);
+  else overlayActive.delete(layerId);
+  if (!on && overlayLayers[layerId]) {
+    map.removeLayer(overlayLayers[layerId]);
+    delete overlayLayers[layerId];
+  }
+  if (on) fetchOverlay(layerId);
+  renderLandLegend();
+  updateLandHint();
+}
+
+let _overlayTimer = null;
+function refreshActiveOverlays() {
+  if (!overlayActive.size) return;
+  clearTimeout(_overlayTimer);
+  _overlayTimer = setTimeout(() => {
+    overlayActive.forEach((id) => fetchOverlay(id));
+    updateLandHint();
+  }, 300);
+}
+
+async function fetchOverlay(layerId) {
+  // Ownership parcels are too dense to fetch when zoomed out.
+  if (layerId === "ownership" && map.getZoom() < OWNERSHIP_MIN_ZOOM) {
+    if (overlayLayers[layerId]) {
+      map.removeLayer(overlayLayers[layerId]);
+      delete overlayLayers[layerId];
+    }
+    return;
+  }
+  const b = map.getBounds();
+  const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].join(",");
+  let gj;
+  try {
+    gj = await (await fetch(`/overlays/${layerId}?bbox=${bbox}`)).json();
+  } catch {
+    return;
+  }
+  if (!overlayActive.has(layerId)) return; // toggled off mid-fetch
+  if (gj.truncated) overlayTruncated.add(layerId);
+  else overlayTruncated.delete(layerId);
+  if (overlayLayers[layerId]) map.removeLayer(overlayLayers[layerId]);
+  const isOwn = layerId === "ownership";
+  const gjLayer = L.geoJSON(gj, {
+    pane: "land",
+    style: (feat) => overlayStyle(layerId, feat),
+    onEachFeature: (feat, lyr) => {
+      const p = feat.properties || {};
+      const tip = isOwn
+        ? `${p.category || "—"}${p.name ? " · " + p.name + " Co." : ""}`
+        : p.name || overlayDefs.find((d) => d.id === layerId)?.title || layerId;
+      if (tip) lyr.bindTooltip(tip, { sticky: true });
+    },
+  });
+  overlayLayers[layerId] = gjLayer.addTo(map);
+}
+
+function overlayStyle(layerId, feat) {
+  if (layerId === "ownership") {
+    const c = OWNERSHIP_COLORS[(feat.properties || {}).category] || OWNERSHIP_FALLBACK;
+    return { color: c, weight: 1, fillColor: c, fillOpacity: 0.35 };
+  }
+  const c = BOUNDARY_COLORS[layerId] || "#555";
+  return { color: c, weight: 2, fillColor: c, fillOpacity: 0.08 };
+}
+
+function renderLandLegend() {
+  const host = $("land-legend");
+  host.innerHTML = "";
+  if (overlayActive.has("ownership")) {
+    Object.entries(OWNERSHIP_COLORS).forEach(([cat, c]) => {
+      const row = document.createElement("span");
+      row.className = "land-key";
+      row.innerHTML = `<span class="land-swatch" style="background:${c}"></span>${cat}`;
+      host.appendChild(row);
+    });
+  }
+}
+
+function updateLandHint() {
+  const hint = $("land-hint");
+  if (overlayActive.has("ownership") && map.getZoom() < OWNERSHIP_MIN_ZOOM) {
+    hint.textContent = "Zoom in to load ownership parcels.";
+  } else if (overlayTruncated.size) {
+    hint.textContent = "Showing a capped subset — zoom in for full detail.";
+  } else {
+    hint.textContent = "";
+  }
 }
 
 function showBreakdown(p, lat, lon) {

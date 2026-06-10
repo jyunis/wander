@@ -94,6 +94,11 @@ class Settings(BaseSettings):
     db_path: Path | None = None
     tile_cache_dir: Path | None = None
     osm_cache_dir: Path | None = None
+    # Static land-overlay DB (display-only ownership + boundaries — TLC-3),
+    # produced by scripts/load_overlays.py. Separate from cairn.db, fully
+    # re-derivable; the app runs fine if it's absent (no Land layers offered).
+    overlays_db_path: Path | None = None
+    overlay_max_features: int = 4000  # per /overlays/{layer} response cap
 
     # --- External services (public, no key — TLC-12) -----------------------
     overpass_url: str = "https://overpass-api.de/api/interpreter"
@@ -171,6 +176,8 @@ class Settings(BaseSettings):
             self.tile_cache_dir = self.data_dir / "tiles"
         if self.osm_cache_dir is None:
             self.osm_cache_dir = self.data_dir / "osm-cache"
+        if self.overlays_db_path is None:
+            self.overlays_db_path = self.data_dir / "overlays.db"
         return self
 
     def ui_config(self) -> dict:
