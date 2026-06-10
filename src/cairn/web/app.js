@@ -853,8 +853,32 @@ function showBreakdown(p, lat, lon) {
     rows +
     `<div class="bd-total">Total: ${p.total.toFixed(3)} (rank #${p.rank})${rough}</div>` +
     `<div class="bd-raw">${raw}</div>` +
+    `<div id="bd-nearby" class="bd-nearby"></div>` +
     `<div class="bd-raw">${CONFIG.disclaimer}</div>`;
   $("breakdown").classList.remove("hidden");
+  fetchNearbyCampground(lat, lon);
+}
+
+// Display-only "book a spot" fallback: the nearest established campground to a
+// scored dispersed site. Fetched lazily when the breakdown opens (keeps the run
+// geojson lean); never part of scoring (TLC-3).
+async function fetchNearbyCampground(lat, lon) {
+  const el = $("bd-nearby");
+  if (!el) return;
+  let cg;
+  try {
+    cg = (await (await fetch(`/nearby-campground?lat=${lat}&lon=${lon}`)).json()).campground;
+  } catch {
+    return;
+  }
+  if (!el.isConnected || !cg) return;
+  const mi = (cg.distance_m / 1609.34).toFixed(1);
+  const link = cg.url
+    ? ` <a href="${esc(cg.url)}" target="_blank" rel="noopener">↗</a>`
+    : "";
+  el.innerHTML =
+    `🏕 Nearest campground: <b>${esc(cg.name)}</b> · ${mi} mi · ` +
+    `${esc(cg.category)}${link}`;
 }
 
 function fmt(v, unit) {

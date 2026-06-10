@@ -55,6 +55,19 @@ def test_scoring_module_exists_and_is_linted():
     assert (ENGINE_DIR / "scoring.py").is_file()
 
 
+def test_engine_never_references_overlay_data_tlc3():
+    # TLC-3: the scoring engine must not read the display-only overlay /
+    # campground data (ownership, boundaries, campgrounds). Those are context,
+    # never a scoring input — enforced here so a future change can't quietly
+    # wire campground proximity (Phase 3) or ownership into scoring.
+    forbidden = re.compile(r"store\.overlays|OverlayStore|overlay_points|nearest_campground")
+    for path in ENGINE_DIR.glob("*.py"):
+        source = _strip_comments(path.read_text(encoding="utf-8"))
+        assert forbidden.search(source) is None, (
+            f"{path.name} references display-only overlay data (TLC-3 violation)"
+        )
+
+
 def test_no_nondeterminism_primitives_in_engine_sources():
     checked_any = False
     for name in MODULES:
