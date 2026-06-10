@@ -167,25 +167,38 @@ class OverlayStore:
             "disclaimer": DISCLAIMER,
         }
 
-    async def nearest_campground(
-        self, lat: float, lon: float, max_km: float = 40.0
-    ) -> dict | None:
-        """The nearest campground point to (lat, lon) within `max_km`, as
-        `{name, category, url, distance_m}`, or None. Display-only (TLC-3): used
-        to annotate a scored dispersed site with a 'book a spot' fallback —
-        NEVER read by scoring."""
+    async def nearest_campgrounds(
+        self, lat: float, lon: float, limit: int = 5, max_km: float = 80.0
+    ) -> list[dict]:
+        """The `limit` nearest campground points to (lat, lon) within `max_km`,
+        nearest first, each `{name, category, url, meta, lon, lat, distance_m}`.
+        Display-only (TLC-3): annotates a scored dispersed site with 'book a
+        spot' fallbacks — NEVER read by scoring."""
         if self._db is None:
-            return None
+            return []
         rdeg = max_km / 111.0  # ~deg of latitude; generous R*Tree search frame
         cur = await self._db.execute(
-            "SELECT name, category, url, ST_Distance(MakePoint(?, ?, 4326), geom, 1) AS d "
+            "SELECT name, category, url, meta, X(geom), Y(geom), "
+            "  ST_Distance(MakePoint(?, ?, 4326), geom, 1) AS d "
             "FROM overlay_points WHERE layer='campground' AND ROWID IN ("
             "  SELECT ROWID FROM SpatialIndex WHERE f_table_name='overlay_points' "
             "  AND f_geometry_column='geom' AND search_frame=BuildCircleMbr(?, ?, ?, 4326)) "
-            "ORDER BY d LIMIT 1",
-            (lon, lat, lon, lat, rdeg),
+            "ORDER BY d LIMIT ?",
+            (lon, lat, lon, lat, rdeg, limit),
         )
-        row = await cur.fetchone()
-        if row is None or row[3] is None:
-            return None
-        return {"name": row[0], "category": row[1], "url": row[2], "distance_m": float(row[3])}
+        out = []
+        for name, category, url, meta, lon_, lat_, d in await cur.fetchall():
+            if d is None:
+                continue
+            out.append(
+                {
+                    "name": name,
+                    "category": category,
+                    "url": url,
+                    "meta": json.loads(meta) if meta else None,
+                    "lon": lon_,
+                    "lat": lat_,
+                    "distance_m": float(d),
+                }
+            )
+        return out

@@ -7,7 +7,7 @@ typed engine errors to HTTP codes, and returns `failed` runs as status+reason
 
 Endpoints: POST /score, GET /runs, GET /runs/{id}, GET /runs/{id}/geojson,
 GET /runs/{id}/roads, GET /overlays, GET /overlays/{layer},
-GET /nearby-campground, GET /geocode, GET /config, GET /health, and the static
+GET /nearby-campgrounds, GET /geocode, GET /config, GET /health, and the static
 UI at / (mounted if web/ exists).
 """
 
@@ -212,12 +212,15 @@ async def get_overlay(layer: str, request: Request, bbox: str) -> dict:
     return await overlays.query(layer, Bbox(*parts))
 
 
-@app.get("/nearby-campground")
-async def nearby_campground(request: Request, lat: float, lon: float) -> dict:
-    """Nearest established campground to a point (display-only — TLC-3). Annotates
-    a scored dispersed site with a 'book a spot' fallback; never feeds scoring."""
+@app.get("/nearby-campgrounds")
+async def nearby_campgrounds(
+    request: Request, lat: float, lon: float, limit: int = 5
+) -> dict:
+    """The nearest established campgrounds to a point (display-only — TLC-3).
+    Annotates a scored dispersed site with 'book a spot' fallbacks; never feeds
+    scoring."""
     overlays: OverlayStore = request.app.state.overlays
-    return {"campground": await overlays.nearest_campground(lat, lon)}
+    return {"campgrounds": await overlays.nearest_campgrounds(lat, lon, limit=limit)}
 
 
 @app.get("/geocode")
