@@ -69,6 +69,30 @@ class GeocodeClient:
             self._cache.popitem(last=False)
         return results
 
+    async def reverse(self, lat: float, lon: float) -> str | None:
+        """Reverse-geocode to a concise place name (the smallest meaningful
+        locality), or None. The weak-in-the-backcountry fallback for site
+        naming — used only when our own OSM extract has nothing nearby."""
+        url = self._s.geocode_url.rsplit("/", 1)[0] + "/reverse"
+        params = {"lat": str(lat), "lon": str(lon), "format": "jsonv2", "zoom": "14"}
+        try:
+            resp = await self._http.get(url, params=params, timeout=15.0)
+        except httpx.HTTPError as exc:
+            raise GeocodeUnreachable(f"nominatim reverse unreachable: {exc}") from exc
+        if resp.status_code != 200:
+            raise GeocodeBadResponse(f"nominatim reverse returned {resp.status_code}")
+        try:
+            d = resp.json()
+        except ValueError as exc:
+            raise GeocodeBadResponse(f"nominatim reverse non-JSON: {exc}") from exc
+        addr = d.get("address") or {}
+        for k in ("hamlet", "village", "town", "city", "locality", "suburb",
+                  "municipality", "county"):
+            if addr.get(k):
+                return str(addr[k])
+        dn = d.get("display_name") or ""
+        return dn.split(",")[0].strip() or None
+
     @staticmethod
     def _normalize(r: dict) -> dict | None:
         try:

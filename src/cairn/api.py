@@ -7,9 +7,9 @@ typed engine errors to HTTP codes, and returns `failed` runs as status+reason
 
 Endpoints: POST /score, GET /runs, GET /runs/{id}, GET /runs/{id}/geojson,
 GET /runs/{id}/roads, GET /overlays, GET /overlays/{layer},
-GET /nearby-campgrounds, GET /saved, POST /saved, DELETE /saved/{id},
-GET /geocode, GET /config, GET /health, and the static UI at / (mounted if
-web/ exists).
+GET /nearby-campgrounds, GET /saved, POST /saved, PATCH/DELETE /saved/{id},
+GET /suggest-name, GET /geocode, GET /config, GET /health, and the static UI
+at / (mounted if web/ exists).
 """
 
 from __future__ import annotations
@@ -111,6 +111,10 @@ class SavedRequest(BaseModel):
     lon: float
     payload: dict | None = None
     note: str | None = None
+
+
+class SavedNameRequest(BaseModel):
+    name: str | None = None
 
 
 # --- error handling --------------------------------------------------------
@@ -242,6 +246,31 @@ async def add_saved(req: SavedRequest, request: Request) -> JSONResponse:
 async def delete_saved(saved_id: int, request: Request) -> dict:
     store: Store = request.app.state.store
     return {"deleted": await store.delete_saved(saved_id)}
+
+
+@app.patch("/saved/{saved_id}")
+async def update_saved(saved_id: int, req: SavedNameRequest, request: Request) -> JSONResponse:
+    store: Store = request.app.state.store
+    row = await store.update_saved(saved_id, req.name)
+    if row is None:
+        return JSONResponse(status_code=404, content={"error": "NotFound"})
+    return JSONResponse(status_code=200, content=row)
+
+
+@app.get("/suggest-name")
+async def suggest_name(request: Request, lat: float, lon: float) -> dict:
+    """A friendly default name for a scored site — nearest named lake / source
+    road from our own OSM extract, else a Nominatim reverse-geocode fallback."""
+    store: Store = request.app.state.store
+    name = await store.suggest_site_name(lat, lon)
+    if not name:
+        geocoder: GeocodeClient | None = request.app.state.geocoder
+        if geocoder is not None:
+            try:
+                name = await geocoder.reverse(lat, lon)
+            except GeocodeError:
+                name = None
+    return {"name": name}
 
 
 @app.get("/nearby-campgrounds")

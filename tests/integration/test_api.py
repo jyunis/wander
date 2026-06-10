@@ -187,6 +187,32 @@ def test_saved_bad_kind_is_422(client):
     assert r.status_code == 422
 
 
+def test_saved_patch_renames(client):
+    sid = client.post(
+        "/saved", json={"kind": "site", "name": "old", "lat": 1.0, "lon": 2.0}
+    ).json()["id"]
+    r = client.patch(f"/saved/{sid}", json={"name": "Pine flat"})
+    assert r.status_code == 200 and r.json()["name"] == "Pine flat"
+    assert any(s["name"] == "Pine flat" for s in client.get("/saved").json()["saved"])
+    assert client.patch("/saved/999999", json={"name": "x"}).status_code == 404
+
+
+def test_suggest_name_uses_reverse_when_no_local_feature(client):
+    # No scored run -> no osm_features near the point -> reverse-geocode fallback.
+    from cairn.api import app
+
+    class _RG:
+        async def search(self, *a, **k):
+            return []
+
+        async def reverse(self, lat, lon):
+            return "Side Lake"
+
+    app.state.geocoder = _RG()
+    r = client.get("/suggest-name?lat=47.5&lon=-94.1")
+    assert r.status_code == 200 and r.json()["name"] == "Side Lake"
+
+
 def test_runs_list(client):
     client.post("/score", json={"bbox": TEST_BBOX})
     r = client.get("/runs")

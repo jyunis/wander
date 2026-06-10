@@ -378,6 +378,55 @@ class Store:
         await self.db.commit()
         return cur.rowcount > 0
 
+    async def update_saved(self, saved_id: int, name: str | None) -> dict | None:
+        await self.db.execute(
+            "UPDATE saved_places SET name=? WHERE id=?", (name, saved_id)
+        )
+        await self.db.commit()
+        row = await (await self.db.execute(
+            f"SELECT {self._SAVED_COLS} FROM saved_places WHERE id=?", (saved_id,)
+        )).fetchone()
+        return self._saved_row(row) if row else None
+
+    # --- Site name suggestion (from our own OSM extract — TLC-3, display) ----
+
+    async def _nearest_named(
+        self, lat: float, lon: float, feature_class: str, max_m: float
+    ) -> str | None:
+        """Nearest osm_feature of `feature_class` with a name/ref within
+        `max_m`, by geodesic distance — used to auto-name a scored site."""
+        import math as _math
+
+        rdeg = max_m / (111320.0 * max(_math.cos(_math.radians(lat)), 0.1))
+        cur = await self.db.execute(
+            "SELECT tags_json, ST_Distance(MakePoint(?, ?, 4326), geom, 1) AS d "
+            "FROM osm_features WHERE feature_class=? AND ROWID IN ("
+            "  SELECT ROWID FROM SpatialIndex WHERE f_table_name='osm_features' "
+            "  AND f_geometry_column='geom' AND search_frame=BuildCircleMbr(?, ?, ?, 4326)) "
+            "ORDER BY d LIMIT 20",
+            (lon, lat, feature_class, lon, lat, rdeg),
+        )
+        for tags_json, d in await cur.fetchall():
+            if d is None or d > max_m:
+                continue
+            try:
+                tags = json.loads(tags_json) if tags_json else {}
+            except (ValueError, TypeError):
+                tags = {}
+            nm = tags.get("name") or tags.get("ref")
+            if nm:
+                return str(nm)
+        return None
+
+    async def suggest_site_name(self, lat: float, lon: float) -> str | None:
+        """A friendly default name for a scored site from Cairn's own data:
+        the nearest named lake (the lakeside-spur niche) else the source road.
+        None if neither — the caller may fall back to reverse geocoding."""
+        water = await self._nearest_named(lat, lon, "water", 1500)
+        if water:
+            return f"Near {water}"
+        return await self._nearest_named(lat, lon, "drivable", 250)
+
     # --- OSM ingest (chunked, idempotent — TLC-11, TLC-14) -----------------
 
     async def upsert_osm_chunk(self, rows: list[tuple]) -> None:
