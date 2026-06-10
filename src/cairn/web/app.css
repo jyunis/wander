@@ -27,9 +27,34 @@ body {
   flex-direction: column;
   overflow-y: auto;
 }
-#map { flex: 1; height: 100%; }
+#map { flex: 1; height: 100%; min-width: 0; }
 
-#panel header { padding: 14px 16px 8px; border-bottom: 1px solid var(--line); }
+/* Sidebar: collapsible column on desktop, overlay drawer on mobile. The
+   `nav-open` class on #app means "panel shown" in both; JS sets the initial
+   state per viewport (shown on desktop, closed on mobile). */
+#app:not(.nav-open) #panel { display: none; }
+.nav-fab { position: absolute; top: 10px; left: 10px; z-index: 1200;
+  width: 38px; height: 38px; display: flex; align-items: center; justify-content: center;
+  font-size: 18px; cursor: pointer; background: var(--panel); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 1px 8px rgba(0, 0, 0, 0.45); }
+.nav-fab:hover { border-color: var(--accent); }
+#app.nav-open .nav-fab { display: none; }
+.nav-close { position: absolute; top: 12px; right: 12px; background: none; border: none;
+  color: var(--muted); font-size: 22px; line-height: 1; cursor: pointer; padding: 0; }
+.nav-close:hover { color: var(--ink); }
+.nav-backdrop { display: none; }
+
+@media (max-width: 640px) {
+  #panel { position: absolute; top: 0; left: 0; bottom: 0; z-index: 1500;
+    width: min(86vw, 340px); flex-basis: auto; transform: translateX(-100%);
+    transition: transform 0.22s ease; box-shadow: 2px 0 22px rgba(0, 0, 0, 0.55); }
+  #app:not(.nav-open) #panel { display: flex; }   /* slide off-screen, not display:none */
+  #app.nav-open #panel { transform: translateX(0); }
+  #app.nav-open .nav-backdrop { display: block; position: absolute; inset: 0; z-index: 1450;
+    background: rgba(0, 0, 0, 0.45); }
+}
+
+#panel header { padding: 14px 16px 8px; border-bottom: 1px solid var(--line); position: relative; }
 h1 { font-size: 19px; margin: 0 0 8px; font-weight: 650; }
 .cairn { filter: grayscale(0.2); }
 h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;

@@ -166,6 +166,13 @@ async function init() {
     if (el) el.addEventListener("input", applyCampgroundFilters);
   });
   $("sheet-close").onclick = closeSite;
+  // Sidebar: a left column on desktop (collapsible), an overlay drawer on
+  // mobile (closed by default). One state class on #app; CSS interprets it
+  // per viewport.
+  setNav(!window.matchMedia("(max-width: 640px)").matches);
+  $("nav-open").onclick = () => setNav(true);
+  $("nav-close").onclick = () => setNav(false);
+  $("nav-backdrop").onclick = () => setNav(false);
   // Delegated ★ handler — works for the site sheet and every campground card.
   document.addEventListener("click", (e) => {
     const star = e.target.closest(".star");
@@ -222,8 +229,16 @@ function buildPresets() {
   });
 }
 
+function setNav(open) {
+  $("app").classList.toggle("nav-open", open);
+  // The map container resized (desktop column show/hide) — let Leaflet re-lay.
+  setTimeout(() => map && map.invalidateSize(), 260);
+}
+
 function setupMap() {
-  map = L.map("map").setView([47.9, -91.86], 11);
+  // Zoom on the right so the floating menu button can live top-left.
+  map = L.map("map", { zoomControl: false }).setView([47.9, -91.86], 11);
+  L.control.zoom({ position: "topright" }).addTo(map);
   setBasemap(BASEMAPS[0].id);
   // Land overlays sit above the basemap but below roads/dots/pins.
   map.createPane("land");
