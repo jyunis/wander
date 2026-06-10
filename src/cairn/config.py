@@ -103,6 +103,12 @@ class Settings(BaseSettings):
     candidate_spacing_m: float = 150.0  # along-way sampling interval (UoW-5)
     candidate_grid_m: float = 100.0  # dedup grid cell size
 
+    # --- Distinct-site selection (spatial NMS) ----------------------------
+    # After scoring, suppress lower-scoring candidates within this radius of a
+    # higher-scoring one so ranked "sites" are distinct, not adjacent road
+    # samples. Exposed via GET /config so the UI can show/tune it.
+    distinct_radius_m: float = 400.0
+
     # --- External-service courtesy (TLC-5) --------------------------------
     osm_cache_ttl_s: int = 7 * 24 * 3600
     tile_cache_ttl_s: int = 30 * 24 * 3600
@@ -133,6 +139,7 @@ class Settings(BaseSettings):
             "max_bbox_area_km2": self.max_bbox_area_km2,
             "max_candidates": self.max_candidates,
             "terrarium_zoom": self.terrarium_zoom,
+            "distinct_radius_m": self.distinct_radius_m,
         }
 
 

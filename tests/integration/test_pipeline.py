@@ -116,6 +116,26 @@ async def test_candidates_clipped_to_bbox(store, settings):
         assert b.min_lat <= lat <= b.max_lat
 
 
+async def test_distinct_site_selection(store, settings):
+    run = await _run(store, settings, synthetic_elements(), DEFAULT_WEIGHTS)
+    assert run.status == "done"
+    # NMS collapses adjacent road samples: distinct sites are fewer than (or
+    # equal to) the scored points, and at least one.
+    assert 1 <= run.distinct_count <= run.candidate_count
+
+    gj = await store.get_run_geojson(run.id)
+    distinct = [f for f in gj["features"] if f["properties"]["distinct"]]
+    assert len(distinct) == run.distinct_count
+    assert gj["run"]["distinct_count"] == run.distinct_count
+    # distinct_rank is dense 1..N over distinct sites, ordered by score.
+    ranks = sorted(f["properties"]["distinct_rank"] for f in distinct)
+    assert ranks == list(range(1, run.distinct_count + 1))
+    # Suppressed candidates carry distinct=False / distinct_rank=None.
+    for f in gj["features"]:
+        if not f["properties"]["distinct"]:
+            assert f["properties"]["distinct_rank"] is None
+
+
 async def test_tlc9_same_input_reproduces_scores(store, settings):
     r1 = await _run(store, settings, synthetic_elements(), DEFAULT_WEIGHTS)
     r2 = await _run(store, settings, synthetic_elements(), DEFAULT_WEIGHTS)

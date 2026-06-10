@@ -81,10 +81,19 @@ class Contribution:
 
 @dataclass(frozen=True)
 class ScoredCandidate:
-    """A scored candidate: total + interpretable per-feature breakdown."""
+    """A scored candidate: total + interpretable per-feature breakdown.
+
+    `distinct` / `distinct_rank` are set by the spatial non-maximum
+    suppression pass (engine.scoring.select_distinct): a distinct site is a
+    local score maximum kept after suppressing lower-scoring neighbours within
+    the suppression radius. `distinct_rank` is 1-based over distinct sites
+    (None when suppressed). Before selection, candidates default to distinct.
+    """
 
     candidate: Candidate
     total: float
     contributions: list[Contribution]
     degraded_features: list[str] = field(default_factory=list)
     near_campsite: bool = False
+    distinct: bool = True
+    distinct_rank: int | None = None

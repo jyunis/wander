@@ -33,12 +33,19 @@ from cairn.store.types import Bbox, Run
 
 _M_PER_DEG = 111320.0
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
-# Forward migrations keyed by from_version. Empty at v=1; each entry is a list
-# of statements ending with `INSERT INTO schema_version (version) VALUES (n+1)`.
-_MIGRATIONS: dict[int, list[str]] = {}
+# Forward migrations keyed by from_version. Each entry is a list of statements
+# ending with `INSERT INTO schema_version (version) VALUES (n+1)`.
+_MIGRATIONS: dict[int, list[str]] = {
+    1: [
+        "ALTER TABLE candidate_scores ADD COLUMN is_distinct INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE candidate_scores ADD COLUMN distinct_rank INTEGER",
+        "ALTER TABLE runs ADD COLUMN distinct_count INTEGER NOT NULL DEFAULT 0",
+        "INSERT INTO schema_version (version) VALUES (2)",
+    ],
+}
 
 # Geometry columns to attach after metadata init: table -> SpatiaLite type.
 _GEOMETRY_COLUMNS: dict[str, str] = {
@@ -249,16 +256,18 @@ class Store:
         *,
         provenance: dict,
         candidate_count: int,
+        distinct_count: int,
         capped: bool,
         degraded_features: list[str],
     ) -> None:
         await self.db.execute(
             "UPDATE runs SET status = 'done', provenance_json = ?, candidate_count = ?, "
-            "capped = ?, degraded_features_json = ?, "
+            "distinct_count = ?, capped = ?, degraded_features_json = ?, "
             "done_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
             (
                 json.dumps(provenance),
                 candidate_count,
+                distinct_count,
                 1 if capped else 0,
                 json.dumps(degraded_features),
                 run_id,
@@ -270,7 +279,8 @@ class Store:
         cur = await self.db.execute(
             "SELECT id, min_lon, min_lat, max_lon, max_lat, weights_json, "
             "scoring_config_version, provenance_json, status, failure_reason, "
-            "candidate_count, capped, degraded_features_json, created_at, done_at "
+            "candidate_count, capped, degraded_features_json, created_at, done_at, "
+            "distinct_count "
             "FROM runs WHERE id = ?",
             (run_id,),
         )
@@ -290,6 +300,7 @@ class Store:
             degraded_features=json.loads(row[12]) if row[12] else [],
             created_at=row[13],
             done_at=row[14],
+            distinct_count=row[15],
         )
 
     async def list_runs(self, limit: int = 50) -> list[Run]:
@@ -451,13 +462,15 @@ class Store:
                     sc.total,
                     json.dumps(contributions),
                     json.dumps(sc.degraded_features),
+                    1 if sc.distinct else 0,
+                    sc.distinct_rank,
                 )
             )
         if not rows:
             return
         await self.db.executemany(
             "INSERT INTO candidate_scores (candidate_id, total, contributions_json, "
-            "degraded_features_json) VALUES (?, ?, ?, ?)",
+            "degraded_features_json, is_distinct, distinct_rank) VALUES (?, ?, ?, ?, ?, ?)",
             rows,
         )
         await self.db.commit()
@@ -474,7 +487,7 @@ class Store:
         cur = await self.db.execute(
             "SELECT c.id, c.lon, c.lat, c.source_way_id, s.total, s.contributions_json, "
             "s.degraded_features_json, f.slope_deg, f.dist_water_m, f.dist_forest_m, "
-            "f.dist_solitude_m, f.near_campsite "
+            "f.dist_solitude_m, f.near_campsite, s.is_distinct, s.distinct_rank "
             "FROM candidates c JOIN candidate_scores s ON s.candidate_id = c.id "
             "LEFT JOIN candidate_features f ON f.candidate_id = c.id "
             f"WHERE c.run_id = ? ORDER BY s.total DESC, c.id {limit_clause}",
@@ -498,6 +511,8 @@ class Store:
                         "dist_forest_m": row[9],
                         "dist_solitude_m": row[10],
                         "near_campsite": bool(row[11]),
+                        "distinct": bool(row[12]),
+                        "distinct_rank": row[13],
                         "disclaimer": DISCLAIMER,
                     },
                 }
@@ -518,6 +533,7 @@ class Store:
                 "scoring_config_version": run.scoring_config_version,
                 "provenance": run.provenance,
                 "candidate_count": run.candidate_count,
+                "distinct_count": run.distinct_count,
                 "capped": run.capped,
                 "degraded_features": run.degraded_features,
                 "failure_reason": run.failure_reason,

@@ -53,6 +53,7 @@ def test_config_exposes_ui_subset(client):
     }
     assert "presets" in body and "balanced" in body["presets"]
     assert body["max_bbox_area_km2"] == 2500.0
+    assert body["distinct_radius_m"] == 400.0
     assert "physical suitability only" in body["disclaimer"].lower()
 
 
@@ -68,6 +69,7 @@ def test_score_sync_then_fetch_and_geojson(client):
     run = r.json()
     assert run["status"] == "done"
     assert run["candidate_count"] > 0
+    assert 1 <= run["distinct_count"] <= run["candidate_count"]
     assert "physical suitability only" in run["disclaimer"].lower()
     run_id = run["id"]
 

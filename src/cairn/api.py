@@ -96,6 +96,7 @@ def _run_summary(run) -> dict:
         "weights": run.weights,
         "scoring_config_version": run.scoring_config_version,
         "candidate_count": run.candidate_count,
+        "distinct_count": run.distinct_count,
         "capped": run.capped,
         "degraded_features": run.degraded_features,
         "failure_reason": run.failure_reason,
