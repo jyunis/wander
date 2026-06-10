@@ -155,6 +155,7 @@ async function init() {
   $("goto-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter") gotoCoords();
   });
+  $("drop-pin").onclick = toggleDropPin;
   $("score-btn").onclick = runScore;
   $("run-history").onchange = (e) => {
     if (e.target.value) loadRun(parseInt(e.target.value, 10));
@@ -245,6 +246,8 @@ function setupMap() {
   map.createPane("land");
   map.getPane("land").style.zIndex = 250;
   map.on("moveend", refreshActiveOverlays);
+  // Keep info windows from opening hidden behind the bottom sheet.
+  map.on("popupopen", (e) => keepPopupClearOfSheet(e.popup));
 
   drawnItems = new L.FeatureGroup().addTo(map);
   // Canvas renderer so thousands of candidate dots stay smooth.
@@ -371,6 +374,57 @@ function dropGotoMarker(lat, lon, label, zoom) {
     .addTo(map)
     .bindPopup(label)
     .openPopup();
+}
+
+// --- drop a pin (mark + save an arbitrary spot, not just scored sites) ------
+// Click "Drop a pin" to enter placement mode, then tap the map. The pin opens
+// the same bottom sheet a scored site does — minus the score — so it inherits
+// name suggestion, the Google Maps link, nearby campgrounds, and the ★ save.
+let pinPlacing = false;
+function toggleDropPin() {
+  if (pinPlacing) return cancelDropPin();
+  pinPlacing = true;
+  $("drop-pin").classList.add("active");
+  map.getContainer().style.cursor = "crosshair";
+  setStatus("Tap the map to drop a pin.");
+  if (window.matchMedia("(max-width: 640px)").matches) setNav(false); // reveal the map
+  map.on("click", onPinClick);
+  document.addEventListener("keydown", onPinKey);
+}
+
+function cancelDropPin() {
+  pinPlacing = false;
+  $("drop-pin").classList.remove("active");
+  map.getContainer().style.cursor = "";
+  setStatus("");
+  map.off("click", onPinClick);
+  document.removeEventListener("keydown", onPinKey);
+}
+
+function onPinKey(e) {
+  if (e.key === "Escape") cancelDropPin();
+}
+
+function onPinClick(e) {
+  cancelDropPin();
+  dropPin(e.latlng.lat, e.latlng.lng);
+}
+
+function dropPin(lat, lon) {
+  showSite({}, lat, lon); // plain sheet: suggests a name, lists nearby campgrounds, offers ★
+  // A draggable marker so the spot can be nudged exactly before saving.
+  selectedMarker = L.marker([lat, lon], {
+    draggable: true,
+    icon: L.divIcon({ className: "", html: `<div class="drop-pin">📍</div>`,
+      iconSize: [30, 30], iconAnchor: [15, 28] }),
+  }).addTo(map);
+  selectedMarker.on("dragend", () => {
+    const ll = selectedMarker.getLatLng();
+    const keep = selectedMarker;
+    selectedMarker = null; // keep the dragged marker through the sheet re-render
+    showSite({}, ll.lat, ll.lng);
+    selectedMarker = keep;
+  });
 }
 
 function useCurrentView() {
@@ -926,6 +980,28 @@ function closeSite() {
   map.closePopup();
 }
 
+// A popup can open hidden behind the bottom sheet — the sheet floats above the
+// map's z-index, so a marker sitting under it opens its info window out of
+// sight. When an opening popup overlaps the sheet, nudge the map so it clears:
+// past the sheet's right edge on desktop, above it on mobile (full-width sheet).
+function keepPopupClearOfSheet(popup) {
+  const sheet = $("sheet");
+  if (!sheet || sheet.classList.contains("hidden")) return;
+  const el = popup.getElement && popup.getElement();
+  if (!el) return;
+  const p = el.getBoundingClientRect();
+  const s = sheet.getBoundingClientRect();
+  const overlapX = Math.min(p.right, s.right) - Math.max(p.left, s.left);
+  const overlapY = Math.min(p.bottom, s.bottom) - Math.max(p.top, s.top);
+  if (overlapX <= 0 || overlapY <= 0) return; // not hidden by the sheet
+  const margin = 14;
+  if (window.matchMedia("(max-width: 640px)").matches) {
+    map.panBy([0, p.bottom - s.top + margin], { animate: true }); // lift above the sheet
+  } else {
+    map.panBy([-(s.right - p.left + margin), 0], { animate: true }); // shift past its right edge
+  }
+}
+
 // Emoji+label amenity badges from a campground's meta — the shared vocabulary
 // used by both the map infowindow (campgroundCard) and the nearby-campground
 // list, so a campground reads identically in either place.
@@ -1128,15 +1204,27 @@ async function loadNearbyCampgrounds(lat, lon, body) {
 }
 
 function breakdownHtml(p, lat, lon, { expanded = false } = {}) {
+  p = p || {};
+  const hasScore = p.total != null;
   const coords = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
   const gmaps = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
   const nameBar =
     `<div class="bd-namebar">${starButton("site", lat, lon, null, p)}` +
-    `<input id="site-name" class="bd-name" placeholder="Name this site…" autocomplete="off" /></div>`;
+    `<input id="site-name" class="bd-name" placeholder="${
+      hasScore ? "Name this site…" : "Name this location…"
+    }" autocomplete="off" /></div>`;
   const coordsHtml =
     `<div class="bd-coords">📍 <span class="bd-ll">${coords}</span>` +
     `<a class="bd-gmaps" href="${gmaps}" target="_blank" rel="noopener">` +
     `Open in Google&nbsp;Maps ↗</a></div>`;
+  // A dropped pin has no score — just name it, see nearby campgrounds, save it.
+  if (!hasScore) {
+    return (
+      nameBar + coordsHtml +
+      `<div class="bd-nearby"></div>` +
+      `<div class="bd-raw bd-disc">${CONFIG.disclaimer}</div>`
+    );
+  }
   const rows = (p.contributions || [])
     .map((c) => {
       const pct = Math.round(c.normalized * 100);
