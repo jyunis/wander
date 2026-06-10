@@ -54,7 +54,10 @@ body {
     background: rgba(0, 0, 0, 0.45); }
 }
 
-#panel header { padding: 14px 16px 8px; border-bottom: 1px solid var(--line); position: relative; }
+/* Sticky so the close (×) / title stay reachable when the panel is scrolled
+   down to the Saved list — especially in the mobile drawer. */
+#panel header { padding: 14px 16px 8px; border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; z-index: 3; background: var(--panel); }
 h1 { font-size: 19px; margin: 0 0 8px; font-weight: 650; }
 .cairn { filter: grayscale(0.2); }
 h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
