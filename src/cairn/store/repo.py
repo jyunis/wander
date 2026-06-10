@@ -33,7 +33,7 @@ from cairn.store.types import Bbox, Run
 
 _M_PER_DEG = 111320.0
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 # Forward migrations keyed by from_version. Each entry is a list of statements
@@ -49,6 +49,13 @@ _MIGRATIONS: dict[int, list[str]] = {
         "ALTER TABLE candidate_features ADD COLUMN road_score REAL",
         "ALTER TABLE candidate_features ADD COLUMN road_unavailable INTEGER NOT NULL DEFAULT 0",
         "INSERT INTO schema_version (version) VALUES (3)",
+    ],
+    3: [
+        "ALTER TABLE candidate_features ADD COLUMN local_road_m REAL",
+        "ALTER TABLE candidate_features ADD COLUMN remoteness_unavailable "
+        "INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE candidate_features ADD COLUMN road_rough INTEGER NOT NULL DEFAULT 0",
+        "INSERT INTO schema_version (version) VALUES (4)",
     ],
 }
 
@@ -397,6 +404,30 @@ class Store:
                 out[int(osm_id)] = {}
         return out
 
+    async def local_road_length_m(
+        self, lon: float, lat: float, radius_m: float
+    ) -> float:
+        """Total drivable-road length (m) within a ~radius_m box of the point —
+        the local road-density proxy for the remoteness feature (FC-4). Lower =
+        more isolated. Roads are clipped to the box (ST_Intersection) so only
+        the nearby length counts; the R*Tree bounds the work."""
+        import math as _math
+
+        cos_lat = _math.cos(_math.radians(lat))
+        rd_lon = radius_m / (_M_PER_DEG * max(cos_lat, 1e-6))
+        rd_lat = radius_m / _M_PER_DEG
+        box = (lon - rd_lon, lat - rd_lat, lon + rd_lon, lat + rd_lat)
+        cur = await self.db.execute(
+            "SELECT COALESCE(SUM(GeodesicLength(ST_Intersection(geom, "
+            "  BuildMbr(?, ?, ?, ?, 4326)))), 0) FROM osm_features "
+            "WHERE feature_class = 'drivable' AND ROWID IN ("
+            "  SELECT ROWID FROM SpatialIndex WHERE f_table_name = 'osm_features' "
+            "  AND f_geometry_column = 'geom' AND search_frame = BuildMbr(?, ?, ?, ?, 4326))",
+            (*box, *box),
+        )
+        row = await cur.fetchone()
+        return float(row[0]) if row and row[0] is not None else 0.0
+
     # --- candidates / features / scores ------------------------------------
 
     async def insert_candidates(
@@ -451,15 +482,16 @@ class Store:
     async def insert_candidate_features(self, rows: list[tuple]) -> None:
         """rows: (candidate_id, slope_deg, slope_unavail, dist_water_m,
         water_unavail, dist_forest_m, forest_unavail, dist_solitude_m,
-        solitude_unavail, near_campsite, road_score, road_unavail)."""
+        solitude_unavail, near_campsite, road_score, road_unavail,
+        local_road_m, road_rough)."""
         if not rows:
             return
         await self.db.executemany(
             "INSERT INTO candidate_features (candidate_id, slope_deg, slope_unavailable, "
             "dist_water_m, water_unavailable, dist_forest_m, forest_unavailable, "
             "dist_solitude_m, solitude_unavailable, near_campsite, road_score, "
-            "road_unavailable) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "road_unavailable, local_road_m, road_rough) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rows,
         )
         await self.db.commit()
@@ -514,7 +546,7 @@ class Store:
             "SELECT c.id, c.lon, c.lat, c.source_way_id, s.total, s.contributions_json, "
             "s.degraded_features_json, f.slope_deg, f.dist_water_m, f.dist_forest_m, "
             "f.dist_solitude_m, f.near_campsite, s.is_distinct, s.distinct_rank, "
-            "f.road_score "
+            "f.road_score, f.local_road_m, f.road_rough "
             "FROM candidates c JOIN candidate_scores s ON s.candidate_id = c.id "
             "LEFT JOIN candidate_features f ON f.candidate_id = c.id "
             f"WHERE c.run_id = ? ORDER BY s.total DESC, c.id {limit_clause}",
@@ -541,6 +573,8 @@ class Store:
                         "distinct": bool(row[12]),
                         "distinct_rank": row[13],
                         "road_score": row[14],
+                        "local_road_m": row[15],
+                        "rough": bool(row[16]),
                         "disclaimer": DISCLAIMER,
                     },
                 }

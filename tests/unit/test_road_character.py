@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from cairn.engine.features import compute_road_score
+from cairn.engine.features import compute_road_score, road_is_rough
 from cairn.engine.scoring_config import DEFAULT_SCORING_PARAMS
 
 CFG = DEFAULT_SCORING_PARAMS["features"]["road_character"]
@@ -39,17 +39,20 @@ def test_forest_named_road_floors_to_high():
     ) == pytest.approx(1.0)
 
 
-def test_ordinary_unpaved_is_not_penalized():
-    # Gravel/dirt forest roads are the TARGET — no roughness penalty.
+def test_roughness_never_penalizes_score():
+    # Rough access should INCREASE hits, not cost them — a rough forest track
+    # is still a full hit (it's flagged separately, not scored down).
     assert compute_road_score({"highway": "track", "surface": "gravel"}, CFG) == 1.0
-    assert compute_road_score({"highway": "track", "surface": "dirt"}, CFG) == 1.0
+    assert compute_road_score({"highway": "track", "4wd_only": "yes"}, CFG) == 1.0
+    assert compute_road_score({"highway": "track", "tracktype": "grade5"}, CFG) == 1.0
+    assert compute_road_score({"highway": "track", "smoothness": "impassable"}, CFG) == 1.0
 
 
-def test_only_genuinely_rough_gets_a_mild_ding():
-    assert compute_road_score({"highway": "track", "4wd_only": "yes"}, CFG) == pytest.approx(0.9)
-    assert compute_road_score(
-        {"highway": "track", "tracktype": "grade5"}, CFG
-    ) == pytest.approx(0.9)
-    assert compute_road_score(
-        {"highway": "track", "smoothness": "impassable"}, CFG
-    ) == pytest.approx(0.8)
+def test_rough_flag_only_for_genuinely_rough():
+    assert road_is_rough({"highway": "track"}) is False
+    assert road_is_rough({"highway": "track", "surface": "gravel"}) is False  # normal FR
+    assert road_is_rough({"highway": "track", "surface": "dirt"}) is False
+    assert road_is_rough({"highway": "track", "4wd_only": "yes"}) is True
+    assert road_is_rough({"highway": "track", "tracktype": "grade4"}) is True
+    assert road_is_rough({"highway": "track", "tracktype": "grade5"}) is True
+    assert road_is_rough({"highway": "track", "smoothness": "very_bad"}) is True

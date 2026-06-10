@@ -14,6 +14,8 @@
 --      (spatial NMS over the ranked candidates) + runs.distinct_count.
 -- v=3: road_character feature — candidate_features.road_score/road_unavailable
 --      (forest-road class + roughness from the source way's OSM tags).
+-- v=4: remoteness feature (local_road_m/remoteness_unavailable — local road
+--      density) + road_rough informational flag.
 
 CREATE TABLE IF NOT EXISTS schema_version (
     version     INTEGER PRIMARY KEY,
@@ -92,7 +94,10 @@ CREATE TABLE IF NOT EXISTS candidate_features (
     solitude_unavailable    INTEGER NOT NULL DEFAULT 0,
     near_campsite           INTEGER NOT NULL DEFAULT 0,   -- enrichment, non-scoring (v1)
     road_score              REAL,                 -- [0,1] forest-road character (v3)
-    road_unavailable        INTEGER NOT NULL DEFAULT 0
+    road_unavailable        INTEGER NOT NULL DEFAULT 0,
+    local_road_m            REAL,                 -- local drivable road length (v4, remoteness)
+    remoteness_unavailable  INTEGER NOT NULL DEFAULT 0,
+    road_rough              INTEGER NOT NULL DEFAULT 0    -- informational rough/4WD flag (v4)
 );
 
 -- --- Per-candidate scores (UoW-7). Append-only for done runs (TLC-9).

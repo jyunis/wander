@@ -51,6 +51,7 @@ def test_config_exposes_ui_subset(client):
         "tree_cover",
         "solitude",
         "road_character",
+        "remoteness",
     }
     assert "presets" in body and "dispersed" in body["presets"]
     assert body["max_bbox_area_km2"] == 2500.0

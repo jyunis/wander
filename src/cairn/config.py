@@ -27,11 +27,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # solitude second. flatness/water/trees discriminate little in flat lake
 # country, so they're secondary.
 DEFAULT_WEIGHTS: dict[str, float] = {
-    "road_character": 0.40,
-    "solitude": 0.20,
-    "flatness": 0.15,
-    "water_proximity": 0.15,
-    "tree_cover": 0.10,
+    "road_character": 0.30,
+    "remoteness": 0.30,
+    "solitude": 0.15,
+    "flatness": 0.10,
+    "water_proximity": 0.10,
+    "tree_cover": 0.05,
 }
 
 # UI weight presets — each just sets slider values (FC-9). Served via
@@ -40,25 +41,28 @@ DEFAULT_WEIGHTS: dict[str, float] = {
 WEIGHT_PRESETS: dict[str, dict[str, float]] = {
     "dispersed": DEFAULT_WEIGHTS,
     "deep_woods": {
-        "road_character": 0.45,
-        "solitude": 0.35,
-        "flatness": 0.10,
+        "road_character": 0.30,
+        "remoteness": 0.45,
+        "solitude": 0.15,
+        "flatness": 0.05,
         "water_proximity": 0.05,
-        "tree_cover": 0.05,
+        "tree_cover": 0.00,
     },
     "lakeside": {
-        "road_character": 0.30,
+        "road_character": 0.25,
+        "remoteness": 0.15,
         "solitude": 0.10,
-        "flatness": 0.15,
-        "water_proximity": 0.40,
+        "flatness": 0.10,
+        "water_proximity": 0.35,
         "tree_cover": 0.05,
     },
     "flat_and_easy": {
-        "road_character": 0.25,
-        "solitude": 0.15,
+        "road_character": 0.20,
+        "remoteness": 0.15,
+        "solitude": 0.10,
         "flatness": 0.45,
         "water_proximity": 0.10,
-        "tree_cover": 0.05,
+        "tree_cover": 0.00,
     },
 }
 
