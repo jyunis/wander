@@ -56,6 +56,14 @@ def _normalize(shape: str, value: float, params: dict) -> float:
     if shape == "passthrough":
         # value is already normalized to [0,1] by the feature extractor.
         return _clamp01(value)
+    if shape == "linear_falloff":
+        # 1 at value 0, linearly down to 0 at `zero_at`. Like
+        # linear_decreasing but with a generic (non-slope) param name; used for
+        # remoteness over a road-density range that doesn't start at 0.
+        zero_at = params["zero_at"]
+        if zero_at <= 0.0:
+            return 0.0
+        return _clamp01(1.0 - value / zero_at)
     raise ValueError(f"unknown normalization shape: {shape!r}")
 
 

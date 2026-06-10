@@ -24,7 +24,7 @@ Normalization conventions (every feature maps a raw value -> [0, 1]):
 
 from __future__ import annotations
 
-SCORING_CONFIG_VERSION = 4
+SCORING_CONFIG_VERSION = 5
 
 DEFAULT_SCORING_PARAMS: dict = {
     "version": SCORING_CONFIG_VERSION,
@@ -88,8 +88,12 @@ DEFAULT_SCORING_PARAMS: dict = {
         # road next to a busy boat launch (both score road_character ~1.0).
         "remoteness": {
             "input": "local_road_m",
-            "shape": "distance_decay",
-            "decay_m": 2500.0,
+            # Linear fall-off (not exp): with the USFS MVUM roads added, local
+            # road density sits in a tight high band (~8-23 km within 1.5 km),
+            # so exp(-L/2500) saturated to ~0 for everyone. Linear 1->0 over
+            # [0, zero_at] spreads that band (lower density = more isolated).
+            "shape": "linear_falloff",
+            "zero_at": 24000.0,
             "radius_m": 1500.0,
         },
         # road_end <- distance to the nearest drivable DEAD-END (a road that
