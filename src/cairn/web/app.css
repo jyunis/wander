@@ -195,6 +195,7 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .saved-name { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .saved-coords { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums;
   margin-top: 1px; }
+.saved-score { color: var(--accent); }
 .saved-del { background: none; border: none; color: var(--muted); cursor: pointer;
   font-size: 15px; line-height: 1; }
 .saved-del:hover { color: #e8786b; }

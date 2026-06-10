@@ -1100,15 +1100,19 @@ function renderSavedList() {
   $("saved-section").hidden = savedPlaces.length === 0;
   host.innerHTML = savedPlaces
     .map((s, i) => {
-      const icon = s.kind === "campground" ? "🏕" : "📍";
-      const label =
-        s.name ||
-        (s.payload && s.payload.total != null ? `Site · ${s.payload.total.toFixed(2)}` : "Site");
+      // Three kinds share the list: a campground, a Cairn-scored dispersed
+      // site (payload carries a total), and a manually dropped pin (no score).
+      const scored = s.kind === "site" && s.payload && s.payload.total != null;
+      const icon = s.kind === "campground" ? "🏕" : scored ? "⛺" : "📍";
+      const label = s.name || (scored ? "Scored site" : "Dropped pin");
       const coords = `${(+s.lat).toFixed(4)}, ${(+s.lon).toFixed(4)}`;
+      const score = scored
+        ? ` · <span class="saved-score">score ${s.payload.total.toFixed(2)}</span>`
+        : "";
       return (
         `<div class="saved-row" data-i="${i}"><div class="saved-main">` +
         `<div class="saved-name">${icon} ${esc(label)}</div>` +
-        `<div class="saved-coords">${coords}</div></div>` +
+        `<div class="saved-coords">${coords}${score}</div></div>` +
         `<button class="saved-del" title="Remove">×</button></div>`
       );
     })
