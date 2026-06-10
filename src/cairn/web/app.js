@@ -651,9 +651,9 @@ async function fetchOverlay(layerId) {
     onEachFeature: (feat, lyr) => {
       const p = feat.properties || {};
       if (isPoint) {
-        const link = p.url
-          ? `<a class="cg-link" href="${esc(p.url)}" target="_blank" rel="noopener">` +
-            `View on Recreation.gov ↗</a>`
+        const { href, label } = campgroundLink(p);
+        const link = href
+          ? `<a class="cg-link" href="${esc(href)}" target="_blank" rel="noopener">${label} ↗</a>`
           : "";
         lyr.bindPopup(
           `<div class="cg-pop"><b>${esc(p.name) || "Campground"}</b>` +
@@ -668,6 +668,31 @@ async function fetchOverlay(layerId) {
     },
   });
   overlayLayers[layerId] = gjLayer.addTo(map);
+}
+
+// A campground's link: the specific reservation/park page when we have a
+// verified one, else a generic fallback to the managing agency's main site
+// (so every campground is at least one click from its booking info).
+function campgroundLink(p) {
+  const url = p.url || "";
+  if (url) {
+    const src = /recreation\.gov/.test(url)
+      ? "Recreation.gov"
+      : /dnr\.state\.mn\.us/.test(url)
+        ? "MN DNR"
+        : "site";
+    return { href: url, label: `View on ${src}` };
+  }
+  if (/Federal/.test(p.category || "")) {
+    return {
+      href: "https://www.recreation.gov/search?inventory_type=camping",
+      label: "Search Recreation.gov",
+    };
+  }
+  const isForest = p.category === "State Forest" || /state forest/i.test(p.name || "");
+  return isForest
+    ? { href: "https://www.dnr.state.mn.us/state_forests/index.html", label: "MN DNR State Forests" }
+    : { href: "https://www.dnr.state.mn.us/state_parks/index.html", label: "MN DNR State Parks" };
 }
 
 function overlayStyle(layerId, feat) {

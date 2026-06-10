@@ -22,8 +22,10 @@ Env: OVERLAYS_DB (default /data/overlays.db).
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import tempfile
+import time
 import urllib.request
 import zipfile
 
@@ -177,9 +179,53 @@ def load_state_forest_campgrounds(con) -> int:
     return len(rows)
 
 
+def _dnr_slug_candidates(park: str) -> list[str]:
+    """Candidate DNR state-park page slugs for a unit name, best-guess first.
+    Covers apostrophes (O'Brien -> obrien), middle initials (Judge C.R. Magney
+    -> judge_magney via first+last), and hyphens (Lake Vermilion-Soudan ->
+    lake_vermilion)."""
+    base = re.sub(r"\s+(State Park|State Recreation Area|State Wayside)$", "", park, flags=re.I)
+    base = base.replace("'", "").replace("’", "")
+
+    def sl(s: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "_", s.lower()).strip("_")
+
+    cands = [sl(base)]
+    words = re.sub(r"[^A-Za-z0-9 ]", " ", base).split()
+    if len(words) >= 2:
+        cands.append(sl(f"{words[0]} {words[-1]}"))  # first + last (drops initials)
+    if "-" in base:
+        cands.append(sl(base.split("-")[0]))  # before the hyphen
+    seen, out = set(), []
+    for c in cands:
+        if c and c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+
+def _resolve_dnr_park_url(park: str | None) -> str | None:
+    """Infer + VERIFY a DNR state-park info page; return it only if it resolves
+    (so state-forest units in this dataset, and any bad slug, get no link)."""
+    if not park:
+        return None
+    for slug in _dnr_slug_candidates(park):
+        page = f"https://www.dnr.state.mn.us/state_parks/{slug}/index.html"
+        try:
+            req = urllib.request.Request(page, method="HEAD", headers=UA)
+            with urllib.request.urlopen(req, timeout=10) as r:
+                if r.status == 200:
+                    return page
+        except Exception:
+            pass
+        time.sleep(0.15)  # courtesy between probes
+    return None
+
+
 def load_state_park_campgrounds(con) -> int:
     """MN DNR state-park camping units (GeoPackage) aggregated to one point per
-    campground — 5k+ individual sites collapse to a clean campground layer."""
+    campground — 5k+ individual sites collapse to a clean campground layer. Each
+    campground links to its DNR park page where the slug verifiably resolves."""
     url = (
         f"{GDRS}/us_mn_state_dnr/struc_parks_and_trails_campsites/"
         "gpkg_struc_parks_and_trails_campsites.zip"
@@ -202,11 +248,16 @@ def load_state_park_campgrounds(con) -> int:
             key = f"{park}|{cg}"
             if key not in seen:  # first site's location represents the campground
                 name = f"{cg}" + (f" — {park}" if park and park not in cg else "")
-                seen[key] = ("State Park", name, None, wkt, srid)
+                seen[key] = (park, ("State Park", name, None, wkt, srid))
         g.close()
-        _insert_points(con, CAMPGROUND_LAYER, list(seen.values()))
-    print(f"[campground]   state-park: {len(seen)}", flush=True)
-    return len(seen)
+        # Resolve each distinct park's page once (verified), then attach.
+        park_url = {p: _resolve_dnr_park_url(p) for p in {p for p, _ in seen.values()}}
+        rows = [(cat, name, park_url.get(park), wkt, srid)
+                for park, (cat, name, _u, wkt, srid) in seen.values()]
+        _insert_points(con, CAMPGROUND_LAYER, rows)
+    linked = sum(1 for r in rows if r[2])
+    print(f"[campground]   state-park: {len(rows)} ({linked} linked)", flush=True)
+    return len(rows)
 
 
 def load_campgrounds(con) -> int:
