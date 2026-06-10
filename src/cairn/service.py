@@ -26,8 +26,10 @@ from cairn.errors import (
     CairnError,
     InvalidBbox,
     InvalidWeights,
+    MvumError,
     WallClockExceeded,
 )
+from cairn.ingest.mvum import ingest_mvum
 from cairn.ingest.osm import ingest_osm
 from cairn.store import Store
 from cairn.store.types import Bbox, Run
@@ -57,11 +59,13 @@ class RunService:
         settings: Settings,
         overpass: OverpassClient,
         terrain_factory=TerrainSampler,
+        mvum=None,
     ) -> None:
         self._store = store
         self._s = settings
         self._overpass = overpass
         self._terrain_factory = terrain_factory
+        self._mvum = mvum  # USFS forest roads; None => OSM-only
 
     async def score_bbox(self, bbox: Bbox, weights: dict[str, float]) -> Run:
         """Execute UoW-1 synchronously. Returns the finished (done|failed) Run.
@@ -102,6 +106,26 @@ class RunService:
             counts = await ingest_osm(
                 self._store, osm.elements, chunk_size=self._s.ingest_chunk_size
             )
+
+            # 4b: USFS MVUM forest roads (fills OSM's forest-road gaps). Best
+            # effort — degrade to OSM-only if MVUM is unavailable (TLC-10).
+            mvum_provenance: dict | None = None
+            if self._mvum is not None:
+                try:
+                    mvum = await self._mvum.fetch(b)
+                    mvum_count = await ingest_mvum(
+                        self._store, mvum.features, chunk_size=self._s.ingest_chunk_size
+                    )
+                    mvum_provenance = {
+                        "source": "usfs_mvum",
+                        "cache_key": mvum.cache_key,
+                        "fetched_at": mvum.fetched_at,
+                        "from_cache": mvum.from_cache,
+                        "road_count": mvum_count,
+                    }
+                except MvumError as exc:
+                    log.warning("MVUM unavailable, OSM-only roads: %s", exc)
+                    mvum_provenance = {"source": "usfs_mvum", "error": str(exc)}
             check_clock("ingest")
 
             # 5: candidates (uniform sampling + injected dead-end termini).
@@ -171,6 +195,7 @@ class RunService:
                     "from_cache": osm.from_cache,
                     "class_counts": counts,
                 },
+                "mvum": mvum_provenance,
                 "elevation": {
                     "source": "terrarium",
                     "covering": tile_covering(b, self._s.terrarium_zoom),

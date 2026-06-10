@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from cairn import DISCLAIMER, __version__
+from cairn.clients.mvum import MvumClient
 from cairn.clients.overpass import OverpassClient
 from cairn.config import get_settings
 from cairn.errors import RunNotFound, ValidationError
@@ -39,15 +40,25 @@ async def lifespan(app: FastAPI):
     log.info("opening store at %s", settings.db_path)
     store = await Store.open(settings)
     overpass = OverpassClient(settings)
+    mvum = MvumClient(settings) if settings.mvum_enabled else None
     app.state.settings = settings
     app.state.store = store
     app.state.overpass = overpass
-    app.state.service = RunService(store, settings, overpass=overpass)
-    log.info("cairn %s ready on %s:%s", __version__, settings.host, settings.port)
+    app.state.mvum = mvum
+    app.state.service = RunService(store, settings, overpass=overpass, mvum=mvum)
+    log.info(
+        "cairn %s ready on %s:%s (mvum=%s)",
+        __version__,
+        settings.host,
+        settings.port,
+        "on" if mvum else "off",
+    )
     try:
         yield
     finally:
         await overpass.aclose()
+        if mvum is not None:
+            await mvum.aclose()
         await store.close()
 
 

@@ -98,6 +98,13 @@ class Settings(BaseSettings):
     # --- External services (public, no key — TLC-12) -----------------------
     overpass_url: str = "https://overpass-api.de/api/interpreter"
     terrarium_url: str = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium"
+    # USFS Motor Vehicle Use Map roads (national forest roads OSM often lacks).
+    # Public ArcGIS service, no key. Disable to fall back to OSM-only roads.
+    mvum_enabled: bool = True
+    mvum_url: str = (
+        "https://apps.fs.usda.gov/arcx/rest/services/EDW/EDW_MVUM_01/MapServer/1/query"
+    )
+    mvum_cache_ttl_s: int = 30 * 24 * 3600
     user_agent: str = (
         "cairn/0.1 (self-hosted campsite scorer; +https://cairn.home.arpa)"
     )
