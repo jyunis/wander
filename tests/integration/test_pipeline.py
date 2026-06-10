@@ -7,12 +7,13 @@ persisted run + its GeoJSON.
 
 from __future__ import annotations
 
+import asyncio
 import re
 
 import pytest
 
 from cairn.config import DEFAULT_WEIGHTS
-from cairn.service import RunService
+from cairn.service import SCORING_CONFIG_VERSION, RunService
 from cairn.store import Store
 from tests.fakes.pipeline import (
     TEST_BBOX,
@@ -145,3 +146,44 @@ async def test_tlc9_same_input_reproduces_scores(store, settings):
     t1 = [f["properties"]["total"] for f in g1["features"]]
     t2 = [f["properties"]["total"] for f in g2["features"]]
     assert t1 == t2
+
+
+def _svc(store, settings):
+    return RunService(
+        store,
+        settings,
+        overpass=FakeOverpass(synthetic_elements()),
+        terrain_factory=fake_terrain_factory(slope_deg=3.0),
+    )
+
+
+async def test_tlc4_wallclock_bound_is_honored(store, settings):
+    # A zero deadline trips the first checkpoint -> the run fails typed
+    # (WallClockExceeded), never silently (TLC-4/10). Proves _execute gates on
+    # the bound it is handed, not a hardcoded constant.
+    svc = _svc(store, settings)
+    b = TEST_BBOX.normalized()
+    params = await store.scoring_config_params(SCORING_CONFIG_VERSION)
+    run_id = await store.create_run(b, DEFAULT_WEIGHTS, SCORING_CONFIG_VERSION)
+    await svc._execute(run_id, b, DEFAULT_WEIGHTS, params, 0.0)
+    run = await store.get_run(run_id)
+    assert run.status == "failed"
+    assert "WallClockExceeded" in run.failure_reason
+
+
+async def test_tlc4_async_path_uses_async_wallclock_not_sync(store, settings):
+    # The async background path must read max_wallclock_async_seconds ("async
+    # beyond" 120s), independent of the sync bound. With the async bound at 0
+    # and the sync bound generous, an async run still fails on the clock —
+    # proving the two paths use different bounds.
+    settings.max_wallclock_seconds = 999.0
+    settings.max_wallclock_async_seconds = 0.0
+    svc = _svc(store, settings)
+    run_id = await svc.start_async(TEST_BBOX, DEFAULT_WEIGHTS)
+    for _ in range(500):  # let the background task run to a terminal state
+        run = await store.get_run(run_id)
+        if run.status in ("done", "failed"):
+            break
+        await asyncio.sleep(0.01)
+    assert run.status == "failed"
+    assert "WallClockExceeded" in run.failure_reason

@@ -121,7 +121,13 @@ class Settings(BaseSettings):
     # --- Caps (TLC-4) ------------------------------------------------------
     max_bbox_area_km2: float = 2500.0
     max_candidates: int = 5000
+    # Wall-clock bounds (TLC-4): a tight bound on the SYNC path (a client is
+    # blocked on the HTTP request) and a looser one for ASYNC background jobs
+    # ("120 s sync; async beyond") — a large bbox legitimately needs minutes to
+    # fetch a multi-MB Overpass extract, decode slope tiles, and score up to
+    # max_candidates points, all of which the UI just polls for.
     max_wallclock_seconds: float = 120.0
+    max_wallclock_async_seconds: float = 600.0
     # Bboxes at/under this area score synchronously (resolve on the first
     # poll); larger ones run as a background job the UI polls (TLC-4).
     sync_area_threshold_km2: float = 200.0
