@@ -94,6 +94,17 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .rd-swatch.rd-other  { border-color: #ffd23d; }
 .roads-legend span:not(.rd-swatch) { margin-right: 8px; }
 
+#land-section { margin-top: 6px; }
+.land-sub { font-size: 11px; font-weight: 400; color: var(--muted); }
+.land-layers { flex-wrap: wrap; }
+.land-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 7px;
+               font-size: 10.5px; color: var(--muted); }
+.land-key { display: flex; align-items: center; gap: 4px; }
+.land-swatch { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
+.land-hint { font-size: 10.5px; color: var(--muted); margin-top: 6px; min-height: 0; }
+.disclaimer-mini { font-size: 10px; color: var(--muted); opacity: 0.85; margin-top: 6px;
+                   line-height: 1.35; }
+
 .status { font-size: 12px; margin-top: 10px; min-height: 16px; }
 .status.err { color: #e8786b; }
 .status.ok { color: var(--accent); }

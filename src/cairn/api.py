@@ -6,8 +6,8 @@ typed engine errors to HTTP codes, and returns `failed` runs as status+reason
 (not a 500, TLC-10). Every results response carries the TLC-3 disclaimer.
 
 Endpoints: POST /score, GET /runs, GET /runs/{id}, GET /runs/{id}/geojson,
-GET /runs/{id}/roads, GET /config, GET /health, and the static UI at /
-(mounted if web/ exists).
+GET /runs/{id}/roads, GET /overlays, GET /overlays/{layer}, GET /config,
+GET /health, and the static UI at / (mounted if web/ exists).
 """
 
 from __future__ import annotations
@@ -30,6 +30,8 @@ from cairn.errors import RunNotFound, ValidationError
 from cairn.logging import configure
 from cairn.service import RunService
 from cairn.store import Store
+from cairn.store.overlays import DISCLAIMER as OVERLAY_DISCLAIMER
+from cairn.store.overlays import OverlayStore
 from cairn.store.types import Bbox
 
 log = logging.getLogger("cairn.api")
@@ -41,11 +43,13 @@ async def lifespan(app: FastAPI):
     configure(settings.log_level)
     log.info("opening store at %s", settings.db_path)
     store = await Store.open(settings)
+    overlays = await OverlayStore.open(settings)
     overpass = OverpassClient(settings)
     mvum = MvumClient(settings) if settings.mvum_enabled else None
     structures = StructuresClient(settings) if settings.structures_enabled else None
     app.state.settings = settings
     app.state.store = store
+    app.state.overlays = overlays
     app.state.overpass = overpass
     app.state.mvum = mvum
     app.state.structures = structures
@@ -53,12 +57,13 @@ async def lifespan(app: FastAPI):
         store, settings, overpass=overpass, mvum=mvum, structures=structures
     )
     log.info(
-        "cairn %s ready on %s:%s (mvum=%s structures=%s)",
+        "cairn %s ready on %s:%s (mvum=%s structures=%s overlays=%s)",
         __version__,
         settings.host,
         settings.port,
         "on" if mvum else "off",
         "on" if structures else "off",
+        "on" if overlays.available else "off",
     )
     try:
         yield
@@ -68,6 +73,7 @@ async def lifespan(app: FastAPI):
             await mvum.aclose()
         if structures is not None:
             await structures.aclose()
+        await overlays.close()
         await store.close()
 
 
@@ -178,6 +184,26 @@ async def get_run_roads(run_id: int, request: Request) -> dict:
     store: Store = request.app.state.store
     await store.get_run(run_id)  # 404 if missing
     return await store.get_run_roads_geojson(run_id)
+
+
+@app.get("/overlays")
+async def list_overlays(request: Request) -> dict:
+    """Available display-only land layers (TLC-3) — empty if overlays.db absent."""
+    overlays: OverlayStore = request.app.state.overlays
+    return {"layers": await overlays.layers(), "disclaimer": OVERLAY_DISCLAIMER}
+
+
+@app.get("/overlays/{layer}")
+async def get_overlay(layer: str, request: Request, bbox: str) -> dict:
+    """GeoJSON for one land layer within `bbox` (clipped, capped). Display-only."""
+    overlays: OverlayStore = request.app.state.overlays
+    try:
+        parts = [float(x) for x in bbox.split(",")]
+        if len(parts) != 4:
+            raise ValueError
+    except ValueError:
+        raise ValidationError("bbox must be 'min_lon,min_lat,max_lon,max_lat'") from None
+    return await overlays.query(layer, Bbox(*parts))
 
 
 @app.get("/config")
