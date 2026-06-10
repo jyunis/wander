@@ -157,7 +157,6 @@ async function init() {
   $("run-history").onchange = (e) => {
     if (e.target.value) loadRun(parseInt(e.target.value, 10));
   };
-  $("bd-close").onclick = () => $("breakdown").classList.add("hidden");
   ["layer-pins", "layer-dots", "layer-heat", "layer-roads"].forEach((id) => {
     $(id).onchange = updateLayerVisibility;
   });
@@ -515,7 +514,7 @@ function renderResults(gj) {
       fillColor: scoreColor(norm(p.total)),
       fillOpacity: 0.85,
     });
-    dot.on("click", () => showBreakdown(p, lat, lon));
+    bindBreakdown(dot, p, lat, lon);
     candidatesLayer.addLayer(dot);
   });
 
@@ -533,7 +532,7 @@ function renderResults(gj) {
     const marker = L.marker([lat, lon], {
       icon: L.divIcon({ className: "", html: `<div class="rank-pin">${label}</div>`, iconSize: [22, 22] }),
     });
-    marker.on("click", () => showBreakdown(p, lat, lon));
+    bindBreakdown(marker, p, lat, lon);
     pinLayer.addLayer(marker);
   });
 
@@ -818,8 +817,24 @@ function updateLandHint() {
   }
 }
 
-function showBreakdown(p, lat, lon) {
-  const body = $("bd-body");
+// Bind the "why this score" breakdown to a scored marker as a map popup, and
+// fill in the nearest-campground line once the popup opens (lazy — TLC-3).
+function bindBreakdown(layer, p, lat, lon) {
+  layer.bindPopup(breakdownHtml(p, lat, lon), {
+    className: "bd-popup",
+    maxWidth: 300,
+    maxHeight: 420,
+    autoPanPadding: [24, 24],
+  });
+  // Fill the nearest-campground line lazily, then re-set the whole content so
+  // the popup reflows to fit it (editing the DOM in place wouldn't resize it).
+  layer.on("popupopen", async (e) => {
+    const near = await nearbyCampgroundHtml(lat, lon);
+    if (near) e.popup.setContent(breakdownHtml(p, lat, lon, near));
+  });
+}
+
+function breakdownHtml(p, lat, lon, nearbyHtml = "") {
   const coords = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
   const gmaps = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
   const coordsHtml =
@@ -848,37 +863,31 @@ function showBreakdown(p, lat, lon) {
     `slope ${fmt(p.slope_deg, "°")} · water ${fmt(p.dist_water_m, " m")} · ` +
     `forest ${fmt(p.dist_forest_m, " m")} · solitude ${fmt(p.dist_solitude_m, " m")}` +
     (p.near_campsite ? " · near a known campsite" : "");
-  body.innerHTML =
+  return (
+    `<div class="bd-title">Why this score</div>` +
     coordsHtml +
     rows +
     `<div class="bd-total">Total: ${p.total.toFixed(3)} (rank #${p.rank})${rough}</div>` +
     `<div class="bd-raw">${raw}</div>` +
-    `<div id="bd-nearby" class="bd-nearby"></div>` +
-    `<div class="bd-raw">${CONFIG.disclaimer}</div>`;
-  $("breakdown").classList.remove("hidden");
-  fetchNearbyCampground(lat, lon);
+    `<div class="bd-nearby">${nearbyHtml}</div>` +
+    `<div class="bd-raw">${CONFIG.disclaimer}</div>`
+  );
 }
 
 // Display-only "book a spot" fallback: the nearest established campground to a
 // scored dispersed site. Fetched lazily when the breakdown opens (keeps the run
 // geojson lean); never part of scoring (TLC-3).
-async function fetchNearbyCampground(lat, lon) {
-  const el = $("bd-nearby");
-  if (!el) return;
+async function nearbyCampgroundHtml(lat, lon) {
   let cg;
   try {
     cg = (await (await fetch(`/nearby-campground?lat=${lat}&lon=${lon}`)).json()).campground;
   } catch {
-    return;
+    return "";
   }
-  if (!el.isConnected || !cg) return;
+  if (!cg) return "";
   const mi = (cg.distance_m / 1609.34).toFixed(1);
-  const link = cg.url
-    ? ` <a href="${esc(cg.url)}" target="_blank" rel="noopener">↗</a>`
-    : "";
-  el.innerHTML =
-    `🏕 Nearest campground: <b>${esc(cg.name)}</b> · ${mi} mi · ` +
-    `${esc(cg.category)}${link}`;
+  const link = cg.url ? ` <a href="${esc(cg.url)}" target="_blank" rel="noopener">↗</a>` : "";
+  return `🏕 Nearest campground: <b>${esc(cg.name)}</b> · ${mi} mi · ${esc(cg.category)}${link}`;
 }
 
 function fmt(v, unit) {
