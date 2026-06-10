@@ -1195,6 +1195,9 @@ function renderSavedList() {
 }
 
 function reopenSaved(s) {
+  // On mobile the panel is a full-height drawer over the map — close it so the
+  // tapped place (its marker + bottom sheet) is actually visible.
+  if (window.matchMedia("(max-width: 640px)").matches) setNav(false);
   map.setView([s.lat, s.lon], 14);
   if (s.kind === "campground") {
     closeSite(); // hide any open sheet (also clears the prior selected marker)
