@@ -1,0 +1,975 @@
+[
+  {
+    "code": "B35",
+    "name": "Glove Lake",
+    "lat": 47.792346,
+    "lon": -94.099894,
+    "stars": "4",
+    "access": "DRIVE",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": true,
+    "roads": [
+      "2240"
+    ]
+  },
+  {
+    "code": "B42",
+    "name": "Moose Lake",
+    "lat": 47.819033,
+    "lon": -94.155349,
+    "stars": "3",
+    "access": "paddle",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": true,
+    "roads": [
+      "3357"
+    ]
+  },
+  {
+    "code": "B7",
+    "name": "North Twin Hike-In",
+    "lat": 47.597639,
+    "lon": -94.602994,
+    "stars": "4",
+    "access": "DRIVE",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": true,
+    "roads": [
+      "2091"
+    ]
+  },
+  {
+    "code": "B8",
+    "name": "North Twin",
+    "lat": 47.599222,
+    "lon": -94.600531,
+    "stars": "4",
+    "access": "DRIVE",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "B9",
+    "name": "North Twin Remote",
+    "lat": 47.593321,
+    "lon": -94.60871,
+    "stars": "3",
+    "access": "paddle",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": [
+      "2238"
+    ]
+  },
+  {
+    "code": "C16",
+    "name": "Lake Windigo",
+    "lat": 47.415143,
+    "lon": -94.571359,
+    "stars": "4",
+    "access": "paddle",
+    "on_forest_road": false,
+    "county_or_hwy": true,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "C17",
+    "name": "Star Island, S. Shore",
+    "lat": 47.406966,
+    "lon": -94.574451,
+    "stars": "4",
+    "access": "paddle",
+    "on_forest_road": false,
+    "county_or_hwy": true,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "C18",
+    "name": "Star Island, N. Shore",
+    "lat": 47.425581,
+    "lon": -94.559139,
+    "stars": "4",
+    "access": "paddle",
+    "on_forest_road": false,
+    "county_or_hwy": true,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "C29",
+    "name": "Lydick Lake",
+    "lat": 47.398474,
+    "lon": -94.418079,
+    "stars": "5",
+    "access": "DRIVE",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": true,
+    "roads": [
+      "2958"
+    ]
+  },
+  {
+    "code": "C33",
+    "name": "Mississippi River",
+    "lat": 47.426914,
+    "lon": -94.385301,
+    "stars": "3",
+    "access": "DRIVE",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": [
+      "2167F"
+    ]
+  },
+  {
+    "code": "D2",
+    "name": "Mississippi River",
+    "lat": 47.30261,
+    "lon": -93.904314,
+    "stars": "4",
+    "access": "DRIVE",
+    "on_forest_road": false,
+    "county_or_hwy": true,
+    "rough": true,
+    "roads": []
+  },
+  {
+    "code": "D28",
+    "name": "Battle Point South",
+    "lat": 47.476839,
+    "lon": -94.072404,
+    "stars": "3",
+    "access": "DRIVE",
+    "on_forest_road": false,
+    "county_or_hwy": true,
+    "rough": true,
+    "roads": []
+  },
+  {
+    "code": "D29",
+    "name": "Battle Point North",
+    "lat": 47.479056,
+    "lon": -94.0777,
+    "stars": "4",
+    "access": "DRIVE",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": true,
+    "roads": [
+      "2240"
+    ]
+  },
+  {
+    "code": "D32",
+    "name": "First River Lake",
+    "lat": 47.492849,
+    "lon": -94.01734,
+    "stars": "4",
+    "access": "DRIVE",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": true,
+    "roads": [
+      "3107"
+    ]
+  },
+  {
+    "code": "D71",
+    "name": "O-ne-gum-e",
+    "lat": 47.502972,
+    "lon": -94.039331,
+    "stars": "?",
+    "access": "unknown",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "D1",
+    "name": "Cut Foot Sioux Lake",
+    "lat": 47.509013,
+    "lon": -94.064013,
+    "stars": "1",
+    "access": "unknown",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "D3",
+    "name": "Cut Foot Sioux Lake",
+    "lat": 47.510025,
+    "lon": -94.074135,
+    "stars": "3",
+    "access": "paddle",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "D5",
+    "name": "Cut Foot Sioux Lake",
+    "lat": 47.513832,
+    "lon": -94.077385,
+    "stars": "4",
+    "access": "paddle",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "D7",
+    "name": "Cut Foot Sioux Lake",
+    "lat": 47.513832,
+    "lon": -94.079051,
+    "stars": "3",
+    "access": "paddle",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "D8",
+    "name": "Mosomo Point",
+    "lat": 47.518311,
+    "lon": -94.09424,
+    "stars": "4",
+    "access": "hike",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": [
+      "2198"
+    ]
+  },
+  {
+    "code": "D10",
+    "name": "Sunken Lake",
+    "lat": 47.536459,
+    "lon": -94.098695,
+    "stars": "4",
+    "access": "hike",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": true,
+    "roads": [
+      "2091",
+      "2198"
+    ]
+  },
+  {
+    "code": "D11",
+    "name": "Cut Foot Sioux Lake",
+    "lat": 47.505277,
+    "lon": -94.104676,
+    "stars": "0",
+    "access": "unknown",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "D13",
+    "name": "Deer Lake Point",
+    "lat": 47.49857,
+    "lon": -94.110577,
+    "stars": "4",
+    "access": "paddle",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "D16",
+    "name": "Battle Point",
+    "lat": 47.508644,
+    "lon": -94.087792,
+    "stars": "3",
+    "access": "paddle",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "D42",
+    "name": "Pigeon Dam Lake",
+    "lat": 47.517249,
+    "lon": -94.162415,
+    "stars": "3",
+    "access": "DRIVE",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": [
+      "3148"
+    ]
+  },
+  {
+    "code": "D47",
+    "name": "Mosomo Lake",
+    "lat": 47.560618,
+    "lon": -94.135212,
+    "stars": "2",
+    "access": "DRIVE",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": true,
+    "roads": [
+      "3832"
+    ]
+  },
+  {
+    "code": "D50",
+    "name": "Lower Pigeon Lake",
+    "lat": 47.560245,
+    "lon": -94.160338,
+    "stars": "0",
+    "access": "unknown",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "D55",
+    "name": "Middle Pigeon Lake",
+    "lat": 47.58642,
+    "lon": -94.165719,
+    "stars": "5",
+    "access": "DRIVE",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": true,
+    "roads": [
+      "2958"
+    ]
+  },
+  {
+    "code": "D56",
+    "name": "One Loaf Lake",
+    "lat": 47.589865,
+    "lon": -94.154738,
+    "stars": "1",
+    "access": "DRIVE",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": true,
+    "roads": [
+      "2196F"
+    ]
+  },
+  {
+    "code": "D74",
+    "name": "Six Mile Lake",
+    "lat": 47.310314,
+    "lon": -94.124509,
+    "stars": "3",
+    "access": "DRIVE",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": [
+      "2127"
+    ]
+  },
+  {
+    "code": "M75",
+    "name": "East Lake",
+    "lat": 47.671292,
+    "lon": -93.854634,
+    "stars": "2",
+    "access": "DRIVE",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": [
+      "2460"
+    ]
+  },
+  {
+    "code": "M115",
+    "name": "Turtle Lake",
+    "lat": 47.616278,
+    "lon": -93.703146,
+    "stars": "4",
+    "access": "paddle",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M44",
+    "name": "Big Dick Lake",
+    "lat": 47.6153,
+    "lon": -93.603016,
+    "stars": "5",
+    "access": "DRIVE",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M19",
+    "name": "Grave Lake",
+    "lat": 47.51753,
+    "lon": -93.666138,
+    "stars": "4",
+    "access": "DRIVE",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": [
+      "3545"
+    ]
+  },
+  {
+    "code": "M60",
+    "name": "Caribou Lake",
+    "lat": 47.523641,
+    "lon": -93.639676,
+    "stars": "4",
+    "access": "DRIVE",
+    "on_forest_road": false,
+    "county_or_hwy": true,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M74",
+    "name": "Duck Lake",
+    "lat": 47.53529,
+    "lon": -93.617549,
+    "stars": "3",
+    "access": "unknown",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": true,
+    "roads": [
+      "2361"
+    ]
+  },
+  {
+    "code": "M83",
+    "name": "Hole in the Wall Lake",
+    "lat": 47.560476,
+    "lon": -93.643516,
+    "stars": "1",
+    "access": "hike",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": true,
+    "roads": [
+      "2671A"
+    ]
+  },
+  {
+    "code": "M100",
+    "name": "Ruby Lake",
+    "lat": 47.508247,
+    "lon": -93.547523,
+    "stars": "2",
+    "access": "DRIVE",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M122",
+    "name": "Snowshoe Lake",
+    "lat": 47.501377,
+    "lon": -93.547339,
+    "stars": "?",
+    "access": "unknown",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M33",
+    "name": "Trout Lake",
+    "lat": 47.465477,
+    "lon": -93.533685,
+    "stars": "4",
+    "access": "paddle",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M34",
+    "name": "Trout Lake",
+    "lat": 47.465477,
+    "lon": -93.533685,
+    "stars": "4",
+    "access": "paddle",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "MX1",
+    "name": "Trout Lake",
+    "lat": 47.465736,
+    "lon": -93.558861,
+    "stars": "5",
+    "access": "hike",
+    "on_forest_road": false,
+    "county_or_hwy": true,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "MX2",
+    "name": "Trout Lake",
+    "lat": 47.465736,
+    "lon": -93.559539,
+    "stars": "3",
+    "access": "hike",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M36",
+    "name": "Spider Lake",
+    "lat": 47.476653,
+    "lon": -93.58081,
+    "stars": "5",
+    "access": "paddle",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M37",
+    "name": "Spider Lake",
+    "lat": 47.476653,
+    "lon": -93.58081,
+    "stars": "3",
+    "access": "paddle",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M38",
+    "name": "Spider Lake",
+    "lat": 47.471096,
+    "lon": -93.577417,
+    "stars": "4",
+    "access": "paddle",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M39",
+    "name": "Spider Lake",
+    "lat": 47.46543,
+    "lon": -93.581242,
+    "stars": "4",
+    "access": "paddle",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M94",
+    "name": "Spider Lake",
+    "lat": 47.462653,
+    "lon": -93.585136,
+    "stars": "2",
+    "access": "paddle",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M40",
+    "name": "Wabana Lake",
+    "lat": 47.436104,
+    "lon": -93.531431,
+    "stars": "5",
+    "access": "paddle",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M41",
+    "name": "Wabana Lake",
+    "lat": 47.435114,
+    "lon": -93.528225,
+    "stars": "4",
+    "access": "paddle",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "MX3",
+    "name": "Wabana Lake",
+    "lat": 47.4058,
+    "lon": -93.54565,
+    "stars": "4",
+    "access": "paddle",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M42",
+    "name": "Bluewater Lake",
+    "lat": 47.422244,
+    "lon": -93.544541,
+    "stars": "4",
+    "access": "unknown",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M1",
+    "name": "Adele Lake",
+    "lat": 47.472434,
+    "lon": -93.653381,
+    "stars": "4",
+    "access": "DRIVE",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M2",
+    "name": "Doctor Lake",
+    "lat": 47.468224,
+    "lon": -93.652251,
+    "stars": "5",
+    "access": "hike",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M4A",
+    "name": "Spruce Lake Island",
+    "lat": 47.461501,
+    "lon": -93.655767,
+    "stars": "?",
+    "access": "paddle",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M4B",
+    "name": "Spruce Lake",
+    "lat": 47.462281,
+    "lon": -93.653084,
+    "stars": "4",
+    "access": "unknown",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M10",
+    "name": "Kremer Lake",
+    "lat": 47.463476,
+    "lon": -93.636556,
+    "stars": "5",
+    "access": "hike",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M13",
+    "name": "Forjer Lake",
+    "lat": 47.453522,
+    "lon": -93.657676,
+    "stars": "3",
+    "access": "DRIVE",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": [
+      "2153"
+    ]
+  },
+  {
+    "code": "M6",
+    "name": "Orange Lake",
+    "lat": 47.450665,
+    "lon": -93.626323,
+    "stars": "0",
+    "access": "unknown",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M7",
+    "name": "Orange Lake",
+    "lat": 47.449636,
+    "lon": -93.629217,
+    "stars": "3",
+    "access": "DRIVE",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": [
+      "2153"
+    ]
+  },
+  {
+    "code": "M11",
+    "name": "Orange Lake",
+    "lat": 47.448517,
+    "lon": -93.625799,
+    "stars": "2",
+    "access": "hike",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M15",
+    "name": "Little Horn Lake",
+    "lat": 47.443396,
+    "lon": -93.63757,
+    "stars": "3",
+    "access": "hike",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M18",
+    "name": "Lucky Lake",
+    "lat": 47.429425,
+    "lon": -93.616345,
+    "stars": "1",
+    "access": "hike",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "M91",
+    "name": "Li'l Cottonwood Lake",
+    "lat": 47.429391,
+    "lon": -93.670535,
+    "stars": "2",
+    "access": "DRIVE",
+    "on_forest_road": true,
+    "county_or_hwy": true,
+    "rough": false,
+    "roads": [
+      "3469"
+    ]
+  },
+  {
+    "code": "W38",
+    "name": "Long Lake",
+    "lat": 47.070709,
+    "lon": -94.604247,
+    "stars": "4",
+    "access": "unknown",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "W50",
+    "name": "Anoway Lake",
+    "lat": 47.038129,
+    "lon": -94.628781,
+    "stars": "2",
+    "access": "hike",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "W13",
+    "name": "Little Bass Lake",
+    "lat": 46.98464,
+    "lon": -94.632431,
+    "stars": "4",
+    "access": "paddle",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "W30",
+    "name": "Big Bass Lake",
+    "lat": 46.995387,
+    "lon": -94.617069,
+    "stars": "4",
+    "access": "DRIVE",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": [
+      "2804"
+    ]
+  },
+  {
+    "code": "W68",
+    "name": "Big Bass Lake",
+    "lat": 46.999249,
+    "lon": -94.612253,
+    "stars": "3",
+    "access": "paddle",
+    "on_forest_road": false,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": []
+  },
+  {
+    "code": "W53",
+    "name": "Gut Lake",
+    "lat": 47.002906,
+    "lon": -94.427924,
+    "stars": "4",
+    "access": "hike",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": [
+      "3790"
+    ]
+  },
+  {
+    "code": "W71",
+    "name": "Diamond Lake",
+    "lat": 46.996489,
+    "lon": -94.454433,
+    "stars": "3",
+    "access": "DRIVE",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": [
+      "2867"
+    ]
+  },
+  {
+    "code": "W90",
+    "name": "Woodtick #1",
+    "lat": 46.994665,
+    "lon": -94.513579,
+    "stars": "3",
+    "access": "hike",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": [
+      "2107"
+    ]
+  },
+  {
+    "code": "W2",
+    "name": "Barnum Lake",
+    "lat": 46.981587,
+    "lon": -94.327034,
+    "stars": "1",
+    "access": "hike",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": [
+      "2107"
+    ]
+  },
+  {
+    "code": "W3",
+    "name": "Goose Lake",
+    "lat": 46.990153,
+    "lon": -94.328783,
+    "stars": "1",
+    "access": "hike",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": [
+      "2107"
+    ]
+  },
+  {
+    "code": "W57",
+    "name": "Hazel Lake",
+    "lat": 46.999997,
+    "lon": -94.286932,
+    "stars": "4",
+    "access": "unknown",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": true,
+    "roads": [
+      "2850A"
+    ]
+  },
+  {
+    "code": "W47",
+    "name": "Old Pines Camp",
+    "lat": 47.088659,
+    "lon": -94.046621,
+    "stars": "1",
+    "access": "hike",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": [
+      "2117"
+    ]
+  }
+]
