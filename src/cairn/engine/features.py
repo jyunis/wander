@@ -21,6 +21,7 @@ from __future__ import annotations
 import re
 
 from cairn.clients.terrain import TerrainSampler
+from cairn.engine.scoring_config import ROUGH_SMOOTHNESS, ROUGH_TRACKTYPES
 from cairn.engine.types import Candidate, CandidateFeatures, FeatureValue
 from cairn.errors import TerrainError
 from cairn.store import Store
@@ -35,16 +36,15 @@ _FOREST_ROAD_RE = re.compile(
     r"forest\s*(road|rd|service|route)|national\s*forest|\bf\.?\s?r\.?\s*\d|\bfs[rh]?\s*\d",
     re.IGNORECASE,
 )
-_ROUGH_SMOOTHNESS = {"very_bad", "horrible", "very_horrible", "impassable"}
 
 
 def compute_road_score(tags: dict, cfg: dict) -> float:
     """Map a source way's OSM tags to a [0,1] 'dispersed-camping-ish' score.
 
     Pure (TLC-1). Driven by the scoring-config `road_character` block: base
-    score by highway class, a floor for Forest-Service-named roads, and a MILD
-    roughness factor (4WD-capable, decent clearance — ordinary unpaved/gravel
-    forest roads are NOT penalized; only genuinely rough/impassable is).
+    score by highway class + a floor for Forest-Service-named roads. Roughness
+    is NOT penalized here (it's a separate informational flag) — a rough forest
+    track is a full hit.
     """
     classes = cfg["class_scores"]
     base = classes.get(tags.get("highway"), classes["_default"])
@@ -52,13 +52,18 @@ def compute_road_score(tags: dict, cfg: dict) -> float:
     operator = tags.get("operator", "").lower()
     if _FOREST_ROAD_RE.search(name) or "forest service" in operator:
         base = max(base, cfg.get("forest_named_score", 1.0))
-    rough = cfg.get("rough", {})
-    factor = 1.0
-    if tags.get("4wd_only") == "yes" or tags.get("tracktype") == "grade5":
-        factor *= rough.get("fourwd_factor", 0.9)
-    if tags.get("smoothness") in _ROUGH_SMOOTHNESS:
-        factor *= rough.get("impassable_factor", 0.8)
-    return max(0.0, min(1.0, base * factor))
+    return max(0.0, min(1.0, base))
+
+
+def road_is_rough(tags: dict) -> bool:
+    """Whether a road warrants a 'rough / high-clearance' flag. Informational
+    only — does not affect the score. Ordinary unpaved/gravel/dirt is normal
+    for a forest road and is NOT flagged."""
+    return (
+        tags.get("4wd_only") == "yes"
+        or tags.get("tracktype") in ROUGH_TRACKTYPES
+        or tags.get("smoothness") in ROUGH_SMOOTHNESS
+    )
 
 
 def _search_radii(scoring_config: dict) -> tuple[float, float, float]:
@@ -83,12 +88,19 @@ async def extract_features(
     # road_character <- the candidate's source way tags (always available when
     # the source road resolved; degraded only if its tags went missing).
     tags = road_tags.get(candidate.source_way_id)
+    rough = False
     if tags is None:
         road = FeatureValue(None, False)
     else:
         road = FeatureValue(
             compute_road_score(tags, scoring_config["features"]["road_character"]), True
         )
+        rough = road_is_rough(tags)
+
+    # remoteness <- inverse local drivable-road density within radius_m.
+    rcfg = scoring_config["features"]["remoteness"]
+    local_m = await store.local_road_length_m(lon, lat, rcfg["radius_m"])
+    remoteness = FeatureValue(local_m, True)
 
     # flatness <- slope (tile fetch may fail -> unavailable for this candidate)
     try:
@@ -121,8 +133,10 @@ async def extract_features(
             "tree_cover": forest,
             "solitude": solitude,
             "road_character": road,
+            "remoteness": remoteness,
         },
         near_campsite=near_campsite,
+        rough_road=rough,
     )
 
 

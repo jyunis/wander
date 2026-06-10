@@ -18,6 +18,7 @@ FEATURE_NAMES: tuple[str, ...] = (
     "tree_cover",
     "solitude",
     "road_character",
+    "remoteness",
 )
 
 
@@ -64,6 +65,7 @@ class CandidateFeatures:
     candidate: Candidate
     features: dict[str, FeatureValue]
     near_campsite: bool = False
+    rough_road: bool = False  # informational flag (4WD/rough), not a score input
 
 
 @dataclass(frozen=True)

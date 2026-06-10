@@ -24,7 +24,7 @@ Normalization conventions (every feature maps a raw value -> [0, 1]):
 
 from __future__ import annotations
 
-SCORING_CONFIG_VERSION = 2
+SCORING_CONFIG_VERSION = 3
 
 DEFAULT_SCORING_PARAMS: dict = {
     "version": SCORING_CONFIG_VERSION,
@@ -73,13 +73,26 @@ DEFAULT_SCORING_PARAMS: dict = {
             # A road named/operated as a Forest Service road counts at least
             # this much even if its class is humbler (service/unclassified FRs).
             "forest_named_score": 1.0,
-            # Roughness: the tow vehicle has 4WD + decent teardrop clearance, so this is
-            # a MILD nudge only — ordinary unpaved/gravel/dirt (the target forest
-            # roads) get NO penalty; only genuinely rough/impassable is dinged.
-            "rough": {
-                "fourwd_factor": 0.9,  # 4wd_only=yes or tracktype=grade5
-                "impassable_factor": 0.8,  # smoothness very_bad/horrible/impassable
-            },
+            # NOTE: roughness no longer penalizes the score — 4WD + decent
+            # clearance means rough access should INCREASE hits, not cost them.
+            # It is surfaced as an informational `rough` flag instead (FC-4).
+        },
+        # remoteness <- inverse local road density. Few/short drivable roads
+        # within `radius_m` of the candidate => more isolated. exp(-L/decay)
+        # over road-meters L: L=0 -> 1 (no roads nearby), L=decay -> ~0.37.
+        # This is the signal that separates a quiet dead-end spur from a forest
+        # road next to a busy boat launch (both score road_character ~1.0).
+        "remoteness": {
+            "input": "local_road_m",
+            "shape": "distance_decay",
+            "decay_m": 2500.0,
+            "radius_m": 1500.0,
         },
     },
 }
+
+# Road tags that warrant a "rough / high-clearance" flag (informational only;
+# does NOT reduce the score). Ordinary unpaved/gravel/dirt is normal for forest
+# roads and is NOT flagged.
+ROUGH_TRACKTYPES = {"grade4", "grade5"}
+ROUGH_SMOOTHNESS = {"bad", "very_bad", "horrible", "very_horrible", "impassable"}

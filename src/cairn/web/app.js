@@ -69,6 +69,7 @@ const BASEMAPS = [
 
 const FEATURE_LABELS = {
   road_character: "Forest road",
+  remoteness: "Remoteness",
   solitude: "Solitude",
   flatness: "Flatness",
   water_proximity: "Water",
@@ -416,13 +417,16 @@ function showBreakdown(p) {
     })
     .join("");
   const roadPct = p.road_score == null ? "—" : Math.round(p.road_score * 100) + "%";
+  const localKm = p.local_road_m == null ? "—" : (p.local_road_m / 1000).toFixed(1) + " km";
+  const rough = p.rough ? ` <span class="rough-badge">⚠ rough / 4WD</span>` : "";
   const raw =
-    `road ${roadPct} · slope ${fmt(p.slope_deg, "°")} · water ${fmt(p.dist_water_m, " m")} · ` +
-    `forest ${fmt(p.dist_forest_m, " m")} · solitude ${fmt(p.dist_solitude_m, " m")}` +
+    `road ${roadPct} · ${localKm} road within 1.5 km · slope ${fmt(p.slope_deg, "°")} · ` +
+    `water ${fmt(p.dist_water_m, " m")} · forest ${fmt(p.dist_forest_m, " m")} · ` +
+    `solitude ${fmt(p.dist_solitude_m, " m")}` +
     (p.near_campsite ? " · near a known campsite" : "");
   body.innerHTML =
     rows +
-    `<div class="bd-total">Total: ${p.total.toFixed(3)} (rank #${p.rank})</div>` +
+    `<div class="bd-total">Total: ${p.total.toFixed(3)} (rank #${p.rank})${rough}</div>` +
     `<div class="bd-raw">${raw}</div>` +
     `<div class="bd-raw">${CONFIG.disclaimer}</div>`;
   $("breakdown").classList.remove("hidden");

@@ -189,12 +189,13 @@ class RunService:
 
 def _feature_row(cid: int, cf: CandidateFeatures) -> tuple:
     f = cf.features
-    fl, wa, fo, so, rd = (
+    fl, wa, fo, so, rd, rm = (
         f["flatness"],
         f["water_proximity"],
         f["tree_cover"],
         f["solitude"],
         f["road_character"],
+        f["remoteness"],
     )
     return (
         cid,
@@ -209,6 +210,8 @@ def _feature_row(cid: int, cf: CandidateFeatures) -> tuple:
         1 if cf.near_campsite else 0,
         rd.value,
         0 if rd.available else 1,
+        rm.value,
+        1 if cf.rough_road else 0,
     )
 
 

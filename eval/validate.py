@@ -71,18 +71,29 @@ def main():
     print(f"run {rid}: {gj['run']['candidate_count']} scored, "
           f"{gj['run']['distinct_count']} distinct sites\n")
 
+    # Match each known site to the BEST-RANKED candidate within MATCH_M — the
+    # right question is "did Cairn rank *some* candidate near this site highly",
+    # not "what's the geometrically nearest point" (which may be on a different,
+    # worse road that happens to pass closer).
+    MATCH_M = 150.0
     pcts = []
     for s in sorted(known, key=lambda x: (x["stars"] == "?", x["stars"]), reverse=True):
-        best = min(feats, key=lambda f: meters(
-            s["lat"], s["lon"], f["geometry"]["coordinates"][1],
-            f["geometry"]["coordinates"][0]))
-        d = meters(s["lat"], s["lon"], best["geometry"]["coordinates"][1],
-                   best["geometry"]["coordinates"][0])
+        near = [
+            f for f in feats
+            if meters(s["lat"], s["lon"], f["geometry"]["coordinates"][1],
+                      f["geometry"]["coordinates"][0]) <= MATCH_M
+        ]
+        if not near:
+            print(f"  {s['stars']:>2}* {s['code']:<5} {s['name'][:22]:<22} "
+                  f"no candidate within {MATCH_M:.0f} m")
+            continue
+        best = min(near, key=lambda f: f["properties"]["rank"])
         p = best["properties"]
         pct = 100 * p["rank"] / n
         pcts.append(pct)
         print(f"  {s['stars']:>2}* {s['code']:<5} {s['name'][:22]:<22} "
-              f"near {d:4.0f}m  rank {p['rank']:>4}/{n} (top {pct:4.1f}%) "
+              f"best-within-{MATCH_M:.0f}m: rank {p['rank']:>4}/{n} (top {pct:4.1f}%) "
+              f"road={p.get('road_score')} remote_km={(p.get('local_road_m') or 0)/1000:.1f} "
               f"distinct={p['distinct']}")
     pcts.sort()
     med = pcts[len(pcts) // 2] if pcts else float("nan")
