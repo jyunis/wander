@@ -820,35 +820,37 @@ function updateLandHint() {
 // Bind the "why this score" breakdown to a scored marker as a map popup, and
 // fill in the nearest-campground line once the popup opens (lazy — TLC-3).
 function bindBreakdown(layer, p, lat, lon) {
-  layer.bindPopup(breakdownHtml(p, lat, lon), {
+  // Bind a persistent DOM element (not a string/function): the expand toggle and
+  // the lazy nearest-campground line mutate it in place, and popup.update() only
+  // reflows — it never re-renders the content. (Re-rendering on click removed the
+  // button mid-event and let the tap reach the map, closing the popup.)
+  const el = document.createElement("div");
+  el.innerHTML = breakdownHtml(p, lat, lon);
+  layer.bindPopup(el, {
     className: "bd-popup",
     maxWidth: 300,
     maxHeight: 460,
     autoPanPadding: [24, 24],
   });
-  // The per-feature readout is collapsed under a "Why this score" toggle; the
-  // nearest-campground line fills lazily. Both re-set the whole popup content so
-  // it reflows (an in-place DOM edit wouldn't resize the popup), re-wiring the
-  // toggle each render. State persists across re-renders via the closure.
   layer.on("popupopen", (e) => {
     const popup = e.popup;
-    const state = { expanded: false, nearbyHtml: "" };
-    const render = () => {
-      popup.setContent(breakdownHtml(p, lat, lon, state));
-      // Only one breakdown popup is open at a time, so find its toggle in the
-      // document (more robust than popup.getElement across Leaflet versions).
-      const btn = document.querySelector(".bd-popup .bd-toggle");
-      if (btn) {
-        btn.onclick = () => {
-          state.expanded = !state.expanded;
-          render();
-        };
-      }
-    };
-    render();
+    const btn = el.querySelector(".bd-toggle");
+    const details = el.querySelector(".bd-details");
+    if (btn && details) {
+      btn.onclick = (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const collapsed = details.classList.toggle("collapsed");
+        btn.textContent = (collapsed ? "▸" : "▾") + " Why this score";
+        popup.update(); // reflow to fit; the element (and its state) is preserved
+      };
+    }
     nearbyCampgroundHtml(lat, lon).then((near) => {
-      state.nearbyHtml = near;
-      render();
+      const n = near && el.querySelector(".bd-nearby");
+      if (n) {
+        n.innerHTML = near;
+        popup.update();
+      }
     });
   });
 }
@@ -882,15 +884,13 @@ function breakdownHtml(p, lat, lon, { nearbyHtml = "", expanded = false } = {}) 
     `slope ${fmt(p.slope_deg, "°")} · water ${fmt(p.dist_water_m, " m")} · ` +
     `forest ${fmt(p.dist_forest_m, " m")} · solitude ${fmt(p.dist_solitude_m, " m")}` +
     (p.near_campsite ? " · near a known campsite" : "");
-  const details = expanded
-    ? `<div class="bd-details">${rows}<div class="bd-raw">${raw}</div></div>`
-    : "";
   return (
     coordsHtml +
     `<div class="bd-total">Total: ${p.total.toFixed(3)} (rank #${p.rank})${rough}</div>` +
     `<div class="bd-nearby">${nearbyHtml}</div>` +
-    `<button class="bd-toggle">${expanded ? "▾" : "▸"} Why this score</button>` +
-    details +
+    `<button type="button" class="bd-toggle">${expanded ? "▾" : "▸"} Why this score</button>` +
+    `<div class="bd-details${expanded ? "" : " collapsed"}">` +
+    `${rows}<div class="bd-raw">${raw}</div></div>` +
     `<div class="bd-raw bd-disc">${CONFIG.disclaimer}</div>`
   );
 }
