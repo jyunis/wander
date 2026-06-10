@@ -23,6 +23,26 @@ const BASEMAPS = [
     },
   },
   {
+    id: "natgeo",
+    name: "Atlas (Nat Geo)",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/NatGeo_World_Map/MapServer/tile/{z}/{y}/{x}",
+    options: {
+      maxNativeZoom: 16,
+      maxZoom: 19,
+      attribution: "© National Geographic, Esri, and contributors",
+    },
+  },
+  {
+    id: "usgs",
+    name: "USGS Topo (printed)",
+    url: "https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}",
+    options: {
+      maxNativeZoom: 16,
+      maxZoom: 19,
+      attribution: "USGS — The National Map",
+    },
+  },
+  {
     id: "satellite",
     name: "Satellite",
     url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
