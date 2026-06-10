@@ -4,6 +4,7 @@
 let CONFIG = null;
 let map, drawnItems, heatLayer, pinLayer, candidatesLayer, roadsLayer, canvasRenderer, gotoMarker;
 let nearbyCgLayer; // ephemeral markers: the campgrounds near the open scored site
+let selectedMarker = null; // marker for the currently-selected (saved) place
 let baseLayers = []; // current basemap tile layer(s): imagery + optional labels
 let bbox = null; // {min_lon,min_lat,max_lon,max_lat}
 let activeRunId = null;
@@ -863,7 +864,15 @@ function updateLandHint() {
 // Show a scored site's "why this score" in the bottom sheet — a persistent,
 // mobile-friendly panel that stays put while you explore nearby campground
 // popups (easy to return to), instead of a map popup.
+function clearSelectedMarker() {
+  if (selectedMarker) {
+    map.removeLayer(selectedMarker);
+    selectedMarker = null;
+  }
+}
+
 function showSite(p, lat, lon, presetName) {
+  clearSelectedMarker(); // any prior saved-place marker is no longer current
   const body = $("sheet-body");
   body.innerHTML = breakdownHtml(p, lat, lon);
   $("sheet").classList.remove("hidden");
@@ -920,6 +929,7 @@ function wireSiteName(nameEl, lat, lon, presetName) {
 function closeSite() {
   $("sheet").classList.add("hidden");
   nearbyCgLayer.clearLayers();
+  clearSelectedMarker();
   map.closePopup();
 }
 
@@ -1036,12 +1046,28 @@ function renderSavedList() {
 function reopenSaved(s) {
   map.setView([s.lat, s.lon], 14);
   if (s.kind === "campground") {
-    L.popup({ className: "cg-popup", maxWidth: 250 })
-      .setLatLng([s.lat, s.lon])
-      .setContent(campgroundCard(s.payload || { name: s.name }, s.lat, s.lon))
-      .openOn(map);
+    closeSite(); // hide any open sheet (also clears the prior selected marker)
+    const payload = s.payload || { name: s.name };
+    const color = CAMPGROUND_COLORS[payload.category] || "#d96c2c";
+    selectedMarker = L.marker([s.lat, s.lon], {
+      icon: L.divIcon({
+        className: "",
+        html: `<div class="cg-pin cg-near" style="--cg:${color}">🏕️</div>`,
+        iconSize: [22, 22],
+        iconAnchor: [11, 11],
+      }),
+    }).bindPopup(() => campgroundCard(payload, s.lat, s.lon), {
+      maxWidth: 250,
+      className: "cg-popup",
+    });
+    selectedMarker.on("popupclose", clearSelectedMarker);
+    selectedMarker.addTo(map).openPopup();
   } else {
-    showSite(s.payload || {}, s.lat, s.lon, s.name || "");
+    showSite(s.payload || {}, s.lat, s.lon, s.name || ""); // clears the old marker first
+    selectedMarker = L.marker([s.lat, s.lon], {
+      icon: L.divIcon({ className: "", html: `<div class="sel-pin">★</div>`,
+        iconSize: [26, 26], iconAnchor: [13, 13] }),
+    }).addTo(map);
   }
 }
 
