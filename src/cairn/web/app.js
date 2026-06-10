@@ -823,18 +823,37 @@ function bindBreakdown(layer, p, lat, lon) {
   layer.bindPopup(breakdownHtml(p, lat, lon), {
     className: "bd-popup",
     maxWidth: 300,
-    maxHeight: 420,
+    maxHeight: 460,
     autoPanPadding: [24, 24],
   });
-  // Fill the nearest-campground line lazily, then re-set the whole content so
-  // the popup reflows to fit it (editing the DOM in place wouldn't resize it).
-  layer.on("popupopen", async (e) => {
-    const near = await nearbyCampgroundHtml(lat, lon);
-    if (near) e.popup.setContent(breakdownHtml(p, lat, lon, near));
+  // The per-feature readout is collapsed under a "Why this score" toggle; the
+  // nearest-campground line fills lazily. Both re-set the whole popup content so
+  // it reflows (an in-place DOM edit wouldn't resize the popup), re-wiring the
+  // toggle each render. State persists across re-renders via the closure.
+  layer.on("popupopen", (e) => {
+    const popup = e.popup;
+    const state = { expanded: false, nearbyHtml: "" };
+    const render = () => {
+      popup.setContent(breakdownHtml(p, lat, lon, state));
+      // Only one breakdown popup is open at a time, so find its toggle in the
+      // document (more robust than popup.getElement across Leaflet versions).
+      const btn = document.querySelector(".bd-popup .bd-toggle");
+      if (btn) {
+        btn.onclick = () => {
+          state.expanded = !state.expanded;
+          render();
+        };
+      }
+    };
+    render();
+    nearbyCampgroundHtml(lat, lon).then((near) => {
+      state.nearbyHtml = near;
+      render();
+    });
   });
 }
 
-function breakdownHtml(p, lat, lon, nearbyHtml = "") {
+function breakdownHtml(p, lat, lon, { nearbyHtml = "", expanded = false } = {}) {
   const coords = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
   const gmaps = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
   const coordsHtml =
@@ -863,14 +882,16 @@ function breakdownHtml(p, lat, lon, nearbyHtml = "") {
     `slope ${fmt(p.slope_deg, "°")} · water ${fmt(p.dist_water_m, " m")} · ` +
     `forest ${fmt(p.dist_forest_m, " m")} · solitude ${fmt(p.dist_solitude_m, " m")}` +
     (p.near_campsite ? " · near a known campsite" : "");
+  const details = expanded
+    ? `<div class="bd-details">${rows}<div class="bd-raw">${raw}</div></div>`
+    : "";
   return (
-    `<div class="bd-title">Why this score</div>` +
     coordsHtml +
-    rows +
     `<div class="bd-total">Total: ${p.total.toFixed(3)} (rank #${p.rank})${rough}</div>` +
-    `<div class="bd-raw">${raw}</div>` +
     `<div class="bd-nearby">${nearbyHtml}</div>` +
-    `<div class="bd-raw">${CONFIG.disclaimer}</div>`
+    `<button class="bd-toggle">${expanded ? "▾" : "▸"} Why this score</button>` +
+    details +
+    `<div class="bd-raw bd-disc">${CONFIG.disclaimer}</div>`
   );
 }
 

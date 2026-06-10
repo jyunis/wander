@@ -147,8 +147,13 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .bd-popup .leaflet-popup-content { margin: 11px 13px; }
 .bd-popup .leaflet-popup-close-button { color: var(--muted); }
 .bd-popup .leaflet-popup-close-button:hover { color: var(--ink); }
-.bd-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
-  color: var(--muted); margin-bottom: 8px; }
+.bd-toggle { display: block; width: 100%; text-align: left; background: none; border: none;
+  border-top: 1px solid var(--line); color: var(--muted); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer;
+  padding: 9px 0 3px; margin-top: 9px; }
+.bd-toggle:hover { color: var(--ink); }
+.bd-details { margin-top: 3px; }
+.bd-disc { border-top: 1px solid var(--line); padding-top: 8px; }
 .bd-feature { margin: 7px 0; }
 .bd-feature .bd-top { display: flex; justify-content: space-between; font-size: 12.5px; }
 .bd-bar { height: 7px; background: #313942; border-radius: 4px; margin-top: 3px; overflow: hidden; }
