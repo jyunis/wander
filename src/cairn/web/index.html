@@ -73,6 +73,16 @@
         <div id="land-section" hidden>
           <h2>Land <span class="land-sub">(reference only)</span></h2>
           <div id="land-layers" class="layers land-layers"></div>
+          <div id="cg-filters" class="cg-filters" hidden>
+            <div class="cg-filt-title">Campground filters</div>
+            <label><input type="checkbox" id="f-firstcome"> First-come only</label>
+            <label><input type="checkbox" id="f-electric"> Electric</label>
+            <label><input type="checkbox" id="f-water"> Waterfront</label>
+            <label><input type="checkbox" id="f-pets"> Pets OK</label>
+            <label><input type="checkbox" id="f-ada"> ADA</label>
+            <label class="cg-rv">RV ≥ <input type="number" id="f-rv" min="0" step="5"> ft</label>
+            <div id="cg-filt-count" class="cg-filt-count"></div>
+          </div>
           <div id="land-legend" class="land-legend"></div>
           <div id="land-hint" class="land-hint"></div>
           <div id="land-disclaimer" class="disclaimer-mini"></div>
