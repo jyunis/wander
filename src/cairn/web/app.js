@@ -68,10 +68,11 @@ const BASEMAPS = [
 ];
 
 const FEATURE_LABELS = {
+  road_character: "Forest road",
+  solitude: "Solitude",
   flatness: "Flatness",
   water_proximity: "Water",
   tree_cover: "Trees",
-  solitude: "Solitude",
 };
 
 // --- helpers ---------------------------------------------------------------
@@ -414,8 +415,9 @@ function showBreakdown(p) {
       );
     })
     .join("");
+  const roadPct = p.road_score == null ? "—" : Math.round(p.road_score * 100) + "%";
   const raw =
-    `slope ${fmt(p.slope_deg, "°")} · water ${fmt(p.dist_water_m, " m")} · ` +
+    `road ${roadPct} · slope ${fmt(p.slope_deg, "°")} · water ${fmt(p.dist_water_m, " m")} · ` +
     `forest ${fmt(p.dist_forest_m, " m")} · solitude ${fmt(p.dist_solitude_m, " m")}` +
     (p.near_campsite ? " · near a known campsite" : "");
   body.innerHTML =

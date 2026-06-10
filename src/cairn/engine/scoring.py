@@ -53,6 +53,9 @@ def _normalize(shape: str, value: float, params: dict) -> float:
         return math.exp(-value / decay)
     if shape == "trapezoid":
         return _trapezoid(value, params)
+    if shape == "passthrough":
+        # value is already normalized to [0,1] by the feature extractor.
+        return _clamp01(value)
     raise ValueError(f"unknown normalization shape: {shape!r}")
 
 

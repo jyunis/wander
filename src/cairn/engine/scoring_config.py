@@ -24,7 +24,7 @@ Normalization conventions (every feature maps a raw value -> [0, 1]):
 
 from __future__ import annotations
 
-SCORING_CONFIG_VERSION = 1
+SCORING_CONFIG_VERSION = 2
 
 DEFAULT_SCORING_PARAMS: dict = {
     "version": SCORING_CONFIG_VERSION,
@@ -52,6 +52,34 @@ DEFAULT_SCORING_PARAMS: dict = {
             "input": "dist_solitude_m",
             "shape": "linear_increasing",
             "cap_m": 3000.0,
+        },
+        # road_character — how "dispersed-camping-ish" the candidate's source
+        # road is. Computed in features.py from the source way's OSM tags using
+        # the data below; already in [0,1], so the scorer passes it through.
+        # Dominant signal (ground truth: 18/25 drive-in sites on Forest Roads).
+        "road_character": {
+            "input": "road_score",
+            "shape": "passthrough",
+            # base score by highway class (candidates only come from drivable
+            # classes: track / unclassified / service / residential / tertiary).
+            "class_scores": {
+                "track": 1.0,
+                "unclassified": 0.75,
+                "service": 0.5,
+                "residential": 0.25,
+                "tertiary": 0.15,
+                "_default": 0.3,
+            },
+            # A road named/operated as a Forest Service road counts at least
+            # this much even if its class is humbler (service/unclassified FRs).
+            "forest_named_score": 1.0,
+            # Roughness: the tow vehicle has 4WD + decent teardrop clearance, so this is
+            # a MILD nudge only — ordinary unpaved/gravel/dirt (the target forest
+            # roads) get NO penalty; only genuinely rough/impassable is dinged.
+            "rough": {
+                "fourwd_factor": 0.9,  # 4wd_only=yes or tracktype=grade5
+                "impassable_factor": 0.8,  # smoothness very_bad/horrible/impassable
+            },
         },
     },
 }

@@ -17,6 +17,7 @@ FEATURE_NAMES: tuple[str, ...] = (
     "water_proximity",
     "tree_cover",
     "solitude",
+    "road_character",
 )
 
 
