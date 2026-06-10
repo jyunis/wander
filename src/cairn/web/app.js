@@ -819,7 +819,11 @@ function campgroundLink(p) {
       ? "Recreation.gov"
       : /dnr\.state\.mn\.us/.test(url)
         ? "MN DNR"
-        : "site";
+        : /goingtocamp/.test(url)
+          ? "GoingToCamp"
+          : /dnr\.wisconsin\.gov/.test(url)
+            ? "WI DNR"
+            : "site";
     return { href: url, label: `View on ${src}` };
   }
   if (/Federal/.test(p.category || "")) {
@@ -827,6 +831,10 @@ function campgroundLink(p) {
       href: "https://www.recreation.gov/search?inventory_type=camping",
       label: "Search Recreation.gov",
     };
+  }
+  // Wisconsin state-park/forest sites (OSM-sourced) reserve via GoingToCamp.
+  if ((p.meta || {}).state === "WI") {
+    return { href: "https://wisconsin.goingtocamp.com/", label: "Reserve · GoingToCamp" };
   }
   const isForest = p.category === "State Forest" || /state forest/i.test(p.name || "");
   return isForest

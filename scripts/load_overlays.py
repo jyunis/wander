@@ -27,12 +27,14 @@ Env: OVERLAYS_DB (default /data/overlays.db).
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 import re
 import sqlite3
 import tempfile
 import time
+import urllib.parse
 import urllib.request
 import zipfile
 
@@ -308,6 +310,7 @@ def load_campgrounds(con, states) -> int:
             print(f"[campground]   {fn.__name__} SKIPPED: {exc}", flush=True)
 
     run(load_ridb_campgrounds, con, states)  # federal, all states
+    run(load_curated_campgrounds, con)  # hand-curated gap-fill (all states)
     for st in states:
         for fn in STATES[st]["campground_loaders"]:  # bespoke per state DNR
             run(fn, con)
@@ -422,6 +425,47 @@ def load_ridb_campgrounds(con, states) -> int:
     return total
 
 
+CURATED_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "campgrounds_extra.csv")
+
+
+def load_curated_campgrounds(con) -> int:
+    """Hand-curated campgrounds that OSM/authoritative feeds miss — e.g. WI
+    state-forest sites not yet mapped in OSM. A small tracked CSV in the repo,
+    merged into the campground layer with meta.source='curated'. You control it,
+    it adds zero runtime deps, and it's transparent in git. The proper long-term
+    fix for any one row is mapping it in OSM (then it flows in on its own); this
+    just guarantees coverage in the meantime."""
+    if not os.path.exists(CURATED_CSV):
+        return 0
+    rows = []
+    with open(CURATED_CSV, newline="", encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            try:
+                lat, lon = float(r["lat"]), float(r["lon"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            meta = _compact({
+                "sites": int(r["sites"]) if (r.get("sites") or "").strip() else 0,
+                "electric": _truthy(r.get("electric")),
+                "ada": _truthy(r.get("ada")),
+                "pets": _truthy(r.get("pets")),
+            })
+            if (r.get("reservable") or "").strip():  # keep explicit (False = first-come)
+                meta["reservable"] = _truthy(r.get("reservable"))
+            if (r.get("state") or "").strip():
+                meta["state"] = r["state"].strip()  # UI picks the reservation fallback
+            meta["source"] = "curated"
+            rows.append((
+                (r.get("category") or "").strip() or None,
+                (r.get("name") or "").strip() or "Campground",
+                (r.get("url") or "").strip() or None,
+                meta, f"POINT({lon} {lat})", 4326,
+            ))
+    _insert_points(con, CAMPGROUND_LAYER, rows)
+    print(f"[campground]   curated: {len(rows)}", flush=True)
+    return len(rows)
+
+
 def load_shp(con, layer, zip_url, base, cat_field, name_field, srid) -> int:
     print(f"[{layer}] downloading {zip_url.rsplit('/', 1)[-1]} …", flush=True)
     with tempfile.TemporaryDirectory() as td:
@@ -484,13 +528,158 @@ def load_usfs(con, bbox) -> int:
     return len(rows)
 
 
+def load_arcgis_features(con, layer, base_url, where, name_field) -> int:
+    """Append polygon features from an ArcGIS REST layer (f=geojson) into
+    `layer`. Pages by OBJECTID (works on MapServer + FeatureServer alike, and is
+    needed where a single query exceeds the server's transfer limit). Name is
+    title-cased; category is left null (boundary layers render by layer, not
+    category). Best-effort: an unreachable service appends nothing. The caller
+    clears the layer once before any source, so a mid-run failure can't drop
+    features another state already loaded into the same layer."""
+    nf = name_field.lower()
+    print(f"[{layer}] querying ArcGIS {base_url.rsplit('/services/', 1)[-1]} …", flush=True)
+    rows: list = []
+    last = 0
+    while True:
+        params = urllib.parse.urlencode({
+            "where": f"({where}) AND OBJECTID>{last}",
+            "outFields": f"{name_field},OBJECTID",
+            "orderByFields": "OBJECTID",
+            "resultRecordCount": 1000,
+            "returnGeometry": "true",
+            "outSR": 4326,
+            "f": "geojson",
+        })
+        try:
+            req = urllib.request.Request(f"{base_url}/query?{params}", headers=UA)
+            with urllib.request.urlopen(req, timeout=120) as r:
+                fc = json.load(r)
+        except Exception as exc:  # best-effort: skip if the service is unreachable
+            print(f"[{layer}] SKIPPED (ArcGIS error: {exc})", flush=True)
+            return 0
+        feats = fc.get("features", [])
+        if not feats:
+            break
+        for feat in feats:
+            geom = feat.get("geometry")
+            props = {k.lower(): v for k, v in (feat.get("properties") or {}).items()}
+            oid = props.get("objectid")
+            if oid is not None:
+                last = max(last, int(oid))
+            if not geom or not geom.get("coordinates"):
+                continue
+            name = props.get(nf)
+            rows.append((None, str(name).title() if name else None, shape(geom).wkt, 4326))
+        if len(feats) < 1000 or oid is None:  # last page (or no OBJECTID to page on)
+            break
+    _insert(con, layer, rows)
+    print(f"[{layer}] loaded {len(rows)} features", flush=True)
+    return len(rows)
+
+
+OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+
+
+def _overpass(query: str) -> dict:
+    data = urllib.parse.urlencode({"data": query}).encode()
+    req = urllib.request.Request(OVERPASS_URL, data=data, headers=UA)
+    with urllib.request.urlopen(req, timeout=180) as r:
+        return json.load(r)
+
+
+def _boundary_containing(con, lon: float, lat: float):
+    """The state_park/state_forest boundary polygon containing a point, or None
+    -> (layer, name). Categorizes an OSM campground by the land it sits on (and
+    drops private campgrounds outside state land). Needs the boundary layers
+    loaded first — main() loads them before campgrounds."""
+    return con.execute(
+        "SELECT layer, name FROM overlay_features "
+        "WHERE layer IN ('state_park','state_forest') AND ROWID IN ("
+        "  SELECT ROWID FROM SpatialIndex WHERE f_table_name='overlay_features' "
+        "  AND f_geometry_column='geom' AND search_frame=MakePoint(?, ?, 4326)) "
+        "AND ST_Contains(geom, MakePoint(?, ?, 4326)) LIMIT 1",
+        (lon, lat, lon, lat),
+    ).fetchone()
+
+
+def osm_state_park_campgrounds(iso: str):
+    """Campground loader for a state with no authoritative campground GIS (e.g.
+    WI). Pulls tourism=camp_site from OSM (Overpass) within the state, keeps the
+    campground-LEVEL features — a polygon footprint (way), or a node named
+    '…campground' — so individual pitches/shelters are dropped, and keeps only
+    those inside a loaded state-park/forest boundary, which also gives the
+    category. Amenities are best-effort from sparse OSM tags; the UI uses
+    meta.state to pick the right reservation fallback link."""
+    code = iso.split("-")[-1]
+    cats = {"state_park": "State Park", "state_forest": "State Forest"}
+    query = (
+        "[out:json][timeout:120];"
+        f'area["ISO3166-2"="{iso}"]->.a;'
+        '(node["tourism"="camp_site"](area.a);way["tourism"="camp_site"](area.a););'
+        "out center tags;"
+    )
+
+    def _load(con) -> int:
+        print(f"[campground] OSM {iso} (state park/forest) …", flush=True)
+        try:
+            els = _overpass(query).get("elements", [])
+        except Exception as exc:
+            print(f"[campground]   OSM {iso} SKIPPED: {exc}", flush=True)
+            return 0
+        rows = []
+        for el in els:
+            tags = el.get("tags") or {}
+            name = tags.get("name")
+            # Campground level only: a polygon footprint, or a node named
+            # "…campground" — drops individual pitches/shelters/numbered sites.
+            if el.get("type") != "way" and not (name and re.search(r"camp\s?ground", name, re.I)):
+                continue
+            lat = el.get("lat") or (el.get("center") or {}).get("lat")
+            lon = el.get("lon") or (el.get("center") or {}).get("lon")
+            if lat is None or lon is None:
+                continue
+            b = _boundary_containing(con, lon, lat)
+            if not b:
+                continue  # only campgrounds on state park/forest land
+            power = str(tags.get("power_supply", "")).lower()
+            try:
+                sites = int(float(tags.get("capacity")))
+            except (TypeError, ValueError):
+                sites = 0
+            meta = _compact({
+                "sites": sites,
+                "electric": power not in ("", "no", "none") or tags.get("electricity") == "yes",
+                "ada": tags.get("wheelchair") == "yes",
+                "pets": tags.get("dog") == "yes",
+            })
+            meta["state"] = code  # UI picks the reservation fallback by state
+            meta["source"] = "osm"
+            url = tags.get("website") or tags.get("contact:website") or None
+            cg_name = name or (f"{b[1]} Campground" if b[1] else "Campground")
+            rows.append((cats[b[0]], cg_name, url, meta, f"POINT({lon} {lat})", 4326))
+        _insert_points(con, CAMPGROUND_LAYER, rows)
+        print(f"[campground]   OSM {iso}: {len(rows)}", flush=True)
+        return len(rows)
+
+    _load.__name__ = f"osm_campgrounds_{code}"
+    return _load
+
+
+# WI DNR managed-property layer: all DNR-owned properties (parks, forests, rec
+# areas, wildlife areas, …) keyed by PROP_NAME — there's no per-type service, so
+# parks vs forests are selected by name. (data-wi-dnr.opendata.arcgis.com backs
+# onto this dnrmaps service.)
+WI_MGD = "https://dnrmaps.wi.gov/arcgis/rest/services/LF_DML/LF_DNR_MGD_PROPERTY_WTM_Ext/MapServer/6"
+
+
 # --- per-state source registry ---------------------------------------------
 # Adding a state = adding a block here. Serving (store/API/UI) is state-blind;
 # every source for a layer unions under one shared layer id. Federal sources
 # (RIDB campgrounds, USFS forests) are national datasets that need only the
 # `bbox` (USFS envelope) and the 2-letter code (RIDB). State boundary SHPs and
 # DNR campgrounds are bespoke per state's open-data product.
-#   SHP source tuple: (layer, zip_url, shp_basename, cat_field|None, name_field|None, srid)
+#   SHP source tuple:    (layer, zip_url, shp_basename, cat_field|None, name_field|None, srid)
+#   ArcGIS source tuple: (layer, rest_layer_url, where_clause, name_field)
 STATES: dict[str, dict] = {
     "MN": {
         "name": "Minnesota",
@@ -507,14 +696,24 @@ STATES: dict[str, dict] = {
              f"{GDRS}/us_mn_state_dnr/bdry_dnr_lrs_prk/shp_bdry_dnr_lrs_prk.zip",
              "dnr_stat_plan_areas_prk", "AREA_TYPE", "AREA_NAME", 26915),
         ],
+        "arcgis_sources": [],
         "campground_loaders": [load_state_forest_campgrounds, load_state_park_campgrounds],
     },
     "WI": {
         "name": "Wisconsin",
         "bbox": (-92.9, 42.4, -86.8, 47.1),  # covers Chequamegon-Nicolet NF
-        # TODO(phase 2): WI DNR park/forest boundary SHPs + state campground loaders.
         "shp_sources": [],
-        "campground_loaders": [],
+        # WI has no shapefile/per-type service — parks & forests are rows in one
+        # managed-property layer, selected by PROP_NAME.
+        "arcgis_sources": [
+            ("state_park", WI_MGD,
+             "PROP_NAME LIKE '%STATE PARK%' OR PROP_NAME LIKE '%RECREATION AREA%'", "PROP_NAME"),
+            ("state_forest", WI_MGD, "PROP_NAME LIKE '%STATE FOREST%'", "PROP_NAME"),
+        ],
+        # WI DNR publishes NO campground GIS layer (data is GoingToCamp-only), so
+        # state-park/forest campgrounds come from OSM, categorized by the
+        # boundary they sit in. Federal campgrounds still come from RIDB.
+        "campground_loaders": [osm_state_park_campgrounds("US-WI")],
     },
 }
 
@@ -534,17 +733,27 @@ def main() -> None:
     total = 0
 
     # Polygon boundary layers, unioned across states under shared layer ids.
-    # Clear each selected layer ONCE, then append every state's sources.
+    # Clear each selected layer ONCE (across both SHP + ArcGIS sources), then
+    # append every state's sources — SHP first, so an ArcGIS failure can't drop
+    # features a shapefile source already loaded into the same layer.
     shp = [
         src
         for st in states
         for src in STATES[st]["shp_sources"]
         if not only or src[0] in only
     ]
-    for layer in dict.fromkeys(src[0] for src in shp):
+    arc = [
+        src
+        for st in states
+        for src in STATES[st]["arcgis_sources"]
+        if not only or src[0] in only
+    ]
+    for layer in dict.fromkeys(src[0] for src in [*shp, *arc]):
         clear_layer(con, layer)
     for src in shp:
         total += load_shp(con, *src)
+    for src in arc:
+        total += load_arcgis_features(con, *src)
 
     # National forests — one USFS query over the union of state envelopes
     # (a single query avoids returning a cross-border forest twice).
