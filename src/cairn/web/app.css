@@ -133,8 +133,8 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .cg-pop { min-width: 150px; }
 .cg-cat { color: #888; font-size: 11px; }
 .cg-badges { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 6px; }
-.cg-badges span { background: #eef1ee; border-radius: 4px; padding: 1px 6px; font-size: 11px;
-                  white-space: nowrap; }
+.cg-badges span { background: #eef1ee; color: #2a2f35; border-radius: 4px; padding: 1px 6px;
+                  font-size: 11px; white-space: nowrap; }
 .cg-facts { font-size: 11.5px; color: #555; margin-top: 5px; }
 .cg-acts { color: #2e7d32; }
 .cg-blurb { font-size: 11px; color: #666; margin-top: 6px; max-height: 80px; overflow-y: auto;
@@ -231,11 +231,16 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .bd-nearby { margin-top: 9px; }
 .bd-nearby:empty { display: none; }
 .bd-near-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
-  color: var(--muted); margin-bottom: 3px; }
-.bd-cg { font-size: 12px; padding: 3px 4px; margin: 0 -4px; border-radius: 4px;
-  cursor: pointer; color: #cfe6cf; }
-.bd-cg:hover { background: rgba(255, 255, 255, 0.06); color: #fff; }
-.bd-cg-am { margin-left: 3px; letter-spacing: 1px; }
+  color: var(--muted); margin-bottom: 5px; }
+.bd-cg { padding: 7px 9px; margin: 5px 0 0; border-radius: 7px; cursor: pointer;
+  background: rgba(255, 255, 255, 0.035); border: 1px solid transparent; }
+.bd-cg:hover { background: rgba(255, 255, 255, 0.07); border-color: var(--line); }
+.bd-cg-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.bd-cg-name { font-size: 12.5px; font-weight: 600; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bd-cg-dist { flex: none; font-size: 11px; color: var(--muted);
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bd-cg .cg-badges { margin-top: 6px; }
 .cg-pin.cg-near { box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--accent),
   0 1px 4px rgba(0, 0, 0, 0.55); }
 .sel-pin { width: 26px; height: 26px; line-height: 26px; text-align: center; font-size: 19px;

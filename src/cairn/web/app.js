@@ -795,18 +795,11 @@ function campgroundCard(p, lat, lon) {
       : "";
   const badges = [];
   if (m.sites) badges.push(`${m.sites} sites`);
-  if (typeof m.reservable === "boolean") badges.push(m.reservable ? "✅ reservable" : "🪧 first-come");
-  if (m.electric) badges.push("🔌 electric");
-  if (m.max_rv_ft) badges.push(`🚐 ${m.max_rv_ft} ft`);
-  if (m.water_front) badges.push("💧 waterfront");
-  if (m.pets) badges.push("🐾 pets");
-  if (m.ada) badges.push("♿ ADA");
-  if (m.fee) badges.push("💲 " + esc(m.fee).replace(/\s*per night/i, "/night"));
+  badges.push(...amenityBadges(m));
+  if (m.fee) badges.push("💲 " + String(m.fee).replace(/\s*per night/i, "/night"));
 
   const row = (cls, txt) => (txt ? `<div class="${cls}">${txt}</div>` : "");
-  const badgeRow = badges.length
-    ? `<div class="cg-badges">${badges.map((b) => `<span>${b}</span>`).join("")}</div>`
-    : "";
+  const badgeRow = badgeRowHtml(badges);
   const types = (m.site_types || []).map(esc).join(" · ");
   const acts = (m.activities || []).map(esc).join(" · ");
 
@@ -933,16 +926,26 @@ function closeSite() {
   map.closePopup();
 }
 
-// Amenity icons for a campground's meta (electric, waterfront, pets, ADA, RV).
-function amenityChips(meta) {
+// Emoji+label amenity badges from a campground's meta — the shared vocabulary
+// used by both the map infowindow (campgroundCard) and the nearby-campground
+// list, so a campground reads identically in either place.
+function amenityBadges(meta) {
   const m = meta || {};
-  return (
-    (m.electric ? "⚡" : "") +
-    (m.water_front ? "💧" : "") +
-    (m.pets ? "🐾" : "") +
-    (m.ada ? "♿" : "") +
-    (m.max_rv_ft ? "🚐" : "")
-  );
+  const b = [];
+  if (typeof m.reservable === "boolean") b.push(m.reservable ? "✅ reservable" : "🪧 first-come");
+  if (m.electric) b.push("🔌 electric");
+  if (m.max_rv_ft) b.push(`🚐 ${m.max_rv_ft} ft`);
+  if (m.water_front) b.push("💧 waterfront");
+  if (m.pets) b.push("🐾 pets");
+  if (m.ada) b.push("♿ ADA");
+  return b;
+}
+
+// Wrap badge strings in the shared pill markup (empty string if none).
+function badgeRowHtml(badges) {
+  return badges.length
+    ? `<div class="cg-badges">${badges.map((b) => `<span>${esc(b)}</span>`).join("")}</div>`
+    : "";
 }
 
 // --- saved places (favorites; server-side so they sync laptop↔phone) -------
@@ -1106,10 +1109,12 @@ async function loadNearbyCampgrounds(lat, lon, body) {
     list
       .map((cg, i) => {
         const mi = (cg.distance_m / 1609.34).toFixed(1);
-        const am = amenityChips(cg.meta);
         return (
-          `<div class="bd-cg" data-i="${i}">🏕 <b>${esc(cg.name)}</b> · ${mi} mi` +
-          (am ? ` <span class="bd-cg-am">${am}</span>` : "") +
+          `<div class="bd-cg" data-i="${i}">` +
+          `<div class="bd-cg-head">` +
+          `<span class="bd-cg-name">🏕 ${esc(cg.name)}</span>` +
+          `<span class="bd-cg-dist">${mi} mi</span></div>` +
+          badgeRowHtml(amenityBadges(cg.meta)) +
           `</div>`
         );
       })
