@@ -6,8 +6,8 @@ typed engine errors to HTTP codes, and returns `failed` runs as status+reason
 (not a 500, TLC-10). Every results response carries the TLC-3 disclaimer.
 
 Endpoints: POST /score, GET /runs, GET /runs/{id}, GET /runs/{id}/geojson,
-GET /runs/{id}/roads, GET /overlays, GET /overlays/{layer}, GET /config,
-GET /health, and the static UI at / (mounted if web/ exists).
+GET /runs/{id}/roads, GET /overlays, GET /overlays/{layer}, GET /geocode,
+GET /config, GET /health, and the static UI at / (mounted if web/ exists).
 """
 
 from __future__ import annotations
@@ -23,10 +23,11 @@ from pydantic import BaseModel, Field
 
 from cairn import DISCLAIMER, __version__
 from cairn.clients.mvum import MvumClient
+from cairn.clients.nominatim import GeocodeClient
 from cairn.clients.overpass import OverpassClient
 from cairn.clients.usa_structures import StructuresClient
 from cairn.config import get_settings
-from cairn.errors import RunNotFound, ValidationError
+from cairn.errors import GeocodeError, RunNotFound, ValidationError
 from cairn.logging import configure
 from cairn.service import RunService
 from cairn.store import Store
@@ -47,12 +48,14 @@ async def lifespan(app: FastAPI):
     overpass = OverpassClient(settings)
     mvum = MvumClient(settings) if settings.mvum_enabled else None
     structures = StructuresClient(settings) if settings.structures_enabled else None
+    geocoder = GeocodeClient(settings) if settings.geocode_enabled else None
     app.state.settings = settings
     app.state.store = store
     app.state.overlays = overlays
     app.state.overpass = overpass
     app.state.mvum = mvum
     app.state.structures = structures
+    app.state.geocoder = geocoder
     app.state.service = RunService(
         store, settings, overpass=overpass, mvum=mvum, structures=structures
     )
@@ -73,6 +76,8 @@ async def lifespan(app: FastAPI):
             await mvum.aclose()
         if structures is not None:
             await structures.aclose()
+        if geocoder is not None:
+            await geocoder.aclose()
         await overlays.close()
         await store.close()
 
@@ -204,6 +209,25 @@ async def get_overlay(layer: str, request: Request, bbox: str) -> dict:
     except ValueError:
         raise ValidationError("bbox must be 'min_lon,min_lat,max_lon,max_lat'") from None
     return await overlays.query(layer, Bbox(*parts))
+
+
+@app.get("/geocode")
+async def geocode(request: Request, q: str, viewbox: str | None = None) -> dict:
+    """Forward-geocode a place name via Nominatim (keyless). Returns
+    {results: [{display_name, lat, lon, bbox?}]}. 404 if geocoding is disabled;
+    502 if Nominatim is unreachable/errored."""
+    geocoder: GeocodeClient | None = request.app.state.geocoder
+    if geocoder is None:
+        return JSONResponse(status_code=404, content={"error": "GeocodeDisabled"})
+    if not q or not q.strip():
+        raise ValidationError("q (place name) is required")
+    try:
+        results = await geocoder.search(q, viewbox=viewbox)
+    except GeocodeError as exc:
+        return JSONResponse(
+            status_code=502, content={"error": type(exc).__name__, "detail": str(exc)}
+        )
+    return {"results": results}
 
 
 @app.get("/config")

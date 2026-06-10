@@ -119,6 +119,13 @@ class Settings(BaseSettings):
         "USA_Structures_View/FeatureServer/0/query"
     )
     structures_cache_ttl_s: int = 30 * 24 * 3600
+    # Nominatim forward geocoder (OSM, keyless) — turns a place name in the
+    # jump-to field into coordinates. Proxied server-side so the request carries
+    # Cairn's descriptive User-Agent per the Nominatim usage policy (a browser
+    # can't set one). Occasional single-user lookups, well within 1 req/s.
+    geocode_enabled: bool = True
+    geocode_url: str = "https://nominatim.openstreetmap.org/search"
+    geocode_limit: int = 5
     user_agent: str = (
         "cairn/0.1 (self-hosted campsite scorer; +https://cairn.home.arpa)"
     )

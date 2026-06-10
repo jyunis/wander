@@ -264,16 +264,57 @@ function parseLatLon(s) {
   return [lat, lon];
 }
 
-function gotoCoords() {
+async function gotoCoords() {
   const input = $("goto-input");
-  const ll = parseLatLon(input.value);
-  if (!ll) {
-    input.classList.add("bad");
+  const raw = (input.value || "").trim();
+  if (!raw) return;
+  input.classList.remove("bad");
+
+  // Fast path: a pasted "lat, lon" jumps immediately, no network.
+  const ll = parseLatLon(raw);
+  if (ll) {
+    dropGotoMarker(ll[0], ll[1], `${ll[0].toFixed(6)}, ${ll[1].toFixed(6)}`, 15);
     return;
   }
-  input.classList.remove("bad");
-  const [lat, lon] = ll;
-  map.setView([lat, lon], 15);
+
+  // Otherwise treat it as a place name and geocode (Nominatim, via the API).
+  // Bias toward the current view so "state park" near you ranks first.
+  const b = map.getBounds();
+  const viewbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].join(",");
+  input.classList.add("loading");
+  setStatus(`Searching “${raw}”…`);
+  try {
+    const r = await fetch(
+      `/geocode?q=${encodeURIComponent(raw)}&viewbox=${encodeURIComponent(viewbox)}`
+    );
+    const data = await r.json();
+    const hit = (data.results || [])[0];
+    if (!hit) {
+      input.classList.add("bad");
+      setStatus(`No place found for “${raw}”.`, "err");
+      return;
+    }
+    if (hit.bbox) {
+      // Fit a forest/city extent rather than a fixed zoom.
+      map.fitBounds([[hit.bbox[1], hit.bbox[0]], [hit.bbox[3], hit.bbox[2]]], {
+        padding: [20, 20],
+        maxZoom: 15,
+      });
+    } else {
+      map.setView([hit.lat, hit.lon], 13);
+    }
+    dropGotoMarker(hit.lat, hit.lon, hit.display_name || raw, null);
+    setStatus("");
+  } catch {
+    input.classList.add("bad");
+    setStatus("Geocoding failed — check the connection.", "err");
+  } finally {
+    input.classList.remove("loading");
+  }
+}
+
+function dropGotoMarker(lat, lon, label, zoom) {
+  if (zoom != null) map.setView([lat, lon], zoom);
   if (gotoMarker) map.removeLayer(gotoMarker);
   gotoMarker = L.circleMarker([lat, lon], {
     radius: 10,
@@ -282,7 +323,7 @@ function gotoCoords() {
     fill: false,
   })
     .addTo(map)
-    .bindPopup(`${lat.toFixed(6)}, ${lon.toFixed(6)}`)
+    .bindPopup(label)
     .openPopup();
 }
 
