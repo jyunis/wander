@@ -117,11 +117,12 @@ def test_flatness_linear_decreasing():
 
 
 def test_water_trapezoid_shape():
-    # Lakeside curve (v4 params): rise [0,30], plateau [30,150], fall [150,600].
+    # On-the-water curve: rise [0,10], plateau [10,150], fall [150,600].
     for d, expected in [
         (0.0, 0.0),
-        (15.0, 0.5),
-        (30.0, 1.0),
+        (5.0, 0.5),
+        (10.0, 1.0),
+        (14.0, 1.0),  # a boat landing at the shore -> full marks
         (150.0, 1.0),
         (375.0, 0.5),
         (600.0, 0.0),
