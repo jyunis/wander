@@ -110,6 +110,11 @@ const FEATURE_LABELS = {
 
 // --- helpers ---------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
+const esc = (s) =>
+  String(s == null ? "" : s).replace(
+    /[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]
+  );
 
 function areaKm2(b) {
   const midLat = ((b.min_lat + b.max_lat) / 2) * (Math.PI / 180);
@@ -647,10 +652,12 @@ async function fetchOverlay(layerId) {
       const p = feat.properties || {};
       if (isPoint) {
         const link = p.url
-          ? `<br><a href="${p.url}" target="_blank" rel="noopener">reserve / info ↗</a>`
+          ? `<a class="cg-link" href="${esc(p.url)}" target="_blank" rel="noopener">` +
+            `View on Recreation.gov ↗</a>`
           : "";
         lyr.bindPopup(
-          `<b>${p.name || "Campground"}</b><br><span class="cg-cat">${p.category || ""}</span>${link}`
+          `<div class="cg-pop"><b>${esc(p.name) || "Campground"}</b>` +
+            `<div class="cg-cat">${esc(p.category)}</div>${link}</div>`
         );
       } else {
         const tip = isOwn
