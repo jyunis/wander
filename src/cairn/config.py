@@ -105,6 +105,15 @@ class Settings(BaseSettings):
         "https://apps.fs.usda.gov/arcx/rest/services/EDW/EDW_MVUM_01/MapServer/1/query"
     )
     mvum_cache_ttl_s: int = 30 * 24 * 3600
+    # FEMA/Oak Ridge USA Structures — national building footprints OSM often
+    # lacks (rural cabins). Public ArcGIS service, no key. Unioned with OSM
+    # buildings for the no-camping-near-houses setback.
+    structures_enabled: bool = True
+    structures_url: str = (
+        "https://services2.arcgis.com/FiaPA4ga0iQKduv3/ArcGIS/rest/services/"
+        "USA_Structures_View/FeatureServer/0/query"
+    )
+    structures_cache_ttl_s: int = 30 * 24 * 3600
     user_agent: str = (
         "cairn/0.1 (self-hosted campsite scorer; +https://cairn.home.arpa)"
     )
