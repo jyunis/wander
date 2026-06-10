@@ -84,6 +84,12 @@ const BOUNDARY_COLORS = {
   state_forest: "#6b8e23",
   state_park: "#b5651d",
 };
+// Campground marker tint by managing tier.
+const CAMPGROUND_COLORS = {
+  "National / Federal": "#2e7d32",
+  "State Park": "#b5651d",
+  "State Forest": "#6b8e23",
+};
 // Below this zoom, ownership parcels are too numerous/tiny to fetch usefully.
 const OWNERSHIP_MIN_ZOOM = 11;
 
@@ -619,15 +625,39 @@ async function fetchOverlay(layerId) {
   else overlayTruncated.delete(layerId);
   if (overlayLayers[layerId]) map.removeLayer(overlayLayers[layerId]);
   const isOwn = layerId === "ownership";
+  const isPoint =
+    (gj.geom_type || overlayDefs.find((d) => d.id === layerId)?.geom_type) === "point";
   const gjLayer = L.geoJSON(gj, {
     pane: "land",
-    style: (feat) => overlayStyle(layerId, feat),
+    style: isPoint ? undefined : (feat) => overlayStyle(layerId, feat),
+    pointToLayer: isPoint
+      ? (feat, latlng) => {
+          const c = CAMPGROUND_COLORS[(feat.properties || {}).category] || "#d96c2c";
+          return L.marker(latlng, {
+            icon: L.divIcon({
+              className: "",
+              html: `<div class="cg-pin" style="--cg:${c}">🏕️</div>`,
+              iconSize: [20, 20],
+              iconAnchor: [10, 10],
+            }),
+          });
+        }
+      : undefined,
     onEachFeature: (feat, lyr) => {
       const p = feat.properties || {};
-      const tip = isOwn
-        ? `${p.category || "—"}${p.name ? " · " + p.name + " Co." : ""}`
-        : p.name || overlayDefs.find((d) => d.id === layerId)?.title || layerId;
-      if (tip) lyr.bindTooltip(tip, { sticky: true });
+      if (isPoint) {
+        const link = p.url
+          ? `<br><a href="${p.url}" target="_blank" rel="noopener">reserve / info ↗</a>`
+          : "";
+        lyr.bindPopup(
+          `<b>${p.name || "Campground"}</b><br><span class="cg-cat">${p.category || ""}</span>${link}`
+        );
+      } else {
+        const tip = isOwn
+          ? `${p.category || "—"}${p.name ? " · " + p.name + " Co." : ""}`
+          : p.name || overlayDefs.find((d) => d.id === layerId)?.title || layerId;
+        if (tip) lyr.bindTooltip(tip, { sticky: true });
+      }
     },
   });
   overlayLayers[layerId] = gjLayer.addTo(map);
@@ -645,14 +675,17 @@ function overlayStyle(layerId, feat) {
 function renderLandLegend() {
   const host = $("land-legend");
   host.innerHTML = "";
-  if (overlayActive.has("ownership")) {
-    Object.entries(OWNERSHIP_COLORS).forEach(([cat, c]) => {
+  const addKeys = (entries, round) => {
+    Object.entries(entries).forEach(([cat, c]) => {
       const row = document.createElement("span");
       row.className = "land-key";
-      row.innerHTML = `<span class="land-swatch" style="background:${c}"></span>${cat}`;
+      const sw = round ? "land-swatch round" : "land-swatch";
+      row.innerHTML = `<span class="${sw}" style="background:${c}"></span>${cat}`;
       host.appendChild(row);
     });
-  }
+  };
+  if (overlayActive.has("ownership")) addKeys(OWNERSHIP_COLORS, false);
+  if (overlayActive.has("campground")) addKeys(CAMPGROUND_COLORS, true);
 }
 
 function updateLandHint() {

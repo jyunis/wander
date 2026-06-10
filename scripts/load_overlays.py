@@ -82,23 +82,36 @@ def connect(db: str) -> sqlite3.Connection:
 
 def ensure_schema(con: sqlite3.Connection) -> None:
     cur = con.cursor()
-    has = cur.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='overlay_features'"
-    ).fetchone()
-    if has:
-        return
     if not cur.execute(
         "SELECT name FROM sqlite_master WHERE name='spatial_ref_sys'"
     ).fetchone():
         cur.execute("SELECT InitSpatialMetaData(1)")  # loads full EPSG set
-    cur.execute(
-        "CREATE TABLE overlay_features ("
-        "  fid INTEGER PRIMARY KEY AUTOINCREMENT,"
-        "  layer TEXT NOT NULL, category TEXT, name TEXT)"
-    )
-    cur.execute("SELECT AddGeometryColumn('overlay_features','geom',4326,'MULTIPOLYGON','XY')")
-    cur.execute("SELECT CreateSpatialIndex('overlay_features','geom')")
-    cur.execute("CREATE INDEX idx_overlay_layer ON overlay_features(layer)")
+
+    def exists(t):
+        return cur.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (t,)
+        ).fetchone()
+
+    # Polygon layers (ownership + boundaries).
+    if not exists("overlay_features"):
+        cur.execute(
+            "CREATE TABLE overlay_features ("
+            "  fid INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  layer TEXT NOT NULL, category TEXT, name TEXT)"
+        )
+        cur.execute("SELECT AddGeometryColumn('overlay_features','geom',4326,'MULTIPOLYGON','XY')")
+        cur.execute("SELECT CreateSpatialIndex('overlay_features','geom')")
+        cur.execute("CREATE INDEX idx_overlay_layer ON overlay_features(layer)")
+    # Point layers (campgrounds; `url` carries a reservation link where known).
+    if not exists("overlay_points"):
+        cur.execute(
+            "CREATE TABLE overlay_points ("
+            "  fid INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  layer TEXT NOT NULL, category TEXT, name TEXT, url TEXT)"
+        )
+        cur.execute("SELECT AddGeometryColumn('overlay_points','geom',4326,'POINT','XY')")
+        cur.execute("SELECT CreateSpatialIndex('overlay_points','geom')")
+        cur.execute("CREATE INDEX idx_overlay_pts_layer ON overlay_points(layer)")
     con.commit()
 
 
@@ -115,6 +128,136 @@ def _insert(con, layer, rows_wkt_srid):
         [(layer, c, n, wkt, srid) for (c, n, wkt, srid) in rows_wkt_srid],
     )
     con.commit()
+
+
+CAMPGROUND_LAYER = "campground"
+
+
+def _insert_points(con, layer, rows):
+    """rows: iterable of (category, name, url, wkt, srid)."""
+    con.executemany(
+        "INSERT INTO overlay_points(layer, category, name, url, geom) "
+        "VALUES (?, ?, ?, ?, Transform(GeomFromText(?, ?), 4326))",
+        [(layer, c, n, u, wkt, srid) for (c, n, u, wkt, srid) in rows],
+    )
+    con.commit()
+
+
+def _download(url: str, dest: str) -> None:
+    req = urllib.request.Request(url, headers=UA)
+    with urllib.request.urlopen(req, timeout=300) as r, open(dest, "wb") as f:
+        f.write(r.read())
+
+
+def load_state_forest_campgrounds(con) -> int:
+    """MN DNR state-forest campgrounds (points). Day-use-only sites skipped."""
+    url = (
+        f"{GDRS}/us_mn_state_dnr/struc_state_forest_campgrounds/"
+        "shp_struc_state_forest_campgrounds.zip"
+    )
+    print("[campground] state-forest …", flush=True)
+    with tempfile.TemporaryDirectory() as td:
+        zp = os.path.join(td, "s.zip")
+        _download(url, zp)
+        zipfile.ZipFile(zp).extractall(td)
+        rdr = shapefile.Reader(os.path.join(td, "state_forest_campgrounds_and_day_use_areas"))
+        flds = [f[0] for f in rdr.fields[1:]]
+        ni, ti = flds.index("FACILITY_N"), flds.index("SITE_TYPE")
+        rows = []
+        for sr in rdr.iterShapeRecords():
+            geom = sr.shape.__geo_interface__
+            if not geom or not geom.get("coordinates"):
+                continue
+            site_type = str(sr.record[ti] or "")
+            if "camp" not in site_type.lower():  # skip day-use / picnic
+                continue
+            rows.append(("State Forest", str(sr.record[ni] or ""), None, shape(geom).wkt, 26915))
+        _insert_points(con, CAMPGROUND_LAYER, rows)
+    print(f"[campground]   state-forest: {len(rows)}", flush=True)
+    return len(rows)
+
+
+def load_state_park_campgrounds(con) -> int:
+    """MN DNR state-park camping units (GeoPackage) aggregated to one point per
+    campground — 5k+ individual sites collapse to a clean campground layer."""
+    url = (
+        f"{GDRS}/us_mn_state_dnr/struc_parks_and_trails_campsites/"
+        "gpkg_struc_parks_and_trails_campsites.zip"
+    )
+    print("[campground] state-park …", flush=True)
+    with tempfile.TemporaryDirectory() as td:
+        zp = os.path.join(td, "s.zip")
+        _download(url, zp)
+        zipfile.ZipFile(zp).extractall(td)
+        gpkg = os.path.join(td, "struc_parks_and_trails_campsites.gpkg")
+        g = connect(gpkg)  # SpatiaLite reads GPKG blobs via GeomFromGPB
+        seen: dict[str, tuple] = {}
+        for cg, park, srid, wkt in g.execute(
+            "SELECT CAMPGROUND_NAME, CONTAINING_MGMT_UNIT_NAME, "
+            "  ST_Srid(GeomFromGPB(Shape)), AsText(GeomFromGPB(Shape)) "
+            "FROM struc_parks_and_trails_campsites WHERE Shape IS NOT NULL"
+        ):
+            if not cg or not wkt:
+                continue
+            key = f"{park}|{cg}"
+            if key not in seen:  # first site's location represents the campground
+                name = f"{cg}" + (f" — {park}" if park and park not in cg else "")
+                seen[key] = ("State Park", name, None, wkt, srid)
+        g.close()
+        _insert_points(con, CAMPGROUND_LAYER, list(seen.values()))
+    print(f"[campground]   state-park: {len(seen)}", flush=True)
+    return len(seen)
+
+
+def load_campgrounds(con) -> int:
+    """The unified `campground` point layer (national/state-park/state-forest).
+    Cleared once, then appended from each best-effort source."""
+    con.execute("DELETE FROM overlay_points WHERE layer=?", (CAMPGROUND_LAYER,))
+    con.commit()
+    total = 0
+    for fn in (load_state_forest_campgrounds, load_state_park_campgrounds, load_ridb_campgrounds):
+        try:
+            total += fn(con)
+        except Exception as exc:  # best-effort per source
+            print(f"[campground]   {fn.__name__} SKIPPED: {exc}", flush=True)
+    print(f"[campground] total: {total}", flush=True)
+    return total
+
+
+def load_ridb_campgrounds(con) -> int:
+    """Recreation.gov RIDB federal campgrounds (national forest/NPS/BLM/Corps).
+    Keyed: needs RIDB_API_KEY in the env. Skipped (returns 0) without it, so the
+    state layers still load — same best-effort posture as MVUM/structures."""
+    key = os.environ.get("RIDB_API_KEY")
+    if not key:
+        print("[campground]   RIDB skipped (no RIDB_API_KEY)", flush=True)
+        return 0
+    import json as _json
+
+    rows, offset, full = [], 0, 0
+    while True:
+        u = (
+            "https://ridb.recreation.gov/api/v1/facilities?"
+            f"activity=CAMPING&state=MN&limit=50&offset={offset}&full=false"
+        )
+        req = urllib.request.Request(u, headers={**UA, "apikey": key})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            data = _json.load(r)
+        recs = data.get("RECDATA", [])
+        for f in recs:
+            lat, lon = f.get("FacilityLatitude"), f.get("FacilityLongitude")
+            if not lat or not lon:
+                continue
+            name = f.get("FacilityName") or ""
+            resv = "https://www.recreation.gov/camping/campgrounds/" + str(f.get("FacilityID", ""))
+            rows.append(("National / Federal", name, resv, f"POINT({lon} {lat})", 4326))
+        full = data.get("METADATA", {}).get("RESULTS", {}).get("TOTAL_COUNT", 0)
+        offset += len(recs)
+        if not recs or offset >= full:
+            break
+    _insert_points(con, CAMPGROUND_LAYER, rows)
+    print(f"[campground]   RIDB federal: {len(rows)}", flush=True)
+    return len(rows)
 
 
 def load_shp(con, layer, zip_url, base, cat_field, name_field, srid) -> int:
@@ -192,11 +335,17 @@ def main() -> None:
         total += load_shp(con, layer, url, base, cat, name, srid)
     if not only or "national_forest" in only:
         total += load_usfs(con)
-    counts = con.execute(
+    if not only or CAMPGROUND_LAYER in only:
+        total += load_campgrounds(con)
+    print("--- overlay_features (polygons) ---", flush=True)
+    for lyr, c in con.execute(
         "SELECT layer, COUNT(*) FROM overlay_features GROUP BY layer ORDER BY layer"
-    ).fetchall()
-    print("--- overlay_features ---", flush=True)
-    for lyr, c in counts:
+    ).fetchall():
+        print(f"  {lyr:16s} {c}", flush=True)
+    print("--- overlay_points ---", flush=True)
+    for lyr, c in con.execute(
+        "SELECT layer, COUNT(*) FROM overlay_points GROUP BY layer ORDER BY layer"
+    ).fetchall():
         print(f"  {lyr:16s} {c}", flush=True)
     print(f"TOTAL {total}", flush=True)
     con.close()

@@ -21,17 +21,22 @@ from cairn.store.types import Bbox
 
 # Display titles + a stable render order for the UI Land panel.
 LAYER_TITLES: dict[str, str] = {
+    "campground": "Campgrounds",
     "ownership": "Public land ownership",
     "national_forest": "National Forest",
     "state_forest": "State Forest",
     "state_park": "State Parks",
 }
-LAYER_ORDER = ["national_forest", "state_forest", "state_park", "ownership"]
+LAYER_ORDER = ["campground", "national_forest", "state_forest", "state_park", "ownership"]
+
+# Point layers live in `overlay_points` (markers); everything else is a polygon
+# layer in `overlay_features`.
+POINT_LAYERS = {"campground"}
 
 DISCLAIMER = (
-    "Land-ownership and boundary layers are public reference data shown for "
-    "context only. They do NOT establish that camping is legal anywhere — "
-    "always verify access and regulations with the managing agency."
+    "Land reference layers (ownership, boundaries, campgrounds) are public data "
+    "shown for context only. They do NOT establish that camping is legal "
+    "anywhere — always verify access and regulations with the managing agency."
 )
 
 
@@ -67,69 +72,94 @@ class OverlayStore:
     def available(self) -> bool:
         return self._db is not None
 
+    async def _table_layer_counts(self, table: str) -> dict[str, int]:
+        """`{layer: count}` for a table, or {} if the table doesn't exist."""
+        if self._db is None:
+            return {}
+        exists = await (
+            await self._db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            )
+        ).fetchone()
+        if not exists:
+            return {}
+        cur = await self._db.execute(f"SELECT layer, COUNT(*) FROM {table} GROUP BY layer")
+        return {row[0]: row[1] for row in await cur.fetchall()}
+
     async def layers(self) -> list[dict]:
-        """Available layers with feature count + distinct categories (legend)."""
+        """Available layers with geometry type, feature count + distinct
+        categories (legend) — unioned across the polygon and point tables."""
         if self._db is None:
             return []
-        cur = await self._db.execute(
-            "SELECT layer, COUNT(*) FROM overlay_features GROUP BY layer"
-        )
-        counts = {row[0]: row[1] for row in await cur.fetchall()}
+        poly = await self._table_layer_counts("overlay_features")
+        pts = await self._table_layer_counts("overlay_points")
+        counts = {**poly, **pts}
         out = []
         for lid in [*LAYER_ORDER, *(c for c in counts if c not in LAYER_ORDER)]:
             if lid not in counts:
                 continue
+            table = "overlay_points" if lid in pts else "overlay_features"
             cur = await self._db.execute(
-                "SELECT DISTINCT category FROM overlay_features "
+                f"SELECT DISTINCT category FROM {table} "
                 "WHERE layer=? AND category IS NOT NULL ORDER BY category",
                 (lid,),
             )
-            cats = [r[0] for r in await cur.fetchall()]
             out.append(
                 {
                     "id": lid,
                     "title": LAYER_TITLES.get(lid, lid),
+                    "geom_type": "point" if lid in pts else "polygon",
                     "count": counts[lid],
-                    "categories": cats,
+                    "categories": [r[0] for r in await cur.fetchall()],
                 }
             )
         return out
 
     async def query(self, layer: str, bbox: Bbox) -> dict:
-        """GeoJSON FeatureCollection of `layer` within `bbox`, each feature's
-        geometry clipped to the bbox (so payloads stay bounded even for dense
-        ownership parcels). Capped at `overlay_max_features` with a `truncated`
-        flag. Carries the display-only disclaimer (TLC-3)."""
+        """GeoJSON FeatureCollection of `layer` within `bbox`, capped at
+        `overlay_max_features` (with a `truncated` flag), carrying the
+        display-only disclaimer (TLC-3). Polygon layers are clipped to the bbox
+        so payloads stay bounded; point layers (campgrounds) return whole points
+        with a reservation `url` where known."""
+        empty = {"type": "FeatureCollection", "features": [], "disclaimer": DISCLAIMER}
         if self._db is None:
-            return {"type": "FeatureCollection", "features": [], "disclaimer": DISCLAIMER}
+            return empty
         b = bbox.normalized()
         frame = (b.min_lon, b.min_lat, b.max_lon, b.max_lat)
-        cur = await self._db.execute(
-            "SELECT category, name, "
-            "  AsGeoJSON(ST_Intersection(geom, BuildMbr(?, ?, ?, ?, 4326))) "
-            "FROM overlay_features "
-            "WHERE layer = ? AND ROWID IN ("
-            "  SELECT ROWID FROM SpatialIndex WHERE f_table_name='overlay_features' "
-            "  AND f_geometry_column='geom' AND search_frame=BuildMbr(?, ?, ?, ?, 4326)) "
-            "LIMIT ?",
-            (*frame, layer, *frame, self._max + 1),
-        )
-        rows = await cur.fetchall()
+        is_point = layer in POINT_LAYERS
+        if is_point:
+            sql = (
+                "SELECT category, name, url, AsGeoJSON(geom) FROM overlay_points "
+                "WHERE layer=? AND ROWID IN ("
+                "  SELECT ROWID FROM SpatialIndex WHERE f_table_name='overlay_points' "
+                "  AND f_geometry_column='geom' AND search_frame=BuildMbr(?, ?, ?, ?, 4326)) "
+                "LIMIT ?"
+            )
+            params = (layer, *frame, self._max + 1)
+        else:
+            sql = (
+                "SELECT category, name, NULL, "
+                "  AsGeoJSON(ST_Intersection(geom, BuildMbr(?, ?, ?, ?, 4326))) "
+                "FROM overlay_features WHERE layer=? AND ROWID IN ("
+                "  SELECT ROWID FROM SpatialIndex WHERE f_table_name='overlay_features' "
+                "  AND f_geometry_column='geom' AND search_frame=BuildMbr(?, ?, ?, ?, 4326)) "
+                "LIMIT ?"
+            )
+            params = (*frame, layer, *frame, self._max + 1)
+        rows = await (await self._db.execute(sql, params)).fetchall()
         truncated = len(rows) > self._max
         features = []
-        for category, name, gj in rows[: self._max]:
+        for category, name, url, gj in rows[: self._max]:
             if not gj:
                 continue
-            features.append(
-                {
-                    "type": "Feature",
-                    "geometry": json.loads(gj),
-                    "properties": {"layer": layer, "category": category, "name": name},
-                }
-            )
+            props = {"layer": layer, "category": category, "name": name}
+            if url:
+                props["url"] = url
+            features.append({"type": "Feature", "geometry": json.loads(gj), "properties": props})
         return {
             "type": "FeatureCollection",
             "layer": layer,
+            "geom_type": "point" if is_point else "polygon",
             "truncated": truncated,
             "features": features,
             "disclaimer": DISCLAIMER,
