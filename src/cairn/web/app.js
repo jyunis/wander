@@ -863,7 +863,7 @@ function updateLandHint() {
 // Show a scored site's "why this score" in the bottom sheet — a persistent,
 // mobile-friendly panel that stays put while you explore nearby campground
 // popups (easy to return to), instead of a map popup.
-function showSite(p, lat, lon) {
+function showSite(p, lat, lon, presetName) {
   const body = $("sheet-body");
   body.innerHTML = breakdownHtml(p, lat, lon);
   $("sheet").classList.remove("hidden");
@@ -875,7 +875,46 @@ function showSite(p, lat, lon) {
       btn.textContent = (collapsed ? "▸" : "▾") + " Why this score";
     };
   }
+  wireSiteName(body.querySelector("#site-name"), lat, lon, presetName);
   loadNearbyCampgrounds(lat, lon, body);
+}
+
+// Editable site name: a saved place keeps its stored name; a fresh site is
+// auto-suggested (nearest lake / road / reverse-geocode) unless the user types.
+// Renaming while saved persists via PATCH.
+function wireSiteName(nameEl, lat, lon, presetName) {
+  if (!nameEl) return;
+  let edited = false;
+  nameEl.addEventListener("input", () => {
+    edited = true;
+  });
+  if (presetName != null) {
+    nameEl.value = presetName;
+    edited = true;
+  } else {
+    fetch(`/suggest-name?lat=${lat}&lon=${lon}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (!edited && d.name) nameEl.value = d.name;
+      })
+      .catch(() => {});
+  }
+  nameEl.addEventListener("change", () => {
+    const id = savedByKey.get(savedKey("site", lat, lon));
+    if (id == null) return; // not saved — name is used when you star
+    const name = nameEl.value.trim() || null;
+    fetch(`/saved/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    }).then(() => {
+      const s = savedPlaces.find((x) => x.id === id);
+      if (s) {
+        s.name = name;
+        renderSavedList();
+      }
+    });
+  });
 }
 
 function closeSite() {
@@ -921,6 +960,11 @@ function starButton(kind, lat, lon, name, payload) {
 }
 
 async function toggleFav(fav, btn) {
+  // For a site, the live name input wins over the baked-in (stale) name.
+  if (fav.kind === "site") {
+    const nameEl = $("site-name");
+    if (nameEl) fav.name = nameEl.value.trim() || null;
+  }
   const key = savedKey(fav.kind, fav.lat, fav.lon);
   const id = savedByKey.get(key);
   if (id != null) {
@@ -980,7 +1024,7 @@ function reopenSaved(s) {
       .setContent(campgroundCard(s.payload || { name: s.name }, s.lat, s.lon))
       .openOn(map);
   } else {
-    showSite(s.payload || {}, s.lat, s.lon);
+    showSite(s.payload || {}, s.lat, s.lon, s.name || "");
   }
 }
 
@@ -1038,9 +1082,11 @@ async function loadNearbyCampgrounds(lat, lon, body) {
 function breakdownHtml(p, lat, lon, { expanded = false } = {}) {
   const coords = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
   const gmaps = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
+  const nameBar =
+    `<div class="bd-namebar">${starButton("site", lat, lon, null, p)}` +
+    `<input id="site-name" class="bd-name" placeholder="Name this site…" autocomplete="off" /></div>`;
   const coordsHtml =
-    `<div class="bd-coords">${starButton("site", lat, lon, null, p)}` +
-    `📍 <span class="bd-ll">${coords}</span>` +
+    `<div class="bd-coords">📍 <span class="bd-ll">${coords}</span>` +
     `<a class="bd-gmaps" href="${gmaps}" target="_blank" rel="noopener">` +
     `Open in Google&nbsp;Maps ↗</a></div>`;
   const rows = (p.contributions || [])
@@ -1066,6 +1112,7 @@ function breakdownHtml(p, lat, lon, { expanded = false } = {}) {
     `forest ${fmt(p.dist_forest_m, " m")} · solitude ${fmt(p.dist_solitude_m, " m")}` +
     (p.near_campsite ? " · near a known campsite" : "");
   return (
+    nameBar +
     coordsHtml +
     `<div class="bd-total">Total: ${p.total.toFixed(3)} (rank #${p.rank})${rough}</div>` +
     `<div class="bd-nearby"></div>` +

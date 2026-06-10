@@ -211,6 +211,13 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .rough-badge { font-weight: 600; font-size: 11px; color: #1d2227;
   background: var(--warn); border-radius: 4px; padding: 1px 6px; margin-left: 6px; }
 
+.bd-namebar { display: flex; align-items: center; gap: 6px; margin-bottom: 9px; }
+.bd-namebar .star { font-size: 19px; padding: 0; }
+.bd-name { flex: 1; min-width: 0; background: #313942; color: var(--ink);
+  border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px;
+  font-size: 13.5px; font-weight: 600; }
+.bd-name::placeholder { color: var(--muted); font-weight: 400; }
+.bd-name:focus { border-color: var(--accent); outline: none; }
 .bd-coords { display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
   margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
 .bd-ll { font-variant-numeric: tabular-nums; font-size: 12.5px; user-select: all; }
