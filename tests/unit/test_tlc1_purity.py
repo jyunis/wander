@@ -68,6 +68,21 @@ def test_engine_never_references_overlay_data_tlc3():
         )
 
 
+def test_engine_never_references_trip_or_export_data_tlc3():
+    # TLC-3: trips + GPX/KML export are user data + display, never scoring
+    # inputs. Guard the engine against quietly importing the trip store or the
+    # export module. Match code-shaped tokens only (not the bare word "trips",
+    # which could appear in prose) so this can't false-positive.
+    forbidden = re.compile(
+        r"trip_members|add_trip|get_trip|add_member|cairn\.export|trip_to_gpx|trip_to_kml"
+    )
+    for path in ENGINE_DIR.glob("*.py"):
+        source = _strip_comments(path.read_text(encoding="utf-8"))
+        assert forbidden.search(source) is None, (
+            f"{path.name} references trip/export data (TLC-3 violation)"
+        )
+
+
 def test_no_nondeterminism_primitives_in_engine_sources():
     checked_any = False
     for name in MODULES:

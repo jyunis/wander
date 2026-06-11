@@ -18,6 +18,9 @@
 --      density) + road_rough informational flag.
 -- v=5: road_end feature — candidate_features.dist_terminus_m /
 --      road_end_unavailable (distance to nearest drivable dead-end).
+-- v=6: saved_places — user favorites (dispersed sites + campgrounds).
+-- v=7: saved_places.rating — user quality rating, 0-5 stars.
+-- v=8: trip planner — trips + trip_members (a dated grouping of saved places).
 
 CREATE TABLE IF NOT EXISTS schema_version (
     version     INTEGER PRIMARY KEY,
@@ -130,3 +133,28 @@ CREATE TABLE IF NOT EXISTS saved_places (
     created_at   TEXT NOT NULL,
     rating       REAL                      -- user quality rating, 0-5 stars (nullable)
 );
+
+-- --- Trips (v8) — a named, dated grouping of saved places for one outing.
+-- User data + display, never scoring (TLC-3). Flat shortlist, not a sequenced
+-- itinerary; `position` is reserved for later sequencing and unused in v1.
+CREATE TABLE IF NOT EXISTS trips (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    start_date  TEXT,                      -- ISO 'YYYY-MM-DD', nullable
+    end_date    TEXT,                      -- ISO 'YYYY-MM-DD', nullable
+    note        TEXT,
+    created_at  TEXT NOT NULL
+);
+
+-- Each member references a saved_place with a role: 'primary' (a free,
+-- first-come dispersed idea) or 'fallback' (a reservable campground). FK
+-- cascade prunes members when a trip or the saved place is deleted.
+CREATE TABLE IF NOT EXISTS trip_members (
+    trip_id    INTEGER NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+    saved_id   INTEGER NOT NULL REFERENCES saved_places(id) ON DELETE CASCADE,
+    role       TEXT NOT NULL DEFAULT 'primary',   -- 'primary' | 'fallback'
+    position   INTEGER NOT NULL DEFAULT 0,        -- reserved for sequencing (v1: unused)
+    PRIMARY KEY (trip_id, saved_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_trip_members_trip ON trip_members (trip_id);

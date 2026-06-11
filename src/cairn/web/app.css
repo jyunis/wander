@@ -285,3 +285,104 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
             justify-content: center; font-size: 11px; font-weight: 700;
             border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.5);
             text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+
+/* --- Trips tab ----------------------------------------------------------- */
+.trips-top { margin-top: 4px; }
+#trip-new { width: 100%; }
+.trip-form { margin: 10px 0; padding: 11px; background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--line); border-radius: 8px; display: flex; flex-direction: column; gap: 9px; }
+/* An explicit display: above beats the UA [hidden] rule, so restore it. */
+.trip-form[hidden] { display: none; }
+.trip-form input[type="text"], .trip-dates input[type="date"] {
+  background: #313942; color: var(--ink); border: 1px solid var(--line);
+  border-radius: 7px; padding: 7px 9px; font: inherit; font-size: 12.5px; }
+.trip-form input:focus, .trip-dates input:focus { border-color: var(--accent); outline: none; }
+.trip-dates { display: flex; gap: 10px; }
+.trip-dates label { flex: 1; display: flex; flex-direction: column; gap: 3px;
+  font-size: 11px; color: var(--muted); }
+.trip-form .btn.primary { width: auto; flex: 1; margin-top: 0; }
+
+.trips-list { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.trip-row { display: flex; align-items: center; gap: 6px; padding: 9px 10px;
+  border-radius: 7px; cursor: pointer; background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--line); }
+.trip-row:hover { border-color: var(--accent); background: rgba(255, 255, 255, 0.06); }
+.trip-row-main { flex: 1; overflow: hidden; }
+.trip-row-name { font-size: 13.5px; font-weight: 600; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.trip-row-sub { font-size: 11px; color: var(--muted); margin-top: 2px;
+  font-variant-numeric: tabular-nums; }
+.trip-row-count { flex: none; font-size: 11px; color: var(--accent); white-space: nowrap; }
+
+.trip-back { margin-bottom: 6px; padding: 4px 8px; }
+.trip-head h3 { font-size: 16px; margin: 2px 0 4px; font-weight: 650; }
+.trip-head-dates { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.trip-head-row { display: flex; align-items: flex-start; gap: 8px; }
+.trip-head-row .trip-head-main { flex: 1; min-width: 0; }
+.trip-head-btns { display: flex; gap: 4px; flex: none; }
+.trip-head-btns button { background: none; border: 1px solid var(--line); color: var(--muted);
+  border-radius: 6px; padding: 3px 7px; font-size: 11px; cursor: pointer; }
+.trip-head-btns button:hover { border-color: var(--accent); color: var(--ink); }
+.trip-head-btns .trip-del:hover { border-color: #e8786b; color: #e8786b; }
+
+.trip-group-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted); margin: 14px 0 4px; }
+.trip-group-empty { font-size: 11px; color: var(--muted); opacity: 0.7; margin: 2px 0 0; }
+.trip-mem { display: flex; align-items: center; gap: 6px; padding: 6px 4px;
+  border-radius: 6px; }
+.trip-mem:hover { background: rgba(255, 255, 255, 0.05); }
+.trip-mem-main { flex: 1; overflow: hidden; }
+.trip-mem-name { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trip-mem-coords { font-size: 10px; color: var(--muted); margin-top: 1px;
+  font-variant-numeric: tabular-nums; }
+.trip-mem-coords a { color: var(--accent); text-decoration: none; }
+.trip-mem-coords a:hover { text-decoration: underline; }
+.trip-role { flex: none; width: 22px; height: 22px; border-radius: 50%; cursor: pointer;
+  border: 1px solid var(--line); background: #313942; color: var(--muted);
+  font-size: 11px; font-weight: 700; }
+.trip-role.is-primary { border-color: var(--accent); color: var(--accent); }
+.trip-role.is-fallback { border-color: #d96c2c; color: #d96c2c; }
+.trip-mem-del { flex: none; background: none; border: none; color: var(--muted);
+  cursor: pointer; font-size: 15px; line-height: 1; }
+.trip-mem-del:hover { color: #e8786b; }
+
+.trip-add { margin-top: 12px; }
+.trip-add-toggle { width: 100%; text-align: left; background: none; border: 1px dashed var(--line);
+  color: var(--muted); border-radius: 7px; padding: 7px 10px; cursor: pointer; font-size: 12px; }
+.trip-add-toggle:hover { border-color: var(--accent); color: var(--ink); }
+.trip-add-list { margin-top: 6px; display: flex; flex-direction: column; gap: 3px;
+  max-height: 220px; overflow-y: auto; }
+.trip-add-row { display: flex; align-items: center; gap: 6px; padding: 5px 6px;
+  border-radius: 6px; background: rgba(255, 255, 255, 0.035); }
+.trip-add-name { flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.trip-add-row button { flex: none; background: #313942; border: 1px solid var(--line);
+  color: var(--muted); border-radius: 5px; padding: 2px 7px; font-size: 11px; cursor: pointer; }
+.trip-add-row button:hover { border-color: var(--accent); color: var(--ink); }
+.trip-add-empty { font-size: 11px; color: var(--muted); opacity: 0.8; padding: 4px 2px; }
+
+.trip-actions { margin-top: 14px; }
+.trip-actions .btn { flex: 1; }
+.trip-export-hint { margin-top: 7px; font-size: 10.5px; line-height: 1.4; }
+
+/* Map markers for a plotted trip — primary (dispersed) vs fallback (campground). */
+.trip-pin { width: 26px; height: 26px; line-height: 26px; text-align: center; font-size: 16px;
+  border-radius: 50%; box-shadow: 0 0 0 2px #fff, 0 1px 4px rgba(0, 0, 0, 0.55); cursor: pointer; }
+.trip-pin.trip-primary { background: var(--accent); }
+.trip-pin.trip-fallback { background: #d96c2c; }
+
+/* The "add to trip" popover anchored under a Saved-list row. */
+.saved-add { flex: none; background: none; border: none; color: var(--muted);
+  cursor: pointer; font-size: 15px; line-height: 1; }
+.saved-add:hover { color: var(--accent); }
+.saved-row { position: relative; }
+.trip-picker { position: absolute; z-index: 1600; top: 100%; right: 8px; margin-top: 2px;
+  background: var(--panel); border: 1px solid var(--accent); border-radius: 8px;
+  padding: 9px; display: flex; flex-direction: column; gap: 7px; width: 210px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.55); }
+.trip-picker select { background: #313942; color: var(--ink); border: 1px solid var(--line);
+  border-radius: 6px; padding: 5px; font-size: 12px; }
+.trip-picker-roles { display: flex; gap: 12px; font-size: 12px; color: var(--muted); }
+.trip-picker-roles label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.trip-picker .btn { padding: 5px 10px; font-size: 12px; }
+.trip-picker-empty { font-size: 11.5px; color: var(--muted); line-height: 1.4; }

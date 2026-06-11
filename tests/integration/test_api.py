@@ -270,6 +270,99 @@ def test_unknown_run_returns_404(client):
     assert r.json()["error"] == "RunNotFound"
 
 
+def test_trip_crud(client):
+    r = client.post(
+        "/trips",
+        json={"name": "Labor Day", "start_date": "2026-09-05", "end_date": "2026-09-07"},
+    )
+    assert r.status_code == 201
+    tid = r.json()["id"]
+    row = next(t for t in client.get("/trips").json()["trips"] if t["id"] == tid)
+    assert row["member_count"] == 0 and row["name"] == "Labor Day"
+    got = client.get(f"/trips/{tid}").json()
+    assert got["members"] == [] and "physical suitability only" in got["disclaimer"].lower()
+    # PATCH name only — dates preserved (partial update).
+    r = client.patch(f"/trips/{tid}", json={"name": "Labor Day weekend"})
+    assert r.status_code == 200 and r.json()["name"] == "Labor Day weekend"
+    assert r.json()["start_date"] == "2026-09-05"
+    assert client.delete(f"/trips/{tid}").json()["deleted"] is True
+    assert client.get(f"/trips/{tid}").status_code == 404
+
+
+def test_trip_name_required_and_date_validation(client):
+    assert client.post("/trips", json={"name": "  "}).status_code == 422
+    assert client.post("/trips", json={"name": "x", "start_date": "nope"}).status_code == 422
+    # end before start -> 422.
+    r = client.post(
+        "/trips", json={"name": "x", "start_date": "2026-09-07", "end_date": "2026-09-05"}
+    )
+    assert r.status_code == 422
+
+
+def test_trip_members_flow(client):
+    tid = client.post("/trips", json={"name": "T"}).json()["id"]
+    s1 = client.post(
+        "/saved",
+        json={"kind": "site", "name": "Spur", "lat": 47.5, "lon": -94.2, "payload": {"total": 0.7}},
+    ).json()["id"]
+    s2 = client.post(
+        "/saved", json={"kind": "campground", "name": "Deer Lake", "lat": 47.6, "lon": -94.0}
+    ).json()["id"]
+
+    r = client.post(f"/trips/{tid}/members", json={"saved_id": s1, "role": "primary"})
+    assert r.status_code == 201
+    trip = client.post(f"/trips/{tid}/members", json={"saved_id": s2, "role": "fallback"}).json()
+    assert len(trip["members"]) == 2
+    # Hydrated: primary first, carrying its coords from saved_places.
+    assert trip["members"][0]["role"] == "primary" and trip["members"][0]["lat"] == 47.5
+
+    # Re-POST upserts the role rather than duplicating.
+    r = client.post(f"/trips/{tid}/members", json={"saved_id": s1, "role": "fallback"})
+    roles = {m["saved_id"]: m["role"] for m in r.json()["members"]}
+    assert roles[s1] == "fallback" and len(r.json()["members"]) == 2
+
+    assert client.delete(f"/trips/{tid}/members/{s1}").json()["removed"] is True
+    assert len(client.get(f"/trips/{tid}").json()["members"]) == 1
+
+
+def test_trip_member_bad_role_and_missing_targets(client):
+    tid = client.post("/trips", json={"name": "T"}).json()["id"]
+    sid = client.post("/saved", json={"kind": "site", "lat": 1.0, "lon": 2.0}).json()["id"]
+    bad = client.post(f"/trips/{tid}/members", json={"saved_id": sid, "role": "bogus"})
+    assert bad.status_code == 422
+    assert client.post("/trips/999999/members", json={"saved_id": sid}).status_code == 404
+    assert client.post(f"/trips/{tid}/members", json={"saved_id": 999999}).status_code == 404
+
+
+def test_deleting_saved_removes_it_from_trips(client):
+    tid = client.post("/trips", json={"name": "T"}).json()["id"]
+    sid = client.post("/saved", json={"kind": "site", "lat": 1.0, "lon": 2.0}).json()["id"]
+    client.post(f"/trips/{tid}/members", json={"saved_id": sid})
+    client.delete(f"/saved/{sid}")
+    assert client.get(f"/trips/{tid}").json()["members"] == []
+
+
+def test_trip_export_gpx_and_kml(client):
+    tid = client.post("/trips", json={"name": "Labor Day", "start_date": "2026-09-05"}).json()["id"]
+    sid = client.post(
+        "/saved", json={"kind": "site", "name": "Quiet spur", "lat": 47.5, "lon": -94.2}
+    ).json()["id"]
+    client.post(f"/trips/{tid}/members", json={"saved_id": sid, "role": "primary"})
+
+    g = client.get(f"/trips/{tid}/export.gpx")
+    assert g.status_code == 200
+    assert g.headers["content-type"].startswith("application/gpx+xml")
+    assert 'attachment; filename="labor-day.gpx"' in g.headers["content-disposition"]
+    assert "<wpt" in g.text and "47.500000" in g.text and "Quiet spur" in g.text
+
+    k = client.get(f"/trips/{tid}/export.kml")
+    assert k.status_code == 200
+    assert "vnd.google-earth.kml" in k.headers["content-type"]
+    assert "<Placemark>" in k.text and "-94.200000,47.500000" in k.text
+
+    assert client.get("/trips/999999/export.gpx").status_code == 404
+
+
 def test_static_ui_served_and_does_not_shadow_api(client):
     # FC-9: the static UI is served at / without shadowing the JSON API.
     r = client.get("/")

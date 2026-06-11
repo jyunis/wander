@@ -33,7 +33,7 @@ from cairn.store.types import Bbox, Run
 
 _M_PER_DEG = 111320.0
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 # Sentinel for partial updates: distinguishes "field omitted" from "set to NULL".
@@ -76,6 +76,23 @@ _MIGRATIONS: dict[int, list[str]] = {
     6: [
         "ALTER TABLE saved_places ADD COLUMN rating REAL",  # 0-5 stars, nullable
         "INSERT INTO schema_version (version) VALUES (7)",
+    ],
+    7: [
+        # Trip planner (v8): a named, dated grouping of saved places. A member
+        # references a saved_place with a role — 'primary' (a free dispersed
+        # idea) or 'fallback' (a reservable campground). User data, never
+        # scoring (TLC-3). FK cascade prunes members when a trip or the
+        # underlying saved place is deleted (foreign_keys is ON).
+        "CREATE TABLE IF NOT EXISTS trips ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, "
+        "  start_date TEXT, end_date TEXT, note TEXT, created_at TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS trip_members ("
+        "  trip_id INTEGER NOT NULL REFERENCES trips(id) ON DELETE CASCADE, "
+        "  saved_id INTEGER NOT NULL REFERENCES saved_places(id) ON DELETE CASCADE, "
+        "  role TEXT NOT NULL DEFAULT 'primary', position INTEGER NOT NULL DEFAULT 0, "
+        "  PRIMARY KEY (trip_id, saved_id))",
+        "CREATE INDEX IF NOT EXISTS idx_trip_members_trip ON trip_members (trip_id)",
+        "INSERT INTO schema_version (version) VALUES (8)",
     ],
 }
 
@@ -412,6 +429,141 @@ class Store:
             f"SELECT {self._SAVED_COLS} FROM saved_places WHERE id=?", (saved_id,)
         )).fetchone()
         return self._saved_row(row) if row else None
+
+    # --- Trips (a dated grouping of saved places — user data, TLC-3) ---------
+
+    @staticmethod
+    def _trip_row(row) -> dict:
+        return {
+            "id": row[0], "name": row[1], "start_date": row[2], "end_date": row[3],
+            "note": row[4], "created_at": row[5],
+        }
+
+    _TRIP_COLS = "id, name, start_date, end_date, note, created_at"
+
+    async def add_trip(
+        self, name: str, start_date: str | None = None,
+        end_date: str | None = None, note: str | None = None,
+    ) -> dict:
+        import datetime as _dt
+
+        created = _dt.datetime.now(tz=_dt.timezone.utc).replace(microsecond=0).isoformat()
+        cur = await self.db.execute(
+            "INSERT INTO trips (name, start_date, end_date, note, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (name, start_date, end_date, note, created),
+        )
+        await self.db.commit()
+        return self._trip_row(
+            await (await self.db.execute(
+                f"SELECT {self._TRIP_COLS} FROM trips WHERE id=?", (cur.lastrowid,)
+            )).fetchone()
+        )
+
+    async def list_trips(self) -> list[dict]:
+        """All trips, newest first, each with a `member_count`."""
+        cur = await self.db.execute(
+            f"SELECT {', '.join('t.' + c for c in self._TRIP_COLS.split(', '))}, "
+            "COUNT(m.saved_id) AS member_count "
+            "FROM trips t LEFT JOIN trip_members m ON m.trip_id = t.id "
+            "GROUP BY t.id ORDER BY t.created_at DESC, t.id DESC"
+        )
+        out = []
+        for row in await cur.fetchall():
+            trip = self._trip_row(row)
+            trip["member_count"] = row[6]
+            out.append(trip)
+        return out
+
+    async def _trip_members(self, trip_id: int) -> list[dict]:
+        """A trip's members, hydrated from saved_places (so each carries its
+        coords/name/kind for mapping + export). Primaries first."""
+        cur = await self.db.execute(
+            "SELECT m.saved_id, m.role, m.position, s.kind, s.name, s.lat, s.lon, "
+            "s.payload_json, s.note, s.rating "
+            "FROM trip_members m JOIN saved_places s ON s.id = m.saved_id "
+            "WHERE m.trip_id = ? "
+            "ORDER BY CASE m.role WHEN 'primary' THEN 0 ELSE 1 END, m.position, m.saved_id",
+            (trip_id,),
+        )
+        members = []
+        for r in await cur.fetchall():
+            members.append({
+                "saved_id": r[0], "role": r[1], "position": r[2], "kind": r[3],
+                "name": r[4], "lat": r[5], "lon": r[6],
+                "payload": json.loads(r[7]) if r[7] else None,
+                "note": r[8], "rating": r[9],
+            })
+        return members
+
+    async def get_trip(self, trip_id: int) -> dict | None:
+        """A trip with its hydrated members, or None if it doesn't exist."""
+        row = await (await self.db.execute(
+            f"SELECT {self._TRIP_COLS} FROM trips WHERE id=?", (trip_id,)
+        )).fetchone()
+        if row is None:
+            return None
+        trip = self._trip_row(row)
+        trip["members"] = await self._trip_members(trip_id)
+        return trip
+
+    async def update_trip(
+        self, trip_id: int, name: object = UNSET, start_date: object = UNSET,
+        end_date: object = UNSET, note: object = UNSET,
+    ) -> dict | None:
+        """Partial update (UNSET fields untouched). Returns the hydrated trip."""
+        sets, params = [], []
+        for col, val in (
+            ("name", name), ("start_date", start_date),
+            ("end_date", end_date), ("note", note),
+        ):
+            if val is not UNSET:
+                sets.append(f"{col}=?")
+                params.append(val)
+        if sets:
+            params.append(trip_id)
+            await self.db.execute(
+                f"UPDATE trips SET {', '.join(sets)} WHERE id=?", params
+            )
+            await self.db.commit()
+        return await self.get_trip(trip_id)
+
+    async def delete_trip(self, trip_id: int) -> bool:
+        """Delete a trip; FK cascade drops its trip_members rows."""
+        cur = await self.db.execute("DELETE FROM trips WHERE id=?", (trip_id,))
+        await self.db.commit()
+        return cur.rowcount > 0
+
+    async def add_member(
+        self, trip_id: int, saved_id: int, role: str = "primary", position: int = 0,
+    ) -> dict | None:
+        """Add a saved place to a trip (or update its role if already a member).
+        Returns the hydrated trip, or None if the trip or saved place is absent
+        (a clean 404 rather than a foreign-key error)."""
+        trip = await (await self.db.execute(
+            "SELECT 1 FROM trips WHERE id=?", (trip_id,)
+        )).fetchone()
+        saved = await (await self.db.execute(
+            "SELECT 1 FROM saved_places WHERE id=?", (saved_id,)
+        )).fetchone()
+        if trip is None or saved is None:
+            return None
+        await self.db.execute(
+            "INSERT INTO trip_members (trip_id, saved_id, role, position) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(trip_id, saved_id) DO UPDATE SET role=excluded.role",
+            (trip_id, saved_id, role, position),
+        )
+        await self.db.commit()
+        return await self.get_trip(trip_id)
+
+    async def remove_member(self, trip_id: int, saved_id: int) -> bool:
+        cur = await self.db.execute(
+            "DELETE FROM trip_members WHERE trip_id=? AND saved_id=?",
+            (trip_id, saved_id),
+        )
+        await self.db.commit()
+        return cur.rowcount > 0
 
     # --- Site name suggestion (from our own OSM extract — TLC-3, display) ----
 

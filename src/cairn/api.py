@@ -8,6 +8,8 @@ typed engine errors to HTTP codes, and returns `failed` runs as status+reason
 Endpoints: POST /score, GET /runs, GET /runs/{id}, GET /runs/{id}/geojson,
 GET /runs/{id}/roads, GET /overlays, GET /overlays/{layer},
 GET /nearby-campgrounds, GET /saved, POST /saved, PATCH/DELETE /saved/{id},
+GET/POST /trips, GET/PATCH/DELETE /trips/{id}, POST /trips/{id}/members,
+DELETE /trips/{id}/members/{saved_id}, GET /trips/{id}/export.gpx|.kml,
 GET /suggest-name, GET /geocode, GET /config, GET /health, and the static UI
 at / (mounted if web/ exists).
 """
@@ -19,7 +21,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -30,6 +32,7 @@ from cairn.clients.overpass import OverpassClient
 from cairn.clients.usa_structures import StructuresClient
 from cairn.config import get_settings
 from cairn.errors import GeocodeError, RunNotFound, ValidationError
+from cairn.export import trip_slug, trip_to_gpx, trip_to_kml
 from cairn.logging import configure
 from cairn.service import RunService
 from cairn.store import Store
@@ -133,6 +136,26 @@ class SavedUpdateRequest(BaseModel):
     name: str | None = None
     rating: float | None = Field(default=None, description="quality rating, 0-5 stars")
     note: str | None = None
+
+
+class TripRequest(BaseModel):
+    name: str
+    start_date: str | None = Field(default=None, description="ISO date 'YYYY-MM-DD'")
+    end_date: str | None = Field(default=None, description="ISO date 'YYYY-MM-DD'")
+    note: str | None = None
+
+
+class TripUpdateRequest(BaseModel):
+    # Partial update (model_fields_set tracks which fields were sent).
+    name: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    note: str | None = None
+
+
+class MemberRequest(BaseModel):
+    saved_id: int
+    role: str | None = Field(default="primary", description="'primary' or 'fallback'")
 
 
 # --- error handling --------------------------------------------------------
@@ -289,6 +312,136 @@ async def update_saved(saved_id: int, req: SavedUpdateRequest, request: Request)
     if row is None:
         return JSONResponse(status_code=404, content={"error": "NotFound"})
     return JSONResponse(status_code=200, content=row)
+
+
+# --- trips (a dated grouping of saved places — user data + display, TLC-3) --
+
+
+def _check_dates(start: str | None, end: str | None) -> None:
+    import datetime as _dt
+
+    for d in (start, end):
+        if d is not None:
+            try:
+                _dt.date.fromisoformat(d)
+            except ValueError:
+                raise ValidationError("dates must be ISO format YYYY-MM-DD") from None
+    # ISO date strings compare chronologically, so a plain string compare works.
+    if start and end and start > end:
+        raise ValidationError("start_date must be on or before end_date")
+
+
+def _check_role(role: str) -> None:
+    if role not in ("primary", "fallback"):
+        raise ValidationError("role must be 'primary' or 'fallback'")
+
+
+@app.get("/trips")
+async def list_trips(request: Request) -> dict:
+    """The user's trips (each with a member_count), newest first."""
+    store: Store = request.app.state.store
+    return {"trips": await store.list_trips(), "disclaimer": DISCLAIMER}
+
+
+@app.post("/trips")
+async def create_trip(req: TripRequest, request: Request) -> JSONResponse:
+    store: Store = request.app.state.store
+    if not req.name or not req.name.strip():
+        raise ValidationError("name is required")
+    _check_dates(req.start_date, req.end_date)
+    row = await store.add_trip(req.name.strip(), req.start_date, req.end_date, req.note)
+    return JSONResponse(status_code=201, content=row)
+
+
+@app.get("/trips/{trip_id}")
+async def get_trip(trip_id: int, request: Request) -> JSONResponse:
+    store: Store = request.app.state.store
+    trip = await store.get_trip(trip_id)
+    if trip is None:
+        return JSONResponse(status_code=404, content={"error": "NotFound"})
+    return JSONResponse(status_code=200, content={**trip, "disclaimer": DISCLAIMER})
+
+
+@app.patch("/trips/{trip_id}")
+async def update_trip(trip_id: int, req: TripUpdateRequest, request: Request) -> JSONResponse:
+    store: Store = request.app.state.store
+    existing = await store.get_trip(trip_id)
+    if existing is None:
+        return JSONResponse(status_code=404, content={"error": "NotFound"})
+    sent = req.model_fields_set
+    if "name" in sent and (not req.name or not req.name.strip()):
+        raise ValidationError("name cannot be empty")
+    # Validate against the effective (post-update) date pair.
+    start = req.start_date if "start_date" in sent else existing["start_date"]
+    end = req.end_date if "end_date" in sent else existing["end_date"]
+    _check_dates(start, end)
+    row = await store.update_trip(
+        trip_id,
+        name=req.name.strip() if "name" in sent else UNSET,
+        start_date=req.start_date if "start_date" in sent else UNSET,
+        end_date=req.end_date if "end_date" in sent else UNSET,
+        note=req.note if "note" in sent else UNSET,
+    )
+    return JSONResponse(status_code=200, content={**row, "disclaimer": DISCLAIMER})
+
+
+@app.delete("/trips/{trip_id}")
+async def delete_trip(trip_id: int, request: Request) -> dict:
+    store: Store = request.app.state.store
+    return {"deleted": await store.delete_trip(trip_id)}
+
+
+@app.post("/trips/{trip_id}/members")
+async def add_trip_member(trip_id: int, req: MemberRequest, request: Request) -> JSONResponse:
+    store: Store = request.app.state.store
+    role = req.role or "primary"
+    _check_role(role)
+    trip = await store.add_member(trip_id, req.saved_id, role)
+    if trip is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": "NotFound", "detail": "trip or saved place not found"},
+        )
+    return JSONResponse(status_code=201, content={**trip, "disclaimer": DISCLAIMER})
+
+
+@app.delete("/trips/{trip_id}/members/{saved_id}")
+async def remove_trip_member(trip_id: int, saved_id: int, request: Request) -> dict:
+    store: Store = request.app.state.store
+    return {"removed": await store.remove_member(trip_id, saved_id)}
+
+
+def _export_response(trip: dict, fmt: str) -> Response:
+    """A downloadable GPX/KML attachment for a trip (the bridge to onX/Gaia/
+    Google — TLC-3, never scoring)."""
+    if fmt == "gpx":
+        body, media = trip_to_gpx(trip), "application/gpx+xml"
+    else:
+        body, media = trip_to_kml(trip), "application/vnd.google-earth.kml+xml"
+    filename = f"{trip_slug(trip)}.{fmt}"
+    return Response(
+        content=body,
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/trips/{trip_id}/export.gpx")
+async def export_trip_gpx(trip_id: int, request: Request):
+    store: Store = request.app.state.store
+    trip = await store.get_trip(trip_id)
+    if trip is None:
+        return JSONResponse(status_code=404, content={"error": "NotFound"})
+    return _export_response(trip, "gpx")
+
+
+@app.get("/trips/{trip_id}/export.kml")
+async def export_trip_kml(trip_id: int, request: Request):
+    store: Store = request.app.state.store
+    trip = await store.get_trip(trip_id)
+    if trip is None:
+        return JSONResponse(status_code=404, content={"error": "NotFound"})
+    return _export_response(trip, "kml")
 
 
 @app.get("/suggest-name")
