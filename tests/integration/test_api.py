@@ -275,7 +275,10 @@ def test_static_ui_served_and_does_not_shadow_api(client):
     r = client.get("/")
     assert r.status_code == 200
     assert "Cairn" in r.text and "disclaimer" in r.text.lower()
-    assert client.get("/app.js").status_code == 200
+    js = client.get("/app.js")
+    assert js.status_code == 200
+    # UI assets revalidate so a rebuild isn't masked by a stale browser cache.
+    assert js.headers.get("cache-control") == "no-cache"
     assert client.get("/app.css").status_code == 200
     # API routes still win over the static mount.
     assert client.get("/config").json()["max_bbox_area_km2"] == 2500.0

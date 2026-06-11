@@ -952,7 +952,7 @@ function showSite(p, lat, lon, presetName) {
 function noteFieldHtml(lat, lon) {
   const id = savedByKey.get(savedKey("site", lat, lon));
   const note = id != null ? savedPlaces.find((s) => s.id === id)?.note || "" : "";
-  return `<textarea class="bd-note" placeholder="Notes…" rows="2">${esc(note)}</textarea>`;
+  return `<textarea class="bd-note" placeholder="Notes…" rows="4">${esc(note)}</textarea>`;
 }
 
 function wireSiteNote(noteEl, lat, lon) {
