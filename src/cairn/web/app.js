@@ -247,7 +247,17 @@ function setupMap() {
   map.getPane("land").style.zIndex = 250;
   map.on("moveend", refreshActiveOverlays);
   // Keep info windows from opening hidden behind the bottom sheet.
-  map.on("popupopen", (e) => keepPopupClearOfSheet(e.popup));
+  map.on("popupopen", (e) => {
+    _popupOpen = true;
+    keepPopupClearOfSheet(e.popup);
+  });
+  map.on("popupclose", () => {
+    _popupOpen = false;
+    if (_overlayPending) {
+      _overlayPending = false;
+      refreshActiveOverlays(); // run the refresh we deferred while it was open
+    }
+  });
 
   drawnItems = new L.FeatureGroup().addTo(map);
   // Canvas renderer so thousands of candidate dots stay smooth.
@@ -689,8 +699,17 @@ function toggleOverlay(layerId, on) {
 }
 
 let _overlayTimer = null;
+let _popupOpen = false; // a Leaflet popup (campground info window) is open
+let _overlayPending = false; // a refresh was deferred while a popup was open
 function refreshActiveOverlays() {
   if (!overlayActive.size) return;
+  // A moveend refetch rebuilds the overlay layer (removeLayer + re-add), which
+  // would close any popup anchored to one of its markers. Defer while a popup
+  // is open; the popupclose handler runs the pending refresh.
+  if (_popupOpen) {
+    _overlayPending = true;
+    return;
+  }
   clearTimeout(_overlayTimer);
   _overlayTimer = setTimeout(() => {
     overlayActive.forEach((id) => fetchOverlay(id));
