@@ -371,18 +371,39 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .trip-pin.trip-primary { background: var(--accent); }
 .trip-pin.trip-fallback { background: #d96c2c; }
 
-/* The "add to trip" popover anchored under a Saved-list row. */
+/* "＋ trip" — add-to-trip control beside the ★ (site sheet + campground cards)
+   and the ＋ on Saved rows. */
 .saved-add { flex: none; background: none; border: none; color: var(--muted);
   cursor: pointer; font-size: 15px; line-height: 1; }
 .saved-add:hover { color: var(--accent); }
 .saved-row { position: relative; }
-.trip-picker { position: absolute; z-index: 1600; top: 100%; right: 8px; margin-top: 2px;
-  background: var(--panel); border: 1px solid var(--accent); border-radius: 8px;
-  padding: 9px; display: flex; flex-direction: column; gap: 7px; width: 210px;
+.trip-add-btn { flex: none; background: #313942; border: 1px solid var(--line); color: var(--muted);
+  border-radius: 6px; padding: 3px 8px; font-size: 11.5px; cursor: pointer; white-space: nowrap; }
+.trip-add-btn:hover { border-color: var(--accent); color: var(--ink); }
+.bd-namebar .trip-add-btn { margin-left: 2px; }
+.cg-actions { display: flex; align-items: center; gap: 8px; margin-top: 7px; flex-wrap: wrap; }
+.cg-actions .cg-link { margin-top: 0; }
+.cg-pop .trip-add-btn { background: #eef1ee; color: #2a2f35; border-color: #d7dcd7; }
+.cg-pop .trip-add-btn:hover { border-color: #2e7d32; color: #2a2f35; }
+
+/* Trip picker popover — floating (document-level) so a Leaflet popup can't clip
+   it; positioned in JS near the anchor. */
+.trip-picker { z-index: 1600; background: var(--panel); border: 1px solid var(--accent);
+  border-radius: 8px; padding: 9px; display: flex; flex-direction: column; gap: 7px; width: 212px;
   box-shadow: 0 6px 22px rgba(0, 0, 0, 0.55); }
-.trip-picker select { background: #313942; color: var(--ink); border: 1px solid var(--line);
-  border-radius: 6px; padding: 5px; font-size: 12px; }
+.trip-picker.floating { position: fixed; }
+.trip-picker select, .trip-picker-new { background: #313942; color: var(--ink);
+  border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px; font-size: 12px; }
 .trip-picker-roles { display: flex; gap: 12px; font-size: 12px; color: var(--muted); }
 .trip-picker-roles label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
 .trip-picker .btn { padding: 5px 10px; font-size: 12px; }
-.trip-picker-empty { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+.trip-picker-err { font-size: 11px; color: #e8786b; }
+.trip-picker-err:empty { display: none; }
+
+/* Brief confirmation toast after adding to a trip. */
+.trip-toast { position: fixed; top: 14px; left: 50%; z-index: 2000;
+  transform: translateX(-50%) translateY(-8px); background: var(--accent); color: #fff;
+  padding: 8px 14px; border-radius: 8px; font-size: 13px; font-weight: 600;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45); opacity: 0; pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease; }
+.trip-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }

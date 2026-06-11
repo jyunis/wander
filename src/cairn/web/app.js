@@ -195,6 +195,18 @@ async function init() {
       /* ignore malformed */
     }
   });
+  // Delegated "＋ trip" handler — same reach as the ★ (sheet + campground cards).
+  document.addEventListener("click", (e) => {
+    const add = e.target.closest(".trip-add-btn");
+    if (!add) return;
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      addToTripFlow(JSON.parse(add.dataset.fav), add);
+    } catch {
+      /* ignore malformed */
+    }
+  });
   loadSaved();
   setupTabs();
 }
@@ -915,6 +927,16 @@ function campgroundCard(p, lat, lon) {
   badges.push(...amenityBadges(m));
   if (m.fee) badges.push("💲 " + String(m.fee).replace(/\s*per night/i, "/night"));
 
+  const tripBtn =
+    lat != null && lon != null
+      ? tripAddButton("campground", lat, lon, p.name, {
+          category: p.category,
+          name: p.name,
+          url: p.url,
+          meta: p.meta,
+        })
+      : "";
+
   const row = (cls, txt) => (txt ? `<div class="${cls}">${txt}</div>` : "");
   const badgeRow = badgeRowHtml(badges);
   const types = (m.site_types || []).map(esc).join(" · ");
@@ -928,8 +950,10 @@ function campgroundCard(p, lat, lon) {
     row("cg-facts cg-acts", acts) +
     row("cg-facts", m.phone ? "☎ " + esc(m.phone) : "") +
     row("cg-blurb", esc(m.blurb)) +
+    `<div class="cg-actions">` +
     (href ? `<a class="cg-link" href="${esc(href)}" target="_blank" rel="noopener">${label} ↗</a>` : "") +
-    `</div>`
+    tripBtn +
+    `</div></div>`
   );
 }
 
@@ -1279,7 +1303,7 @@ function renderSavedList() {
     row.querySelector(".saved-main").onclick = () => reopenSaved(savedPlaces[i]);
     row.querySelector(".saved-add").onclick = (e) => {
       e.stopPropagation();
-      openTripPicker(savedPlaces[i], row, e.currentTarget);
+      openTripPickerAt(savedPlaces[i], e.currentTarget);
     };
     row.querySelector(".saved-del").onclick = (e) => {
       e.stopPropagation();
@@ -1381,7 +1405,7 @@ function breakdownHtml(p, lat, lon, { expanded = false } = {}) {
     `<div class="bd-namebar">${starButton("site", lat, lon, null, p)}` +
     `<input id="site-name" class="bd-name" placeholder="${
       hasScore ? "Name this site…" : "Name this location…"
-    }" autocomplete="off" /></div>`;
+    }" autocomplete="off" />${tripAddButton("site", lat, lon, null, p)}</div>`;
   const ratingRow = ratingRowHtml(lat, lon);
   const noteRow = noteFieldHtml(lat, lon);
   const coordsHtml =
@@ -1609,6 +1633,11 @@ function memberIcon(m) {
   };
 }
 
+// What a member IS (kind) — independent of its role (first choice vs backup).
+function kindWord(kind) {
+  return kind === "campground" ? "campground" : kind === "site" ? "dispersed site" : "dropped pin";
+}
+
 function tripMemberRow(m) {
   const { icon, label } = memberIcon(m);
   const coords = `${(+m.lat).toFixed(4)}, ${(+m.lon).toFixed(4)}`;
@@ -1638,14 +1667,14 @@ function renderTripMembers() {
   const members = activeTrip.members || [];
   host.innerHTML =
     tripGroupHtml(
-      "Primary · dispersed",
+      "Primary · first choice",
       members.filter((m) => m.role === "primary"),
-      "No primary spots yet — add a dispersed site."
+      "No primary picks yet."
     ) +
     tripGroupHtml(
-      "Fallback · reservable",
+      "Fallback · backup",
       members.filter((m) => m.role === "fallback"),
-      "No fallbacks yet — add a campground to fall back on."
+      "No backups yet."
     );
   host.querySelectorAll(".trip-mem").forEach((row) => {
     const id = parseInt(row.dataset.id, 10);
@@ -1710,8 +1739,8 @@ function fillAddList(list, available) {
       return (
         `<div class="trip-add-row" data-i="${i}">` +
         `<span class="trip-add-name">${icon} ${esc(label)}</span>` +
-        `<button data-role="primary" title="Add as a primary (dispersed) idea">primary</button>` +
-        `<button data-role="fallback" title="Add as a reservable fallback">fallback</button></div>`
+        `<button data-role="primary" title="Add as a primary (first choice)">primary</button>` +
+        `<button data-role="fallback" title="Add as a fallback (backup)">fallback</button></div>`
       );
     })
     .join("");
@@ -1765,14 +1794,16 @@ function plotTrip() {
   const pts = [];
   (activeTrip.members || []).forEach((m) => {
     const isP = m.role === "primary";
-    const html = isP
-      ? `<div class="trip-pin trip-primary">⛺</div>`
-      : `<div class="trip-pin trip-fallback">🏕️</div>`;
+    // Glyph by KIND (what it is), ring/fill color by ROLE (first choice vs
+    // backup) — the two are independent: a campground can be a primary, a
+    // dispersed site can be a fallback.
+    const { icon, label } = memberIcon(m);
+    const html = `<div class="trip-pin ${isP ? "trip-primary" : "trip-fallback"}">${icon}</div>`;
     const mk = L.marker([m.lat, m.lon], {
       icon: L.divIcon({ className: "", html, iconSize: [26, 26], iconAnchor: [13, 13] }),
     }).bindPopup(
-      `<b>${esc(m.name || (isP ? "Primary" : "Fallback"))}</b><br>` +
-        `${isP ? "Primary · dispersed" : "Fallback · reservable"}`
+      `<b>${esc(m.name || label)}</b><br>` +
+        `${isP ? "Primary" : "Fallback"} · ${esc(kindWord(m.kind))}`
     );
     tripLayer.addLayer(mk);
     pts.push([m.lat, m.lon]);
@@ -1793,72 +1824,153 @@ function exportTrip(fmt) {
   window.location = `/trips/${activeTrip.id}/export.${fmt}`;
 }
 
-// "Add to a trip" popover anchored under a Saved-list row (the bridge from the
-// ★-saved list into trips). Lazily loads the trip list the first time it opens.
+// --- "Add to trip" — compose a trip while scoring / exploring ---------------
+// Surfaced next to the ★ on the scored-site sheet, dropped pins, and every
+// campground card, plus the ＋ on Saved rows. A member always references a
+// saved_place, so this saves the place first if needed, then offers a small
+// floating picker: which trip (or a new one, inline) and which role.
+
+// A compact button mirroring the ★'s place payload, placed beside it.
+function tripAddButton(kind, lat, lon, name, payload) {
+  const fav = esc(JSON.stringify({ kind, name: name || null, lat, lon, payload: payload || null }));
+  return `<button class="trip-add-btn" title="Add to a trip" data-fav="${fav}">＋ trip</button>`;
+}
+
+// From a map popup / sheet ★-payload: ensure it's saved, then open the picker.
+async function addToTripFlow(fav, btn) {
+  let id = savedByKey.get(savedKey(fav.kind, fav.lat, fav.lon));
+  if (id == null) {
+    const star = btn.parentElement && btn.parentElement.querySelector(".star");
+    await toggleFav(fav, star || undefined); // saves it (it isn't saved yet)
+    id = savedByKey.get(savedKey(fav.kind, fav.lat, fav.lon));
+  }
+  if (id == null) return;
+  const place = savedPlaces.find((s) => s.id === id) || { id, ...fav };
+  openTripPickerAt(place, btn);
+}
+
 let _tripPicker = null;
 function closeTripPicker() {
   if (_tripPicker) {
     _tripPicker.remove();
     _tripPicker = null;
     document.removeEventListener("click", _onPickerOutside, true);
+    if (map) map.off("movestart", closeTripPicker);
   }
 }
 function _onPickerOutside(e) {
   if (_tripPicker && !_tripPicker.contains(e.target)) closeTripPicker();
 }
 
-async function openTripPicker(saved, anchorRow) {
-  const reopening = _tripPicker && _tripPicker._for === saved.id;
+// A floating picker positioned under `anchorEl` (document-level, so it's never
+// clipped by a Leaflet popup). Choose an existing trip or create one inline;
+// pick the role (primary = first choice, fallback = backup; default primary,
+// independent of the place's kind).
+async function openTripPickerAt(place, anchorEl) {
+  const same = _tripPicker && _tripPicker._for === place.id;
   closeTripPicker();
-  if (reopening) return; // a second ＋ click closes it
+  if (same) return; // a second click toggles it closed
   if (!tripsLoaded) await loadTrips();
+
+  const hasTrips = trips.length > 0;
+  const opts = trips.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("");
   const pick = document.createElement("div");
-  pick.className = "trip-picker";
-  pick._for = saved.id;
-  if (!trips.length) {
-    pick.innerHTML =
-      `<div class="trip-picker-empty">No trips yet. Open the Trips tab to ` +
-      `create one, then add places to it.</div>`;
-  } else {
-    const opts = trips.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("");
-    const defRole = saved.kind === "campground" ? "fallback" : "primary";
-    pick.innerHTML =
-      `<select class="trip-picker-sel">${opts}</select>` +
-      `<div class="trip-picker-roles">` +
-      `<label><input type="radio" name="tp-role" value="primary" ${
-        defRole === "primary" ? "checked" : ""
-      }> primary</label>` +
-      `<label><input type="radio" name="tp-role" value="fallback" ${
-        defRole === "fallback" ? "checked" : ""
-      }> fallback</label></div>` +
-      `<button class="btn trip-picker-add">Add to trip</button>`;
-  }
-  anchorRow.appendChild(pick);
+  pick.className = "trip-picker floating";
+  pick._for = place.id;
+  pick.innerHTML =
+    (hasTrips
+      ? `<select class="trip-picker-sel">${opts}<option value="__new__">＋ New trip…</option></select>`
+      : "") +
+    `<input class="trip-picker-new" type="text" placeholder="New trip name" ${
+      hasTrips ? "hidden" : ""
+    } autocomplete="off" />` +
+    `<div class="trip-picker-roles">` +
+    `<label><input type="radio" name="tp-role" value="primary" checked> primary</label>` +
+    `<label><input type="radio" name="tp-role" value="fallback"> fallback</label></div>` +
+    `<button class="btn trip-picker-add">Add to trip</button>` +
+    `<div class="trip-picker-err"></div>`;
+  document.body.appendChild(pick);
   _tripPicker = pick;
-  // Defer wiring the outside-click closer so the opening click doesn't trip it.
-  setTimeout(() => document.addEventListener("click", _onPickerOutside, true), 0);
-  const addBtn = pick.querySelector(".trip-picker-add");
-  if (addBtn) {
-    addBtn.onclick = async (e) => {
-      e.stopPropagation();
-      const tripId = parseInt(pick.querySelector(".trip-picker-sel").value, 10);
-      const role = pick.querySelector('input[name="tp-role"]:checked').value;
-      addBtn.disabled = true;
-      const r = await fetch(`/trips/${tripId}/members`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ saved_id: saved.id, role }),
-      });
-      closeTripPicker();
-      if (!r.ok) return;
-      setStatus("Added to trip.", "ok");
-      const updated = await r.json();
-      if (tripsLoaded) loadTrips(); // refresh member counts
-      if (activeTrip && activeTrip.id === tripId && !$("trip-detail").hidden) {
-        applyTripUpdate(updated);
-      }
+  positionPicker(pick, anchorEl);
+
+  const sel = pick.querySelector(".trip-picker-sel");
+  const newInput = pick.querySelector(".trip-picker-new");
+  if (sel) {
+    sel.onchange = () => {
+      newInput.hidden = sel.value !== "__new__";
+      if (!newInput.hidden) newInput.focus();
     };
   }
+  // Defer wiring the outside-click closer so the opening click doesn't trip it;
+  // also close if the map starts moving (the anchor would drift).
+  setTimeout(() => document.addEventListener("click", _onPickerOutside, true), 0);
+  if (map) map.on("movestart", closeTripPicker);
+
+  pick.querySelector(".trip-picker-add").onclick = async (e) => {
+    e.stopPropagation();
+    const errEl = pick.querySelector(".trip-picker-err");
+    const role = pick.querySelector('input[name="tp-role"]:checked').value;
+    const makeNew = !sel || sel.value === "__new__";
+    let tripId;
+    if (makeNew) {
+      const name = newInput.value.trim();
+      if (!name) {
+        errEl.textContent = "Name the new trip.";
+        newInput.focus();
+        return;
+      }
+      const cr = await fetch("/trips", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (!cr.ok) {
+        errEl.textContent = "Couldn't create the trip.";
+        return;
+      }
+      tripId = (await cr.json()).id;
+    } else {
+      tripId = parseInt(sel.value, 10);
+    }
+    const r = await fetch(`/trips/${tripId}/members`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ saved_id: place.id, role }),
+    });
+    closeTripPicker();
+    if (!r.ok) return;
+    const updated = await r.json();
+    const name = (trips.find((t) => t.id === tripId) || updated || {}).name || "trip";
+    tripToast(`Added to ${name}`);
+    if (tripsLoaded) loadTrips(); // refresh counts (+ pick up a new trip)
+    if (activeTrip && activeTrip.id === tripId && !$("trip-detail").hidden) {
+      applyTripUpdate(updated);
+    }
+  };
+}
+
+// Place the floating picker just below the anchor, clamped to the viewport.
+function positionPicker(pick, anchorEl) {
+  const r = anchorEl.getBoundingClientRect();
+  const w = 212;
+  pick.style.left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8)) + "px";
+  pick.style.top = Math.min(r.bottom + 4, window.innerHeight - 8) + "px";
+}
+
+// A brief confirmation toast (top-center), auto-dismissed.
+let _toastTimer = null;
+function tripToast(msg) {
+  let el = $("trip-toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "trip-toast";
+    el.className = "trip-toast";
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove("show"), 1900);
 }
 
 init();
