@@ -20,20 +20,23 @@ from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Default feature weights (sum need not be 1; the scorer renormalizes). Keys
-# are the canonical feature names used throughout the engine. flatness is the
-# highest-signal feature (Architecture § Feature set).
-# Defaults lean toward forest-road dispersed camping: road_character is the
-# dominant signal (ground truth: 18/25 drive-in sites on Forest Roads), with
-# solitude second. flatness/water/trees discriminate little in flat lake
-# country, so they're secondary.
+# are the canonical feature names used throughout the engine.
+# Tuned 2026-06-11 against the 24 matched drive-in Chippewa ground-truth sites
+# (eval/): only road_end (corr +0.33 w/ star rating) and water_proximity (+0.28)
+# track real site quality. remoteness (+0.01) and solitude (-0.29) do NOT — they
+# were ~30% of the old weight and let generic deep-woods points outrank real
+# lakeside spurs, so they're cut hard. road_character stays a strong gate (most
+# good sites are on a forest road). tree_cover is 0: OSM has no landcover
+# polygons in national forests (only an admin boundary), so it degrades for
+# every run anyway — see the eval writeup / would need a landcover raster.
 DEFAULT_WEIGHTS: dict[str, float] = {
-    "road_end": 0.25,  # the spur-end premium ("drive to the end of the road")
-    "road_character": 0.20,  # forest-road class
-    "remoteness": 0.20,  # isolation (low local road density)
-    "water_proximity": 0.15,  # ... that ends near a lake
-    "solitude": 0.10,
+    "road_end": 0.30,  # spur-end premium ("drive to the end of the road")
+    "water_proximity": 0.28,  # ...that ends near a lake — top quality signal
+    "road_character": 0.21,  # forest-road class (gate)
+    "remoteness": 0.11,  # isolation (low local road density)
+    "solitude": 0.05,
     "flatness": 0.05,
-    "tree_cover": 0.05,
+    "tree_cover": 0.00,  # unavailable from OSM in national forests; renormalized out
 }
 
 # UI weight presets — each just sets slider values (FC-9). Served via
