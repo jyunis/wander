@@ -581,12 +581,16 @@ function renderMeta(run) {
     : "";
 }
 
-// Score -> color on a red->amber->green ramp, on the ABSOLUTE 0-1 scale so a
-// genuinely mediocre area reads as yellow/red instead of being faked green by
-// per-run normalization. The absolute total is also shown in the breakdown.
+// Score -> color on a red->amber->green ramp. ABSOLUTE (a given score always
+// maps to the same color, comparable across runs — not per-run normalized), but
+// stretched across the meaningful band so real sites show visible spread:
+// totals cluster in ~0.4 (poor) .. 0.8 (excellent), and a linear 0-1 ramp would
+// paint that whole band green. Below SCORE_LO is red, above SCORE_HI is green.
+const SCORE_LO = 0.4;
+const SCORE_HI = 0.8;
 function scoreColor(t) {
-  const hue = 120 * Math.max(0, Math.min(1, t));
-  return `hsl(${hue}, 68%, 47%)`;
+  const x = Math.max(0, Math.min(1, (t - SCORE_LO) / (SCORE_HI - SCORE_LO)));
+  return `hsl(${120 * x}, 68%, 47%)`;
 }
 
 function renderResults(gj) {
@@ -639,7 +643,11 @@ function renderCandidates() {
     const p = f.properties;
     const label = p.distinct_rank != null ? p.distinct_rank : p.rank;
     const marker = L.marker([lat, lon], {
-      icon: L.divIcon({ className: "", html: `<div class="rank-pin">${label}</div>`, iconSize: [22, 22] }),
+      icon: L.divIcon({
+        className: "",
+        html: `<div class="rank-pin" style="background:${scoreColor(p.total)}">${label}</div>`,
+        iconSize: [22, 22],
+      }),
     });
     marker.on("click", () => showSite(p, lat, lon));
     pinLayer.addLayer(marker);

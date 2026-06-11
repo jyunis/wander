@@ -279,7 +279,9 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
         border-top: 1px solid var(--line); }
 .foot a { color: var(--muted); }
 
+/* background is set inline per-pin to its absolute score color (renderCandidates) */
 .rank-pin { background: var(--accent); color: #fff; border-radius: 50%;
             width: 22px; height: 22px; display: flex; align-items: center;
             justify-content: center; font-size: 11px; font-weight: 700;
-            border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+            border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.5);
+            text-shadow: 0 1px 2px rgba(0,0,0,.6); }
