@@ -24,8 +24,8 @@
         <h1>Cairn <span class="cairn">🪨</span></h1>
         <nav id="tabs">
           <button class="tab active" data-tab="score">Score</button>
-          <button class="tab disabled" data-tab="triplog" title="Coming later" disabled>
-            Trip log
+          <button class="tab" data-tab="trips" title="Group saved places into a dated trip">
+            Trips
           </button>
         </nav>
       </header>
@@ -33,7 +33,7 @@
       <!-- TLC-3: persistent, non-dismissible legality disclaimer -->
       <div id="disclaimer" class="disclaimer">Loading…</div>
 
-      <section class="controls">
+      <section id="score-section" class="controls">
         <div class="row">
           <button id="draw-bbox" class="btn">▭ Draw area</button>
           <button id="use-view" class="btn ghost">Use current view</button>
@@ -106,6 +106,42 @@
         <select id="run-history"></select>
         <div id="provenance" class="provenance"></div>
         <div id="degraded" class="degraded"></div>
+      </section>
+
+      <!-- Trips: group saved places into a named, dated outing; plot + export. -->
+      <section id="trips-section" class="controls" hidden>
+        <div id="trips-list-view">
+          <div class="row trips-top">
+            <button id="trip-new" class="btn">＋ New trip</button>
+          </div>
+          <form id="trip-new-form" class="trip-form" hidden>
+            <input id="trip-name" type="text" placeholder="Trip name — e.g. Labor Day weekend" autocomplete="off" />
+            <div class="trip-dates">
+              <label>Start <input id="trip-start" type="date" /></label>
+              <label>End <input id="trip-end" type="date" /></label>
+            </div>
+            <div class="row">
+              <button type="submit" class="btn primary trip-form-save">Create trip</button>
+              <button type="button" id="trip-new-cancel" class="btn ghost">Cancel</button>
+            </div>
+            <div id="trip-form-err" class="status"></div>
+          </form>
+          <div id="trips-list" class="trips-list"></div>
+          <div id="trips-empty" class="hint" hidden>No trips yet. Create one, then add saved places to it.</div>
+        </div>
+
+        <div id="trip-detail" hidden>
+          <button id="trip-back" class="btn ghost trip-back">‹ All trips</button>
+          <div id="trip-detail-head" class="trip-head"></div>
+          <div id="trip-members" class="trip-members"></div>
+          <div id="trip-add" class="trip-add"></div>
+          <div class="row trip-actions">
+            <button id="trip-plot" class="btn">🗺 Plot on map</button>
+            <button id="trip-gpx" class="btn ghost">⬇ GPX</button>
+            <button id="trip-kml" class="btn ghost">⬇ KML</button>
+          </div>
+          <div class="trip-export-hint hint">GPX → onX / Gaia / Garmin · KML → Google Earth. Load before you lose signal.</div>
+        </div>
       </section>
 
       <footer class="foot">
