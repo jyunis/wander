@@ -117,9 +117,10 @@ class SavedRequest(BaseModel):
 
 class SavedUpdateRequest(BaseModel):
     # Partial update: a field left unset is not written (model_fields_set tracks
-    # which were sent), so renaming doesn't clear the rating and vice versa.
+    # which were sent), so editing one of name/rating/note keeps the rest.
     name: str | None = None
     rating: float | None = Field(default=None, description="quality rating, 0-5 stars")
+    note: str | None = None
 
 
 # --- error handling --------------------------------------------------------
@@ -271,6 +272,7 @@ async def update_saved(saved_id: int, req: SavedUpdateRequest, request: Request)
         saved_id,
         name=req.name if "name" in sent else UNSET,
         rating=req.rating if "rating" in sent else UNSET,
+        note=req.note if "note" in sent else UNSET,
     )
     if row is None:
         return JSONResponse(status_code=404, content={"error": "NotFound"})

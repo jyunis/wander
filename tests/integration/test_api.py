@@ -210,8 +210,13 @@ def test_saved_rating_and_partial_update(client):
     # PATCH name only — rating is preserved.
     r = client.patch(f"/saved/{sid}", json={"name": "Glove"})
     assert r.json()["name"] == "Glove" and r.json()["rating"] == 5
-    # Clearing the rating explicitly is allowed.
-    assert client.patch(f"/saved/{sid}", json={"rating": None}).json()["rating"] is None
+    # PATCH note only — name + rating preserved.
+    r = client.patch(f"/saved/{sid}", json={"note": "hilltop, good swimming"})
+    assert r.json()["note"] == "hilltop, good swimming"
+    assert r.json()["name"] == "Glove" and r.json()["rating"] == 5
+    # Clearing the rating explicitly is allowed (and leaves the note intact).
+    r = client.patch(f"/saved/{sid}", json={"rating": None})
+    assert r.json()["rating"] is None and r.json()["note"] == "hilltop, good swimming"
     # Out-of-range rating -> 422.
     assert client.post(
         "/saved", json={"kind": "site", "lat": 1.0, "lon": 2.0, "rating": 9}

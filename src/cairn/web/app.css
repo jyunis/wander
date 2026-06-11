@@ -201,6 +201,8 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
   margin-top: 1px; }
 .saved-score { color: var(--accent); }
 .saved-stars { color: #f3c64b; letter-spacing: 1px; }
+.saved-note { font-size: 10px; color: var(--muted); opacity: 0.85; margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .saved-del { background: none; border: none; color: var(--muted); cursor: pointer;
   font-size: 15px; line-height: 1; }
 .saved-del:hover { color: #e8786b; }
@@ -221,6 +223,11 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .rough-badge { font-weight: 600; font-size: 11px; color: #1d2227;
   background: var(--warn); border-radius: 4px; padding: 1px 6px; margin-left: 6px; }
 
+.bd-note { width: 100%; box-sizing: border-box; margin: 0 0 10px; resize: vertical;
+  min-height: 38px; background: #313942; color: var(--ink); border: 1px solid var(--line);
+  border-radius: 7px; padding: 7px 9px; font: inherit; font-size: 12.5px; line-height: 1.4; }
+.bd-note::placeholder { color: var(--muted); }
+.bd-note:focus { border-color: var(--accent); outline: none; }
 .bd-rating { display: flex; gap: 3px; margin: -2px 0 9px 2px; }
 .bd-rating .rstar { font-size: 18px; line-height: 1; color: #4a525c; cursor: pointer;
   transition: color 0.1s; }
