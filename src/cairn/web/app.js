@@ -5,6 +5,7 @@ let CONFIG = null;
 let map, drawnItems, heatLayer, pinLayer, candidatesLayer, roadsLayer, canvasRenderer, gotoMarker;
 let nearbyCgLayer; // ephemeral markers: the campgrounds near the open scored site
 let tripLayer; // markers for the currently plotted trip's members
+let tripPlotMode = false; // "Plot on map" is showing ONLY trip stops (results/overlays hidden)
 let selectedMarker = null; // marker for the currently-selected (saved) place
 let baseLayers = []; // current basemap tile layer(s): imagery + optional labels
 let bbox = null; // {min_lon,min_lat,max_lon,max_lat}
@@ -544,6 +545,7 @@ async function loadRuns() {
 }
 
 async function loadRun(runId) {
+  exitTripPlot(); // loading a run leaves the trip-plot view
   activeRunId = runId;
   $("run-history").value = String(runId);
   const gj = await (await fetch(`/runs/${runId}/geojson`)).json();
@@ -750,6 +752,7 @@ let _overlayTimer = null;
 let _popupOpen = false; // a Leaflet popup (campground info window) is open
 let _overlayPending = false; // a refresh was deferred while a popup was open
 function refreshActiveOverlays() {
+  if (tripPlotMode) return; // trip-plot view: only trip stops, no land overlays
   if (!overlayActive.size) return;
   // A moveend refetch rebuilds the overlay layer (removeLayer + re-add), which
   // would close any popup anchored to one of its markers. Defer while a popup
@@ -1482,6 +1485,7 @@ function setupTabs() {
       $("score-section").hidden = which !== "score";
       $("trips-section").hidden = which !== "trips";
       if (which === "trips") loadTrips();
+      else exitTripPlot(); // back to Score: restore the normal map
     };
   });
   $("trip-new").onclick = () => toggleTripForm(true);
@@ -1790,8 +1794,8 @@ async function saveTripEdits(form) {
 
 function plotTrip() {
   if (!activeTrip) return;
-  tripLayer.clearLayers();
   const pts = [];
+  tripLayer.clearLayers();
   (activeTrip.members || []).forEach((m) => {
     const isP = m.role === "primary";
     // Glyph by KIND (what it is), ring/fill color by ROLE (first choice vs
@@ -1808,14 +1812,50 @@ function plotTrip() {
     tripLayer.addLayer(mk);
     pts.push([m.lat, m.lon]);
   });
-  if (!map.hasLayer(tripLayer)) map.addLayer(tripLayer);
   if (!pts.length) {
     setStatus("This trip has no places yet — add some first.", "err");
     return;
   }
+  // Clear the map down to just the trip stops (results, roads, nearby
+  // campgrounds, land overlays all hidden) so the trip reads cleanly.
+  clearMapForTrip();
+  if (!map.hasLayer(tripLayer)) map.addLayer(tripLayer);
   if (window.matchMedia("(max-width: 640px)").matches) setNav(false); // reveal the map
   if (pts.length === 1) map.setView(pts[0], 13);
   else map.fitBounds(pts, { padding: [50, 50], maxZoom: 14 });
+}
+
+// Hide everything that isn't a trip stop. Result layers keep their features
+// (just detached from the map) so exitTripPlot can restore them; land overlays
+// are removed but their toggles/overlayActive stay set, and refreshActiveOverlays
+// is suppressed while tripPlotMode is on so a pan doesn't bring them back.
+function clearMapForTrip() {
+  tripPlotMode = true;
+  closeSite(); // also clears nearbyCgLayer + any selected marker
+  [pinLayer, candidatesLayer, heatLayer, roadsLayer, drawnItems].forEach((l) => {
+    if (l && map.hasLayer(l)) map.removeLayer(l);
+  });
+  if (gotoMarker) {
+    map.removeLayer(gotoMarker);
+    gotoMarker = null;
+  }
+  Object.keys(overlayLayers).forEach((id) => {
+    if (overlayLayers[id]) {
+      map.removeLayer(overlayLayers[id]);
+      delete overlayLayers[id];
+    }
+  });
+}
+
+// Leave the trip-plot view: drop the trip stops and restore the normal map —
+// the scored-result layers (per their checkboxes) and any active land overlays.
+function exitTripPlot() {
+  if (!tripPlotMode) return;
+  tripPlotMode = false;
+  tripLayer.clearLayers();
+  if (drawnItems && !map.hasLayer(drawnItems)) map.addLayer(drawnItems);
+  updateLayerVisibility(); // restore checked result layers (pins/dots/heat/roads)
+  refreshActiveOverlays(); // re-fetch any active land overlays
 }
 
 function exportTrip(fmt) {
