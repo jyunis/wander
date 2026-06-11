@@ -387,10 +387,11 @@ class Store:
         return cur.rowcount > 0
 
     async def update_saved(
-        self, saved_id: int, name: object = UNSET, rating: object = UNSET
+        self, saved_id: int, name: object = UNSET, rating: object = UNSET,
+        note: object = UNSET,
     ) -> dict | None:
         """Partial update of a saved place. Only fields not left UNSET are
-        written (so a rating edit doesn't clobber the name, and vice versa)."""
+        written (so editing one of name/rating/note doesn't clobber the rest)."""
         sets, params = [], []
         if name is not UNSET:
             sets.append("name=?")
@@ -398,6 +399,9 @@ class Store:
         if rating is not UNSET:
             sets.append("rating=?")
             params.append(rating)
+        if note is not UNSET:
+            sets.append("note=?")
+            params.append(note)
         if sets:
             params.append(saved_id)
             await self.db.execute(

@@ -943,7 +943,38 @@ function showSite(p, lat, lon, presetName) {
   body.querySelectorAll(".bd-rating .rstar").forEach((el, i) => {
     el.onclick = () => setRating(lat, lon, i + 1);
   });
+  wireSiteNote(body.querySelector(".bd-note"), lat, lon);
   loadNearbyCampgrounds(lat, lon, body);
+}
+
+// Free-text note for the open site. Like rating, editing a note saves the site
+// first; persists on blur (the textarea's change event).
+function noteFieldHtml(lat, lon) {
+  const id = savedByKey.get(savedKey("site", lat, lon));
+  const note = id != null ? savedPlaces.find((s) => s.id === id)?.note || "" : "";
+  return `<textarea class="bd-note" placeholder="Notes…" rows="2">${esc(note)}</textarea>`;
+}
+
+function wireSiteNote(noteEl, lat, lon) {
+  if (!noteEl) return;
+  let savedVal = noteEl.value;
+  noteEl.addEventListener("change", async () => {
+    const v = noteEl.value;
+    if (v === savedVal) return;
+    const id = await ensureSavedFromSheet(); // a note keeps the site
+    if (id == null) return;
+    const r = await fetch(`/saved/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note: v.trim() || null }),
+    });
+    if (!r.ok) return;
+    const u = await r.json();
+    const i = savedPlaces.findIndex((x) => x.id === id);
+    if (i >= 0) savedPlaces[i] = u;
+    savedVal = v;
+    renderSavedList();
+  });
 }
 
 // A 1-5 star rating for the open site. Stars reflect the saved record's rating
@@ -1177,10 +1208,13 @@ function renderSavedList() {
       const stars = s.rating
         ? ` · <span class="saved-stars">${"★".repeat(Math.round(s.rating))}</span>`
         : "";
+      const noteLine = s.note ? `<div class="saved-note">${esc(s.note)}</div>` : "";
       return (
         `<div class="saved-row" data-i="${i}"><div class="saved-main">` +
         `<div class="saved-name">${icon} ${esc(label)}</div>` +
-        `<div class="saved-coords">${coords}${score}${stars}</div></div>` +
+        `<div class="saved-coords">${coords}${score}${stars}</div>` +
+        noteLine +
+        `</div>` +
         `<button class="saved-del" title="Remove">×</button></div>`
       );
     })
@@ -1289,14 +1323,15 @@ function breakdownHtml(p, lat, lon, { expanded = false } = {}) {
       hasScore ? "Name this site…" : "Name this location…"
     }" autocomplete="off" /></div>`;
   const ratingRow = ratingRowHtml(lat, lon);
+  const noteRow = noteFieldHtml(lat, lon);
   const coordsHtml =
     `<div class="bd-coords">📍 <span class="bd-ll">${coords}</span>` +
     `<a class="bd-gmaps" href="${gmaps}" target="_blank" rel="noopener">` +
     `Open in Google&nbsp;Maps ↗</a></div>`;
-  // A dropped pin has no score — just name it, rate it, see nearby, save it.
+  // A dropped pin has no score — just name it, rate it, note it, see nearby, save.
   if (!hasScore) {
     return (
-      nameBar + ratingRow + coordsHtml +
+      nameBar + ratingRow + coordsHtml + noteRow +
       `<div class="bd-nearby"></div>` +
       `<div class="bd-raw bd-disc">${CONFIG.disclaimer}</div>`
     );
@@ -1327,6 +1362,7 @@ function breakdownHtml(p, lat, lon, { expanded = false } = {}) {
     nameBar +
     ratingRow +
     coordsHtml +
+    noteRow +
     `<div class="bd-total">Total: ${p.total.toFixed(3)} (rank #${p.rank})${rough}</div>` +
     `<div class="bd-nearby"></div>` +
     `<button type="button" class="bd-toggle">${expanded ? "▾" : "▸"} Why this score</button>` +
