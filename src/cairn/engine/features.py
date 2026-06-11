@@ -42,19 +42,24 @@ _FOREST_ROAD_RE = re.compile(
 )
 
 
-def compute_road_score(tags: dict, cfg: dict) -> float:
+def compute_road_score(tags: dict, cfg: dict, forest_overlap: bool = False) -> float:
     """Map a source way's OSM tags to a [0,1] 'dispersed-camping-ish' score.
 
     Pure (TLC-1). Driven by the scoring-config `road_character` block: base
     score by highway class + a floor for Forest-Service-named roads. Roughness
     is NOT penalized here (it's a separate informational flag) — a rough forest
     track is a full hit.
+
+    `forest_overlap` floors the score the same way a Forest-Service name does:
+    the caller sets it when a USFS MVUM forest road runs right alongside this
+    point, which means the source way is the OSM copy of a forest road that OSM
+    happens to mistag (e.g. highway=residential) — see the MVUM↔OSM reconcile.
     """
     classes = cfg["class_scores"]
     base = classes.get(tags.get("highway"), classes["_default"])
     name = f"{tags.get('name', '')} {tags.get('ref', '')}"
     operator = tags.get("operator", "").lower()
-    if _FOREST_ROAD_RE.search(name) or "forest service" in operator:
+    if forest_overlap or _FOREST_ROAD_RE.search(name) or "forest service" in operator:
         base = max(base, cfg.get("forest_named_score", 1.0))
     return max(0.0, min(1.0, base))
 
@@ -94,6 +99,7 @@ async def extract_features(
     road_tags: dict[int, dict],
     termini: list[tuple[float, float, int]],
     building_setback_m: float,
+    forest_overlap: bool = False,
 ) -> CandidateFeatures:
     lon, lat = candidate.lon, candidate.lat
     water_r, forest_r, solitude_r = _search_radii(scoring_config)
@@ -115,15 +121,16 @@ async def extract_features(
 
     # road_character <- the candidate's source way tags (always available when
     # the source road resolved; degraded only if its tags went missing).
+    # `forest_overlap` floors it to forest-road class when a USFS MVUM forest
+    # road runs alongside (the OSM source is the mistagged copy — TLC reconcile).
     tags = road_tags.get(candidate.source_way_id)
     rough = False
-    if tags is None:
+    if tags is None and not forest_overlap:
         road = FeatureValue(None, False)
     else:
-        road = FeatureValue(
-            compute_road_score(tags, scoring_config["features"]["road_character"]), True
-        )
-        rough = road_is_rough(tags)
+        rcfg = scoring_config["features"]["road_character"]
+        road = FeatureValue(compute_road_score(tags or {}, rcfg, forest_overlap), True)
+        rough = road_is_rough(tags or {})
 
     # remoteness <- inverse local drivable-road density within radius_m.
     rcfg = scoring_config["features"]["remoteness"]

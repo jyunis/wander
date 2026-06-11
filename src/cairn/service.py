@@ -184,6 +184,9 @@ class RunService:
             # 6: features.
             present = await self._store.classes_present(b)
             road_tags = await self._store.drivable_way_tags(b)
+            # Candidates whose point sits alongside a USFS MVUM forest road get
+            # forest road_character even if sampled from a mistagged OSM copy.
+            mvum_near = await self._store.candidates_near_mvum(run_id, self._s.mvum_overlap_m)
             terrain = self._terrain_factory(self._s, zoom=self._s.terrarium_zoom)
             feature_rows: list[tuple] = []
             cfs: list[CandidateFeatures] = []
@@ -191,7 +194,7 @@ class RunService:
                 for cid, cand in id_candidates:
                     cf = await extract_features(
                         self._store, terrain, cand, params, present, road_tags, termini,
-                        self._s.building_setback_m,
+                        self._s.building_setback_m, forest_overlap=cid in mvum_near,
                     )
                     cfs.append(cf)
                     feature_rows.append(_feature_row(cid, cf))

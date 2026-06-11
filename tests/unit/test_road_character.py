@@ -39,6 +39,16 @@ def test_forest_named_road_floors_to_high():
     ) == pytest.approx(1.0)
 
 
+def test_forest_overlap_floors_a_mistagged_osm_road():
+    # The OSM↔MVUM reconcile: Big Dick's access is OSM "Burns Lake Road"
+    # (highway=residential -> 0.25), but a USFS MVUM forest road runs alongside.
+    burns = {"highway": "residential", "name": "Burns Lake Road"}
+    assert compute_road_score(burns, CFG) == pytest.approx(0.25)  # without overlap
+    assert compute_road_score(burns, CFG, forest_overlap=True) == pytest.approx(1.0)
+    # A genuinely-low road with no forest road nearby keeps its class.
+    assert compute_road_score({"highway": "residential"}, CFG, forest_overlap=False) == pytest.approx(0.25)
+
+
 def test_roughness_never_penalizes_score():
     # Rough access should INCREASE hits, not cost them — a rough forest track
     # is still a full hit (it's flagged separately, not scored down).

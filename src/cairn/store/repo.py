@@ -538,6 +538,28 @@ class Store:
                 out[int(osm_id)] = {}
         return out
 
+    async def candidates_near_mvum(self, run_id: int, radius_m: float) -> set[int]:
+        """Candidate ids (this run) within `radius_m` of a USFS MVUM forest road.
+
+        Reconciles the OSM↔MVUM duplicate-road problem for road_character: OSM
+        and MVUM often digitize the same forest road twice, and a candidate
+        sampled from the OSM copy (which OSM may mistag, e.g. highway=residential)
+        still deserves forest-road character if the MVUM forest road runs right
+        alongside it. Per-CANDIDATE (not per-way): an OSM way can be a forest
+        road for part of its length and a county road for the rest, so the test
+        has to be local to the point. No-op when MVUM is absent (empty set)."""
+        buf = (radius_m / _M_PER_DEG) * 2.0  # generous deg envelope for the index
+        cur = await self.db.execute(
+            "SELECT c.id FROM candidates c WHERE c.run_id = ? AND EXISTS ("
+            "  SELECT 1 FROM osm_features m WHERE m.feature_class = 'drivable' "
+            "  AND m.osm_type = 'mvum' AND m.ROWID IN ("
+            "    SELECT ROWID FROM SpatialIndex WHERE f_table_name = 'osm_features' "
+            "    AND f_geometry_column = 'geom' AND search_frame = ST_Buffer(c.geom, ?)) "
+            "  AND ST_Distance(c.geom, m.geom, 1) <= ?)",
+            (run_id, buf, radius_m),
+        )
+        return {int(r[0]) for r in await cur.fetchall()}
+
     async def local_road_length_m(
         self, lon: float, lat: float, radius_m: float
     ) -> float:
