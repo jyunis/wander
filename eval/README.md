@@ -7,7 +7,9 @@ sites — and, importantly, for keeping it honest about scope.
 
 76 designated/dispersed sites in Chippewa National Forest, parsed from
 [minnesotacampguide.com](https://www.minnesotacampguide.com/free-car-camping-chippewa-national-forest-designated-dispersed),
-each with `lat`/`lon`, a `stars` quality rating, `access`, and road tags.
+each with `lat`/`lon`, a `stars` quality rating, `access`, road tags, and a
+descriptive `blurb` (the source write-up — also used as the note when these are
+seeded as saved favorites).
 
 **Access matters.** A towed teardrop can only reach `access == "DRIVE"` sites.
 Of the 76, only **25 are drive-in** — the other 51 are paddle-in / hike-in /
