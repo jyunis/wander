@@ -68,10 +68,15 @@
           <span class="rd-swatch rd-forest"></span><span>forest road</span>
           <span class="rd-swatch rd-other"></span><span>drivable</span>
         </div>
-        <div class="legend" title="dot colour = score, relative to this area">
-          <span>lower</span>
+        <div class="legend" title="dot color = absolute score (0–1)">
+          <span>0</span>
           <div class="legend-bar"></div>
-          <span>higher</span>
+          <span>1</span>
+        </div>
+        <div class="minscore-row">
+          <label for="min-score">Min score <span id="min-score-val" class="val">0.45</span></label>
+          <input type="range" id="min-score" min="0" max="0.9" step="0.05" value="0.45" />
+          <div id="result-count" class="hint"></div>
         </div>
 
         <div id="land-section" hidden>
