@@ -88,6 +88,18 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Cairn", version=__version__, lifespan=lifespan)
 
 
+@app.middleware("http")
+async def _revalidate_static(request: Request, call_next):
+    """Make the browser revalidate the UI assets every load (cheap 304 via the
+    StaticFiles ETag when unchanged) so a rebuild shows up without a hard refresh
+    — instead of serving a stale cached app.js/app.css off heuristic caching."""
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.endswith((".js", ".css", ".html")):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 # --- request models --------------------------------------------------------
 
 

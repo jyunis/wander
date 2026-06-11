@@ -224,7 +224,7 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
   background: var(--warn); border-radius: 4px; padding: 1px 6px; margin-left: 6px; }
 
 .bd-note { width: 100%; box-sizing: border-box; margin: 0 0 10px; resize: vertical;
-  min-height: 38px; background: #313942; color: var(--ink); border: 1px solid var(--line);
+  min-height: 76px; background: #313942; color: var(--ink); border: 1px solid var(--line);
   border-radius: 7px; padding: 7px 9px; font: inherit; font-size: 12.5px; line-height: 1.4; }
 .bd-note::placeholder { color: var(--muted); }
 .bd-note:focus { border-color: var(--accent); outline: none; }
