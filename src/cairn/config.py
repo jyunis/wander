@@ -157,6 +157,9 @@ class Settings(BaseSettings):
     # --- Candidate generation ---------------------------------------------
     candidate_spacing_m: float = 150.0  # along-way sampling interval (UoW-5)
     candidate_grid_m: float = 100.0  # dedup grid cell size
+    # A candidate within this distance of a USFS MVUM forest road gets forest
+    # road_character even if its OSM source way is mistagged (OSM↔MVUM reconcile).
+    mvum_overlap_m: float = 25.0
 
     # --- Distinct-site selection (spatial NMS) ----------------------------
     # After scoring, suppress lower-scoring candidates within this radius of a
