@@ -8,6 +8,8 @@ let selectedMarker = null; // marker for the currently-selected (saved) place
 let baseLayers = []; // current basemap tile layer(s): imagery + optional labels
 let bbox = null; // {min_lon,min_lat,max_lon,max_lat}
 let activeRunId = null;
+let lastGj = null; // last run's geojson, kept for re-filtering on min-score change
+let minScore = 0.45; // hide candidates/sites below this absolute total (noise floor)
 
 // Keyless basemap sources. Add more here — the selector is data-driven.
 // maxNativeZoom = the source's real max; maxZoom lets Leaflet over-zoom
@@ -70,7 +72,7 @@ const BASEMAPS = [
 ];
 
 // --- land overlays (display-only reference layers; TLC-3) ------------------
-// Ownership categories colour-coded; Tax Forfeit is the highlight (often
+// Ownership categories color-coded; Tax Forfeit is the highlight (often
 // open to dispersed use, the layer onX charges for). Boundaries draw as
 // outlines. All off by default, fetched per current map view.
 const OWNERSHIP_COLORS = {
@@ -163,6 +165,11 @@ async function init() {
   ["layer-pins", "layer-dots", "layer-heat", "layer-roads"].forEach((id) => {
     $(id).onchange = updateLayerVisibility;
   });
+  $("min-score").oninput = (e) => {
+    minScore = parseFloat(e.target.value);
+    $("min-score-val").textContent = minScore.toFixed(2);
+    renderCandidates(); // re-filter the existing run, no re-score
+  };
   ["f-firstcome", "f-electric", "f-water", "f-pets", "f-ada", "f-rv"].forEach((id) => {
     const el = $(id);
     if (el) el.addEventListener("input", applyCampgroundFilters);
@@ -574,53 +581,59 @@ function renderMeta(run) {
     : "";
 }
 
-// Score -> colour on a red->amber->green ramp. Normalized to THIS run's score
-// range so the spread is visible even when totals cluster; the absolute total
-// is always shown in the breakdown panel.
+// Score -> color on a red->amber->green ramp, on the ABSOLUTE 0-1 scale so a
+// genuinely mediocre area reads as yellow/red instead of being faked green by
+// per-run normalization. The absolute total is also shown in the breakdown.
 function scoreColor(t) {
   const hue = 120 * Math.max(0, Math.min(1, t));
   return `hsl(${hue}, 68%, 47%)`;
 }
 
 function renderResults(gj) {
+  lastGj = gj;
+  renderCandidates();
+  const feats = gj.features || [];
+  if (feats.length) {
+    const b = gj.run.bbox;
+    map.fitBounds([[b[1], b[0]], [b[3], b[2]]], { padding: [20, 20] });
+  }
+}
+
+// (Re)draw the result layers from lastGj, hiding anything below the min-score
+// bar. Called on a fresh run and whenever the min-score slider moves (no
+// re-fetch — the geojson already carries each candidate's absolute total).
+function renderCandidates() {
   candidatesLayer.clearLayers();
   pinLayer.clearLayers();
   if (heatLayer) {
     map.removeLayer(heatLayer);
     heatLayer = null;
   }
-  const feats = gj.features || [];
-  if (!feats.length) {
-    updateLayerVisibility();
-    return;
-  }
+  const feats = (lastGj && lastGj.features) || [];
+  const visible = feats.filter((f) => f.properties.total >= minScore);
 
-  const totals = feats.map((f) => f.properties.total);
-  const min = Math.min(...totals), max = Math.max(...totals);
-  const norm = (t) => (max > min ? (t - min) / (max - min) : 0.5);
-
-  // Default lens: every passing candidate as a score-coloured dot.
-  feats.forEach((f) => {
+  // Every passing candidate as an absolute-score-colored dot.
+  visible.forEach((f) => {
     const [lon, lat] = f.geometry.coordinates;
     const p = f.properties;
     const dot = L.circleMarker([lat, lon], {
       renderer: canvasRenderer,
       radius: 4,
       weight: 0,
-      fillColor: scoreColor(norm(p.total)),
+      fillColor: scoreColor(p.total),
       fillOpacity: 0.85,
     });
     dot.on("click", () => showSite(p, lat, lon));
     candidatesLayer.addLayer(dot);
   });
 
-  // Numbered pins for the top 25 DISTINCT sites (spatial NMS, not adjacent
-  // road samples). Fall back to plain rank for pre-NMS runs (no distinct_rank).
-  const distinct = feats
+  // Numbered pins for the top DISTINCT sites above the bar (spatial NMS, not
+  // adjacent road samples). Fall back to plain rank for pre-NMS runs.
+  const distinct = visible
     .filter((f) => f.properties.distinct && f.properties.distinct_rank != null)
     .sort((a, b) => a.properties.distinct_rank - b.properties.distinct_rank);
   const MAX_PINS = 60;
-  const pinFeats = distinct.length ? distinct.slice(0, MAX_PINS) : feats.slice(0, MAX_PINS);
+  const pinFeats = distinct.length ? distinct.slice(0, MAX_PINS) : visible.slice(0, MAX_PINS);
   pinFeats.forEach((f) => {
     const [lon, lat] = f.geometry.coordinates;
     const p = f.properties;
@@ -632,17 +645,29 @@ function renderResults(gj) {
     pinLayer.addLayer(marker);
   });
 
-  // Heatmap is built but only shown when its checkbox is on.
-  const heat = feats.map((f) => [
+  // Heatmap (only shown when its checkbox is on) — also above the bar.
+  const heat = visible.map((f) => [
     f.geometry.coordinates[1],
     f.geometry.coordinates[0],
     Math.max(0.05, f.properties.total),
   ]);
-  heatLayer = L.heatLayer(heat, { radius: 22, blur: 16, max: 1.0 });
+  heatLayer = visible.length ? L.heatLayer(heat, { radius: 22, blur: 16, max: 1.0 }) : null;
 
+  updateResultCount(feats);
   updateLayerVisibility();
-  const b = gj.run.bbox;
-  map.fitBounds([[b[1], b[0]], [b[3], b[2]]], { padding: [20, 20] });
+}
+
+// "N of M sites ≥ bar" readout, counting DISTINCT sites (the numbered pins).
+function updateResultCount(feats) {
+  const el = $("result-count");
+  if (!el) return;
+  if (!feats.length) {
+    el.textContent = "";
+    return;
+  }
+  const total = feats.filter((f) => f.properties.distinct).length;
+  const shown = feats.filter((f) => f.properties.distinct && f.properties.total >= minScore).length;
+  el.textContent = `${shown} of ${total} sites ≥ ${minScore.toFixed(2)}`;
 }
 
 function updateLayerVisibility() {
