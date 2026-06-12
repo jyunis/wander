@@ -91,7 +91,8 @@ def test_engine_never_references_availability_data_tlc3():
     # tokens only (not the bare word "availability", which appears in prose).
     forbidden = re.compile(
         r"cairn\.availability|RecreationGovClient|campground_month|"
-        r"trip_availability|count_open_all_nights|federal_facility_id"
+        r"trip_availability|count_open_all_nights|federal_facility_id|"
+        r"UseDirectClient|facility_grid|usedirect_facility_ids"
     )
     for path in ENGINE_DIR.glob("*.py"):
         source = _strip_comments(path.read_text(encoding="utf-8"))

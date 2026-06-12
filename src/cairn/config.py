@@ -153,6 +153,13 @@ class Settings(BaseSettings):
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
     )
+    # MN state-park availability via UseDirect (Phase 2 / PR2). Same display-only
+    # posture + short cache + browser UA (reuses availability_*). The grid is a
+    # read exposed as POST. Markers map to a numeric FacilityId via a committed
+    # offline-built table (src/cairn/data/usedirect_mn.json, scripts/
+    # build_usedirect_map.py) — unmapped markers degrade to link-out.
+    usedirect_enabled: bool = True
+    usedirect_grid_url: str = "https://mnrdr.usedirect.com/minnesotardr/rdr/search/grid"
 
     # --- Caps (TLC-4) ------------------------------------------------------
     max_bbox_area_km2: float = 2500.0

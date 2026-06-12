@@ -68,6 +68,41 @@ class CourtesyHttp:
             await asyncio.sleep(delay)
             attempt += 1
 
+    async def post_json(
+        self,
+        url: str,
+        body: dict,
+        *,
+        timeout: float = 30.0,
+    ) -> httpx.Response:
+        """POST a JSON body with the same concurrency cap + 429/5xx backoff.
+
+        Some public READ APIs only expose their query as a POST (e.g. the
+        UseDirect availability grid is `POST …/search/grid`). This is still a
+        read — no auth, no mutation of remote state — so it keeps the TLC-12
+        posture; the verb is the API's, not ours. Returns the final Response.
+        """
+        attempt = 0
+        while True:
+            async with self._sem:
+                resp = await self._client.post(url, json=body, timeout=timeout)
+            if resp.status_code < 400:
+                return resp
+            retryable = resp.status_code == 429 or 500 <= resp.status_code < 600
+            if not retryable or attempt >= self._max_retries:
+                return resp
+            delay = self._retry_delay(resp, attempt)
+            log.warning(
+                "POST %s -> %s; backing off %.1fs (attempt %d/%d)",
+                url,
+                resp.status_code,
+                delay,
+                attempt + 1,
+                self._max_retries,
+            )
+            await asyncio.sleep(delay)
+            attempt += 1
+
     def _retry_delay(self, resp: httpx.Response, attempt: int) -> float:
         retry_after = resp.headers.get("Retry-After")
         if retry_after:
