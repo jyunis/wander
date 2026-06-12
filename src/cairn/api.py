@@ -17,8 +17,10 @@ at / (mounted if web/ exists).
 
 from __future__ import annotations
 
+import json
 import logging
 from contextlib import asynccontextmanager
+from importlib.resources import files
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -33,6 +35,7 @@ from cairn.clients.mvum import MvumClient
 from cairn.clients.nominatim import GeocodeClient
 from cairn.clients.overpass import OverpassClient
 from cairn.clients.usa_structures import StructuresClient
+from cairn.clients.usedirect import UseDirectClient
 from cairn.config import get_settings
 from cairn.errors import GeocodeError, RunNotFound, ValidationError
 from cairn.export import trip_slug, trip_to_gpx, trip_to_kml
@@ -45,6 +48,25 @@ from cairn.store.repo import UNSET
 from cairn.store.types import Bbox
 
 log = logging.getLogger("cairn.api")
+
+
+def _load_usedirect_map() -> dict:
+    """The committed MN marker-name -> UseDirect FacilityId table (display-only).
+    Degradable: a missing/unreadable file just means MN markers link out."""
+    candidates = [
+        files("cairn") / "data" / "usedirect_mn.json",  # packaged (wheel)
+        Path(__file__).parent / "data" / "usedirect_mn.json",  # source tree
+    ]
+    for path in candidates:
+        try:
+            return json.loads(Path(str(path)).read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            continue
+        except Exception as exc:  # noqa: BLE001 - best-effort, never fatal to boot
+            log.warning("usedirect mapping unreadable (%s); MN availability off", exc)
+            return {}
+    log.warning("usedirect mapping file not found; MN availability off")
+    return {}
 
 
 @asynccontextmanager
@@ -61,6 +83,8 @@ async def lifespan(app: FastAPI):
     availability = (
         RecreationGovClient(settings) if settings.availability_enabled else None
     )
+    usedirect = UseDirectClient(settings) if settings.usedirect_enabled else None
+    usedirect_map = _load_usedirect_map() if settings.usedirect_enabled else {}
     app.state.settings = settings
     app.state.store = store
     app.state.overlays = overlays
@@ -69,11 +93,14 @@ async def lifespan(app: FastAPI):
     app.state.structures = structures
     app.state.geocoder = geocoder
     app.state.availability = availability
+    app.state.usedirect = usedirect
+    app.state.usedirect_map = usedirect_map
     app.state.service = RunService(
         store, settings, overpass=overpass, mvum=mvum, structures=structures
     )
     log.info(
-        "cairn %s ready on %s:%s (mvum=%s structures=%s overlays=%s availability=%s)",
+        "cairn %s ready on %s:%s "
+        "(mvum=%s structures=%s overlays=%s availability=%s usedirect=%s/%d)",
         __version__,
         settings.host,
         settings.port,
@@ -81,6 +108,8 @@ async def lifespan(app: FastAPI):
         "on" if structures else "off",
         "on" if overlays.available else "off",
         "on" if availability else "off",
+        "on" if usedirect else "off",
+        len(usedirect_map),
     )
     try:
         yield
@@ -94,6 +123,8 @@ async def lifespan(app: FastAPI):
             await geocoder.aclose()
         if availability is not None:
             await availability.aclose()
+        if usedirect is not None:
+            await usedirect.aclose()
         await overlays.close()
         await store.close()
 
@@ -472,7 +503,12 @@ async def trip_availability_endpoint(trip_id: int, request: Request) -> JSONResp
     if trip is None:
         return JSONResponse(status_code=404, content={"error": "NotFound"})
     client: RecreationGovClient | None = request.app.state.availability
-    result = await trip_availability(trip, client)
+    result = await trip_availability(
+        trip,
+        client,
+        usedirect_client=request.app.state.usedirect,
+        usedirect_map=request.app.state.usedirect_map,
+    )
     return JSONResponse(status_code=200, content={**result, "disclaimer": DISCLAIMER})
 
 

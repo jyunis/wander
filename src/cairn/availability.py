@@ -23,6 +23,7 @@ import re
 from datetime import date, timedelta
 
 from cairn.clients.availability import AVAILABLE, RecreationGovClient
+from cairn.clients.usedirect import UseDirectClient
 from cairn.errors import AvailabilityError, AvailabilityNotReservable
 
 log = logging.getLogger("cairn.availability")
@@ -31,6 +32,21 @@ log = logging.getLogger("cairn.availability")
 _FED_FID_RE = re.compile(r"recreation\.gov/camping/campgrounds/(\d+)", re.IGNORECASE)
 
 SYSTEM_RECGOV = "recreation.gov"
+SYSTEM_USEDIRECT = "usedirect"
+
+
+def usedirect_facility_ids(
+    payload: dict | None, mapping: dict | None
+) -> list[int]:
+    """The UseDirect FacilityId(s) for a MN state-park campground member, by
+    matching the saved marker name against the committed mapping. A list (one
+    campground can be several loop-facilities); [] if unmapped -> degrades."""
+    if not payload or not mapping:
+        return []
+    v = mapping.get(payload.get("name"))
+    if v is None:
+        return []
+    return [int(x) for x in v] if isinstance(v, list) else [int(v)]
 
 
 def federal_facility_id(payload: dict | None) -> str | None:
@@ -100,17 +116,26 @@ def format_range(start: str, end: str) -> str:
     return f"{s:%b} {s.day}, {s.year} – {e:%b} {e.day}, {e.year}"
 
 
-async def trip_availability(trip: dict, client: RecreationGovClient | None) -> dict:
+async def trip_availability(
+    trip: dict,
+    client: RecreationGovClient | None,
+    *,
+    usedirect_client: UseDirectClient | None = None,
+    usedirect_map: dict | None = None,
+) -> dict:
     """Per-campground-member availability for a trip, keyed by saved_id.
 
-    Returns `{"dates": {...}, "members": {saved_id: badge}}` where each badge is
-    one of:
+    Federal campgrounds resolve via recreation.gov; MN state-park campgrounds
+    (mapped to a UseDirect FacilityId) via `usedirect_client`; everything else
+    degrades to "unsupported" (link out). Returns `{"dates": {...}, "members":
+    {saved_id: badge}}` where each badge is one of:
       - {"system": "recreation.gov", "status": "ok", "open_sites", "total_sites",
          "summary"}                      federal, dates set, fetched OK
       - {"system": "recreation.gov", "status": "first_come"} federal, not reservable (FCFS)
       - {"system": "recreation.gov", "status": "no_dates"}   federal, trip has no dates
       - {"system": "recreation.gov", "status": "error"}      federal, source failed
-      - {"system": None, "status": "unsupported"}            non-federal -> link out
+      - {"system": "usedirect", "status": "ok"/"no_dates"/"error"}  MN state park
+      - {"system": None, "status": "unsupported"}            unmapped -> link out
     """
     members = trip.get("members") or []
     start, end = trip.get("start_date"), trip.get("end_date")
@@ -123,12 +148,17 @@ async def trip_availability(trip: dict, client: RecreationGovClient | None) -> d
         "nights": len(nights) if nights else 0,
     }
 
-    async def resolve(member: dict) -> tuple[str, dict]:
-        payload = member.get("payload") or {}
-        saved_id = str(member.get("saved_id"))
-        fid = federal_facility_id(payload)
-        if fid is None:
-            return saved_id, {"system": None, "status": "unsupported"}
+    def _ok_badge(system: str, open_sites: int, total: int) -> dict:
+        return {
+            "system": system,
+            "status": "ok",
+            "open_sites": open_sites,
+            "total_sites": total,
+            "summary": f"{open_sites} of {total} site{'s' if total != 1 else ''} "
+            f"open {format_range(start, end)}",
+        }
+
+    async def resolve_federal(saved_id: str, payload: dict, fid: str) -> tuple[str, dict]:
         # Fast path: RIDB already flags this federal campground first-come — no
         # reservable grid exists, so skip the (404-ing) fetch entirely.
         if (payload.get("meta") or {}).get("reservable") is False:
@@ -146,17 +176,43 @@ async def trip_availability(trip: dict, client: RecreationGovClient | None) -> d
             # 404 -> no reservable inventory; it's first-come, not a failure.
             return saved_id, {"system": SYSTEM_RECGOV, "status": "first_come"}
         except AvailabilityError as exc:
-            log.info("availability fetch failed for %s: %s", fid, exc)
+            log.info("recreation.gov fetch failed for %s: %s", fid, exc)
             return saved_id, {"system": SYSTEM_RECGOV, "status": "error"}
         open_sites, total = count_open_all_nights(month_maps, nights)
-        return saved_id, {
-            "system": SYSTEM_RECGOV,
-            "status": "ok",
-            "open_sites": open_sites,
-            "total_sites": total,
-            "summary": f"{open_sites} of {total} site{'s' if total != 1 else ''} "
-            f"open {format_range(start, end)}",
-        }
+        return saved_id, _ok_badge(SYSTEM_RECGOV, open_sites, total)
+
+    async def resolve_usedirect(saved_id: str, fids: list[int]) -> tuple[str, dict]:
+        if nights is None:
+            return saved_id, {"system": SYSTEM_USEDIRECT, "status": "no_dates"}
+        if usedirect_client is None:
+            return saved_id, {"system": SYSTEM_USEDIRECT, "status": "error"}
+        # One window from the first night covering the whole stay; the grid
+        # returns a multi-week window regardless, so we just index our nights.
+        span = (date.fromisoformat(nights[-1]) - date.fromisoformat(nights[0])).days + 1
+        units: dict[str, dict[str, bool]] = {}
+        try:
+            for fid in fids:  # a campground may be several loop-facilities -> merge
+                grid = await usedirect_client.facility_grid(fid, nights[0], span)
+                for uid, daymap in grid.items():
+                    units[f"{fid}:{uid}"] = daymap
+        except AvailabilityError as exc:
+            log.info("usedirect fetch failed for %s: %s", fids, exc)
+            return saved_id, {"system": SYSTEM_USEDIRECT, "status": "error"}
+        if not units:  # no inventory came back -> can't characterize; degrade
+            return saved_id, {"system": SYSTEM_USEDIRECT, "status": "error"}
+        open_sites = sum(1 for d in units.values() if all(d.get(n) for n in nights))
+        return saved_id, _ok_badge(SYSTEM_USEDIRECT, open_sites, len(units))
+
+    async def resolve(member: dict) -> tuple[str, dict]:
+        payload = member.get("payload") or {}
+        saved_id = str(member.get("saved_id"))
+        fid = federal_facility_id(payload)
+        if fid is not None:
+            return await resolve_federal(saved_id, payload, fid)
+        ud_fids = usedirect_facility_ids(payload, usedirect_map)
+        if ud_fids:
+            return await resolve_usedirect(saved_id, ud_fids)
+        return saved_id, {"system": None, "status": "unsupported"}
 
     results = await asyncio.gather(*(resolve(m) for m in cg_members))
     return {"dates": dates_block, "members": dict(results)}

@@ -5,8 +5,9 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 
-# Runtime data — mounted volume (cairn.db, tiles/, osm-cache/)
-data/
+# Runtime data — mounted volume (cairn.db, tiles/, osm-cache/). Anchored to the
+# repo root so committed package data (src/cairn/data/) stays tracked.
+/data/
 
 # Secrets
 .env
