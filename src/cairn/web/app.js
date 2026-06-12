@@ -1531,6 +1531,10 @@ function fmt(v, unit) {
 let trips = []; // GET /trips — list rows with member_count
 let tripsLoaded = false; // fetched /trips at least once this session
 let activeTrip = null; // hydrated trip open in the detail view
+// Phase 2 availability (display-only — TLC-3). Fetched lazily per trip so the
+// detail renders instantly; a fetch failure just drops the badges (degradable).
+let tripAvail = {}; // saved_id(str) -> badge {system,status,open_sites,total_sites,summary}
+let tripAvailLoading = false;
 
 function setupTabs() {
   document.querySelectorAll(".tab").forEach((tab) => {
@@ -1637,9 +1641,40 @@ async function openTrip(id) {
   const r = await fetch(`/trips/${id}`);
   if (!r.ok) return showTripsList();
   activeTrip = await r.json();
+  tripAvail = {};
   $("trips-list-view").hidden = true;
   $("trip-detail").hidden = false;
   renderTripDetail();
+  loadTripAvailability(id); // lazy: paints badges when it returns
+}
+
+// Fetch live availability for the open trip's campground members and repaint.
+// Best-effort: any failure (offline, source down) leaves the trip working with
+// no badges (RIDB/MVUM posture). Guards against the user navigating away mid-flight.
+async function loadTripAvailability(tripId) {
+  const hasCg = (activeTrip?.members || []).some((m) => m.kind === "campground");
+  if (!hasCg) {
+    tripAvail = {};
+    tripAvailLoading = false;
+    return;
+  }
+  tripAvail = {};
+  tripAvailLoading = true;
+  renderTripMembers(); // show "checking…" on campground rows
+  try {
+    const r = await fetch(`/trips/${tripId}/availability`);
+    if (!r.ok) throw new Error(r.status);
+    const body = await r.json();
+    if (!activeTrip || activeTrip.id !== tripId) return; // navigated away
+    tripAvail = body.members || {};
+  } catch (e) {
+    tripAvail = {}; // degrade to no badges
+  } finally {
+    if (activeTrip && activeTrip.id === tripId) {
+      tripAvailLoading = false;
+      renderTripMembers();
+    }
+  }
 }
 
 function showTripsList() {
@@ -1709,7 +1744,9 @@ function tripMemberRow(m) {
     `<div class="trip-mem" data-id="${m.saved_id}"><div class="trip-mem-main">` +
     `<div class="trip-mem-name">${icon} ${esc(label)}</div>` +
     `<div class="trip-mem-coords">${coords} · <a href="${esc(geo)}">geo</a> · ` +
-    `<a href="${esc(gmaps)}" target="_blank" rel="noopener">Maps ↗</a></div></div>` +
+    `<a href="${esc(gmaps)}" target="_blank" rel="noopener">Maps ↗</a></div>` +
+    availBadgeHtml(m) +
+    `</div>` +
     `<button class="trip-role ${isP ? "is-primary" : "is-fallback"}" ` +
     `title="Switch role (primary ↔ fallback)">${isP ? "P" : "F"}</button>` +
     `<button class="trip-mem-del" title="Remove from trip">×</button></div>`
@@ -1721,6 +1758,35 @@ function tripGroupHtml(title, members, emptyHint) {
     ? members.map(tripMemberRow).join("")
     : `<div class="trip-group-empty">${emptyHint}</div>`;
   return `<div class="trip-group-title">${title}</div>${rows}`;
+}
+
+// The availability annotation under a campground member row. Federal -> open/
+// full count; non-federal -> a link-out to the reservation system; no dates ->
+// a nudge; source error / still-loading -> muted. Non-campgrounds get nothing.
+function availBadgeHtml(m) {
+  if (m.kind !== "campground") return "";
+  if (tripAvailLoading) return `<div class="trip-avail checking">checking availability…</div>`;
+  const a = tripAvail[String(m.saved_id)];
+  if (!a) return "";
+  if (a.status === "ok") {
+    const cls = a.open_sites > 0 ? "open" : "full";
+    const mark = a.open_sites > 0 ? "🟢 " : "🚫 ";
+    return `<div class="trip-avail ${cls}">${mark}${esc(a.summary)}</div>`;
+  }
+  if (a.status === "first_come") {
+    return `<div class="trip-avail firstcome">⛺ First-come, first-served</div>`;
+  }
+  if (a.status === "no_dates") {
+    return `<div class="trip-avail muted">Set trip dates to check availability</div>`;
+  }
+  if (a.status === "unsupported") {
+    const { href, label } = campgroundLink(m.payload || {});
+    return (
+      `<div class="trip-avail link">` +
+      `<a href="${esc(href)}" target="_blank" rel="noopener">${esc(label)} ↗</a></div>`
+    );
+  }
+  return `<div class="trip-avail muted">Availability unavailable</div>`; // error
 }
 
 function renderTripMembers() {
@@ -1749,6 +1815,7 @@ function applyTripUpdate(updated) {
   if (updated && updated.members) activeTrip = updated;
   renderTripMembers();
   renderAddPlaces();
+  loadTripAvailability(activeTrip.id); // membership changed -> re-check (cache makes this cheap)
 }
 
 async function addMember(savedId, role) {
@@ -1847,6 +1914,7 @@ async function saveTripEdits(form) {
   }
   activeTrip = await r.json();
   renderTripDetail();
+  loadTripAvailability(activeTrip.id); // dates may have changed -> re-check
 }
 
 function plotTrip() {

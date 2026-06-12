@@ -351,6 +351,16 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
   cursor: pointer; font-size: 15px; line-height: 1; }
 .trip-mem-del:hover { color: #e8786b; }
 
+/* Phase 2 availability badge under a campground member (display-only — TLC-3). */
+.trip-avail { font-size: 10.5px; margin-top: 2px; line-height: 1.3; }
+.trip-avail.open { color: #6cc070; }
+.trip-avail.full { color: #e8786b; }
+.trip-avail.firstcome { color: #c8a24a; }
+.trip-avail.muted, .trip-avail.checking { color: var(--muted); opacity: 0.75; }
+.trip-avail.checking { font-style: italic; }
+.trip-avail.link a { color: var(--accent); text-decoration: none; }
+.trip-avail.link a:hover { text-decoration: underline; }
+
 .trip-add { margin-top: 12px; }
 .trip-add-toggle { width: 100%; text-align: left; background: none; border: 1px dashed var(--line);
   color: var(--muted); border-radius: 7px; padding: 7px 10px; cursor: pointer; font-size: 12px; }

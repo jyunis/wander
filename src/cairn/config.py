@@ -132,6 +132,27 @@ class Settings(BaseSettings):
     user_agent: str = (
         "cairn/0.1 (self-hosted campsite scorer; +https://cairn.home.arpa)"
     )
+    # Live campground availability (Phase 2, display-only — TLC-3). Federal
+    # campgrounds via recreation.gov's undocumented-but-stable month endpoint
+    # (the same one camply uses). Best-effort + fully degradable: a trip works
+    # with no availability — it just shows no open/closed badges (RIDB/MVUM
+    # posture). LIVE data -> SHORT TTL only, in the disposable cache (never the
+    # long overlay cache). Disable to drop the open/closed annotations.
+    #
+    # UA exception (TLC-5): unlike every other Cairn courtesy GET, recreation.gov
+    # rejects a non-browser User-Agent, so this client sends a browser UA. Still
+    # GET-only, no auth, no Authorization header — TLC-12 intact.
+    availability_enabled: bool = True
+    recgov_availability_url: str = (
+        "https://www.recreation.gov/api/camps/availability/campground"
+    )
+    availability_cache_dir: Path | None = None
+    availability_cache_ttl_s: int = 30 * 60  # 30 min — live data, short TTL
+    availability_concurrency: int = 2  # polite: rec.gov may rate-limit
+    availability_user_agent: str = (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    )
 
     # --- Caps (TLC-4) ------------------------------------------------------
     max_bbox_area_km2: float = 2500.0
@@ -191,6 +212,9 @@ class Settings(BaseSettings):
             self.osm_cache_dir = self.data_dir / "osm-cache"
         if self.overlays_db_path is None:
             self.overlays_db_path = self.data_dir / "overlays.db"
+        if self.availability_cache_dir is None:
+            # Disposable/derivable (TLC-7), backup-excluded like tiles/osm-cache.
+            self.availability_cache_dir = self.data_dir / "availability-cache"
         return self
 
     def ui_config(self) -> dict:

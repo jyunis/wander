@@ -124,6 +124,30 @@ class GeocodeBadResponse(GeocodeError):
     """Nominatim returned a non-2xx or unparseable response."""
 
 
+# --- Availability (recreation.gov live campground availability) ----------
+
+
+class AvailabilityError(CairnError):
+    """Base for live campground-availability failures (Phase 2, display-only —
+    TLC-3). Non-fatal: a trip degrades to no open/closed badges (same posture
+    as RIDB/MVUM) when the availability source is unreachable."""
+
+
+class AvailabilityUnreachable(AvailabilityError):
+    """Could not reach the availability source (network/DNS/refused/timeout)."""
+
+
+class AvailabilityBadResponse(AvailabilityError):
+    """The availability source returned a non-2xx after retries, or content
+    that could not be parsed."""
+
+
+class AvailabilityNotReservable(AvailabilityError):
+    """The campground has no reservable inventory (recreation.gov 404s its
+    availability grid) — i.e. it's first-come, first-served. Not a failure: the
+    caller surfaces it as "first-come," not "unavailable"."""
+
+
 # --- Terrain client (FC-2) -----------------------------------------------
 
 
