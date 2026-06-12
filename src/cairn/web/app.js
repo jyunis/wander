@@ -1531,6 +1531,12 @@ function fmt(v, unit) {
 let trips = []; // GET /trips — list rows with member_count
 let tripsLoaded = false; // fetched /trips at least once this session
 let activeTrip = null; // hydrated trip open in the detail view
+// Phase 2 availability (display-only — TLC-3). Fetched lazily per trip so the
+// detail renders instantly; a fetch failure just drops the badges (degradable).
+let tripAvail = {}; // saved_id(str) -> badge {system,status,open_sites,total_sites,summary}
+let tripAvailLoading = false;
+let tripAvailFilterOpen = false; // "Open only" filter over campground members
+let tripAvailSort = false; // sort campground members by open-count desc
 
 function setupTabs() {
   document.querySelectorAll(".tab").forEach((tab) => {
@@ -1637,9 +1643,42 @@ async function openTrip(id) {
   const r = await fetch(`/trips/${id}`);
   if (!r.ok) return showTripsList();
   activeTrip = await r.json();
+  tripAvail = {};
+  tripAvailFilterOpen = false;
+  tripAvailSort = false;
   $("trips-list-view").hidden = true;
   $("trip-detail").hidden = false;
   renderTripDetail();
+  loadTripAvailability(id); // lazy: paints badges when it returns
+}
+
+// Fetch live availability for the open trip's campground members and repaint.
+// Best-effort: any failure (offline, source down) leaves the trip working with
+// no badges (RIDB/MVUM posture). Guards against the user navigating away mid-flight.
+async function loadTripAvailability(tripId) {
+  const hasCg = (activeTrip?.members || []).some((m) => m.kind === "campground");
+  if (!hasCg) {
+    tripAvail = {};
+    tripAvailLoading = false;
+    return;
+  }
+  tripAvail = {};
+  tripAvailLoading = true;
+  renderTripMembers(); // show "checking…" on campground rows
+  try {
+    const r = await fetch(`/trips/${tripId}/availability`);
+    if (!r.ok) throw new Error(r.status);
+    const body = await r.json();
+    if (!activeTrip || activeTrip.id !== tripId) return; // navigated away
+    tripAvail = body.members || {};
+  } catch (e) {
+    tripAvail = {}; // degrade to no badges
+  } finally {
+    if (activeTrip && activeTrip.id === tripId) {
+      tripAvailLoading = false;
+      renderTripMembers();
+    }
+  }
 }
 
 function showTripsList() {
@@ -1709,7 +1748,9 @@ function tripMemberRow(m) {
     `<div class="trip-mem" data-id="${m.saved_id}"><div class="trip-mem-main">` +
     `<div class="trip-mem-name">${icon} ${esc(label)}</div>` +
     `<div class="trip-mem-coords">${coords} · <a href="${esc(geo)}">geo</a> · ` +
-    `<a href="${esc(gmaps)}" target="_blank" rel="noopener">Maps ↗</a></div></div>` +
+    `<a href="${esc(gmaps)}" target="_blank" rel="noopener">Maps ↗</a></div>` +
+    availBadgeHtml(m) +
+    `</div>` +
     `<button class="trip-role ${isP ? "is-primary" : "is-fallback"}" ` +
     `title="Switch role (primary ↔ fallback)">${isP ? "P" : "F"}</button>` +
     `<button class="trip-mem-del" title="Remove from trip">×</button></div>`
@@ -1723,20 +1764,93 @@ function tripGroupHtml(title, members, emptyHint) {
   return `<div class="trip-group-title">${title}</div>${rows}`;
 }
 
+// The availability annotation under a campground member row. Federal -> open/
+// full count; non-federal -> a link-out to the reservation system; no dates ->
+// a nudge; source error / still-loading -> muted. Non-campgrounds get nothing.
+function availBadgeHtml(m) {
+  if (m.kind !== "campground") return "";
+  if (tripAvailLoading) return `<div class="trip-avail checking">checking availability…</div>`;
+  const a = tripAvail[String(m.saved_id)];
+  if (!a) return "";
+  if (a.status === "ok") {
+    const cls = a.open_sites > 0 ? "open" : "full";
+    const mark = a.open_sites > 0 ? "🟢 " : "🚫 ";
+    return `<div class="trip-avail ${cls}">${mark}${esc(a.summary)}</div>`;
+  }
+  if (a.status === "first_come") {
+    return `<div class="trip-avail firstcome">⛺ First-come · no reservation</div>`;
+  }
+  if (a.status === "no_dates") {
+    return `<div class="trip-avail muted">Set trip dates to check availability</div>`;
+  }
+  if (a.status === "unsupported") {
+    const { href, label } = campgroundLink(m.payload || {});
+    return (
+      `<div class="trip-avail link">` +
+      `<a href="${esc(href)}" target="_blank" rel="noopener">${esc(label)} ↗</a></div>`
+    );
+  }
+  return `<div class="trip-avail muted">Availability unavailable</div>`; // error
+}
+
+// A campground's rank for "sort by availability" (-1 = no count / non-
+// campground). First-come is always bookable, so it sorts to the top.
+function availRank(m) {
+  if (m.kind !== "campground") return -1;
+  const a = tripAvail[String(m.saved_id)];
+  if (!a) return -1;
+  if (a.status === "first_come") return Number.MAX_SAFE_INTEGER;
+  return a.status === "ok" ? a.open_sites : -1;
+}
+
+// Apply the "Open only" filter + "Sort by availability" toggle to one group's
+// members (display-only — never mutates activeTrip.members). Non-campgrounds
+// are always kept; the filter only ever hides bookable campgrounds with 0 open.
+function arrangeForAvail(list) {
+  let out = list;
+  if (tripAvailFilterOpen) {
+    out = out.filter((m) => {
+      if (m.kind !== "campground") return true;
+      const a = tripAvail[String(m.saved_id)];
+      if (!a) return false;
+      // First-come is always bookable; otherwise keep only sites with openings.
+      return a.status === "first_come" || (a.status === "ok" && a.open_sites > 0);
+    });
+  }
+  if (tripAvailSort) out = out.slice().sort((x, y) => availRank(y) - availRank(x));
+  return out;
+}
+
+function availControlsHtml() {
+  return (
+    `<div class="trip-avail-controls">` +
+    `<label><input type="checkbox" class="avail-open"${tripAvailFilterOpen ? " checked" : ""}/> Open only</label>` +
+    `<label><input type="checkbox" class="avail-sort"${tripAvailSort ? " checked" : ""}/> Sort by availability</label>` +
+    `</div>`
+  );
+}
+
 function renderTripMembers() {
   const host = $("trip-members");
   const members = activeTrip.members || [];
+  const hasCg = members.some((m) => m.kind === "campground");
+  const showControls = hasCg && activeTrip.start_date && activeTrip.end_date;
   host.innerHTML =
+    (showControls ? availControlsHtml() : "") +
     tripGroupHtml(
       "Primary · first choice",
-      members.filter((m) => m.role === "primary"),
+      arrangeForAvail(members.filter((m) => m.role === "primary")),
       "No primary picks yet."
     ) +
     tripGroupHtml(
       "Fallback · backup",
-      members.filter((m) => m.role === "fallback"),
+      arrangeForAvail(members.filter((m) => m.role === "fallback")),
       "No backups yet."
     );
+  const oc = host.querySelector(".avail-open");
+  if (oc) oc.onchange = () => { tripAvailFilterOpen = oc.checked; renderTripMembers(); };
+  const sc = host.querySelector(".avail-sort");
+  if (sc) sc.onchange = () => { tripAvailSort = sc.checked; renderTripMembers(); };
   host.querySelectorAll(".trip-mem").forEach((row) => {
     const id = parseInt(row.dataset.id, 10);
     row.querySelector(".trip-role").onclick = () => toggleMemberRole(id);
@@ -1749,6 +1863,7 @@ function applyTripUpdate(updated) {
   if (updated && updated.members) activeTrip = updated;
   renderTripMembers();
   renderAddPlaces();
+  loadTripAvailability(activeTrip.id); // membership changed -> re-check (cache makes this cheap)
 }
 
 async function addMember(savedId, role) {
@@ -1847,6 +1962,7 @@ async function saveTripEdits(form) {
   }
   activeTrip = await r.json();
   renderTripDetail();
+  loadTripAvailability(activeTrip.id); // dates may have changed -> re-check
 }
 
 function plotTrip() {

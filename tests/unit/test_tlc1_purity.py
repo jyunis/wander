@@ -83,6 +83,23 @@ def test_engine_never_references_trip_or_export_data_tlc3():
         )
 
 
+def test_engine_never_references_availability_data_tlc3():
+    # TLC-3: live campground availability (Phase 2) is display-only — "is this
+    # campground open on my dates," never a scoring input. Guard the engine
+    # against importing the availability client or trip-availability service so
+    # a future change can't wire open/closed counts into scoring. Code-shaped
+    # tokens only (not the bare word "availability", which appears in prose).
+    forbidden = re.compile(
+        r"cairn\.availability|RecreationGovClient|campground_month|"
+        r"trip_availability|count_open_all_nights|federal_facility_id"
+    )
+    for path in ENGINE_DIR.glob("*.py"):
+        source = _strip_comments(path.read_text(encoding="utf-8"))
+        assert forbidden.search(source) is None, (
+            f"{path.name} references display-only availability data (TLC-3 violation)"
+        )
+
+
 def test_no_nondeterminism_primitives_in_engine_sources():
     checked_any = False
     for name in MODULES:

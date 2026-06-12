@@ -10,6 +10,7 @@ GET /runs/{id}/roads, GET /overlays, GET /overlays/{layer},
 GET /nearby-campgrounds, GET /saved, POST /saved, PATCH/DELETE /saved/{id},
 GET/POST /trips, GET/PATCH/DELETE /trips/{id}, POST /trips/{id}/members,
 DELETE /trips/{id}/members/{saved_id}, GET /trips/{id}/export.gpx|.kml,
+GET /trips/{id}/availability,
 GET /suggest-name, GET /geocode, GET /config, GET /health, and the static UI
 at / (mounted if web/ exists).
 """
@@ -26,6 +27,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from cairn import DISCLAIMER, __version__
+from cairn.availability import trip_availability
+from cairn.clients.availability import RecreationGovClient
 from cairn.clients.mvum import MvumClient
 from cairn.clients.nominatim import GeocodeClient
 from cairn.clients.overpass import OverpassClient
@@ -55,6 +58,9 @@ async def lifespan(app: FastAPI):
     mvum = MvumClient(settings) if settings.mvum_enabled else None
     structures = StructuresClient(settings) if settings.structures_enabled else None
     geocoder = GeocodeClient(settings) if settings.geocode_enabled else None
+    availability = (
+        RecreationGovClient(settings) if settings.availability_enabled else None
+    )
     app.state.settings = settings
     app.state.store = store
     app.state.overlays = overlays
@@ -62,17 +68,19 @@ async def lifespan(app: FastAPI):
     app.state.mvum = mvum
     app.state.structures = structures
     app.state.geocoder = geocoder
+    app.state.availability = availability
     app.state.service = RunService(
         store, settings, overpass=overpass, mvum=mvum, structures=structures
     )
     log.info(
-        "cairn %s ready on %s:%s (mvum=%s structures=%s overlays=%s)",
+        "cairn %s ready on %s:%s (mvum=%s structures=%s overlays=%s availability=%s)",
         __version__,
         settings.host,
         settings.port,
         "on" if mvum else "off",
         "on" if structures else "off",
         "on" if overlays.available else "off",
+        "on" if availability else "off",
     )
     try:
         yield
@@ -84,6 +92,8 @@ async def lifespan(app: FastAPI):
             await structures.aclose()
         if geocoder is not None:
             await geocoder.aclose()
+        if availability is not None:
+            await availability.aclose()
         await overlays.close()
         await store.close()
 
@@ -448,6 +458,22 @@ async def export_trip_kml(trip_id: int, request: Request):
     if trip is None:
         return JSONResponse(status_code=404, content={"error": "NotFound"})
     return _export_response(trip, "kml")
+
+
+@app.get("/trips/{trip_id}/availability")
+async def trip_availability_endpoint(trip_id: int, request: Request) -> JSONResponse:
+    """Live campground availability for a trip's dates (Phase 2, display-only —
+    TLC-3). Per campground-kind member (any role): "N of M sites open" for
+    federal (recreation.gov), else "unsupported" (the UI links out). Best-effort
+    + degradable — fetched lazily by the UI so the trip renders without it; a
+    source outage just drops the badges (RIDB/MVUM posture)."""
+    store: Store = request.app.state.store
+    trip = await store.get_trip(trip_id)
+    if trip is None:
+        return JSONResponse(status_code=404, content={"error": "NotFound"})
+    client: RecreationGovClient | None = request.app.state.availability
+    result = await trip_availability(trip, client)
+    return JSONResponse(status_code=200, content={**result, "disclaimer": DISCLAIMER})
 
 
 @app.get("/suggest-name")
