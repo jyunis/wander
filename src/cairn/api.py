@@ -98,7 +98,13 @@ async def _revalidate_static(request: Request, call_next):
     — instead of serving a stale cached app.js/app.css off heuristic caching."""
     response = await call_next(request)
     path = request.url.path
-    if path == "/" or path.endswith((".js", ".css", ".html")):
+    if path == "/" or path.endswith(".html"):
+        # The entry HTML must never be cached: iOS Safari was serving a stale
+        # index.html (ignoring no-cache revalidation), so every UI update was
+        # invisible on-device. no-store forces a fresh fetch every load; the
+        # HTML then points at content-hashed app.js/app.css (?v=…) for caching.
+        response.headers["Cache-Control"] = "no-store"
+    elif path.endswith((".js", ".css")):
         response.headers["Cache-Control"] = "no-cache"
     return response
 
@@ -521,5 +527,40 @@ async def health(request: Request) -> JSONResponse:
 
 # --- static UI (FC-9) — mounted last so it doesn't shadow the API routes ---
 _WEB_DIR = Path(__file__).parent / "web"
+
+
+def _asset_token() -> str:
+    """A short content hash of the UI bundle, computed once at startup. Used to
+    version the app.js/app.css URLs so a deploy always busts the browser cache —
+    iOS Safari in particular can keep serving a stale app.js even past a
+    no-cache + ETag revalidation, leaving the UI half-broken."""
+    import hashlib
+
+    h = hashlib.md5()
+    for name in ("app.js", "app.css"):
+        p = _WEB_DIR / name
+        if p.exists():
+            h.update(p.read_bytes())
+    return h.hexdigest()[:8]
+
+
+_ASSET_TOKEN = _asset_token()
+
+
 if (_WEB_DIR / "index.html").exists():
+
+    @app.get("/", include_in_schema=False)
+    async def index() -> Response:
+        """Serve index.html with cache-busted asset URLs (?v=<hash>). The hash
+        changes whenever app.js/app.css change, so the browser fetches the new
+        bundle on the next load — no manual hard-refresh needed."""
+        html = (_WEB_DIR / "index.html").read_text()
+        html = html.replace("/app.js", f"/app.js?v={_ASSET_TOKEN}")
+        html = html.replace("/app.css", f"/app.css?v={_ASSET_TOKEN}")
+        return Response(
+            content=html, media_type="text/html", headers={"Cache-Control": "no-store"}
+        )
+
+    # Mounted after the index route so "/" is served (versioned) by the route
+    # above; everything else (app.js, app.css, …) falls through to StaticFiles.
     app.mount("/", StaticFiles(directory=str(_WEB_DIR), html=True), name="web")

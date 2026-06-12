@@ -263,6 +263,7 @@ function setupMap() {
   // Zoom on the right so the floating menu button can live top-left.
   map = L.map("map", { zoomControl: false }).setView([47.9, -91.86], 11);
   L.control.zoom({ position: "topright" }).addTo(map);
+  addBasemapControl(); // small on-map style picker (synced with the panel select)
   setBasemap(BASEMAPS[0].id);
   // Land overlays sit above the basemap but below roads/dots/pins.
   map.createPane("land");
@@ -324,6 +325,62 @@ function setBasemap(id) {
   next.forEach((l) => l.addTo(map)); // add new (on top of old) ...
   baseLayers.forEach((l) => map.removeLayer(l)); // ... then drop the old set
   baseLayers = next;
+  syncBasemapUI(def.id);
+}
+
+// Keep both basemap pickers — the panel <select> and the on-map control — in
+// step with the active basemap, whichever one changed it.
+function syncBasemapUI(id) {
+  const sel = $("basemap");
+  if (sel) sel.value = id;
+  const ctrl = document.querySelector(".basemap-ctrl");
+  if (ctrl) {
+    const def = BASEMAPS.find((b) => b.id === id);
+    const toggle = ctrl.querySelector(".basemap-toggle");
+    if (toggle && def) toggle.title = "Basemap: " + def.name; // the only label (icon-only button)
+    ctrl.querySelectorAll(".basemap-opt").forEach((o) =>
+      o.classList.toggle("active", o.dataset.id === id)
+    );
+  }
+}
+
+// A compact, expandable basemap-style switcher docked on the map (top-right,
+// under the zoom control). Reuses BASEMAPS + setBasemap so it shares one source
+// of truth with the panel select.
+function addBasemapControl() {
+  const ctrl = L.control({ position: "topright" });
+  ctrl.onAdd = () => {
+    const div = L.DomUtil.create("div", "basemap-ctrl leaflet-control");
+    const opts = BASEMAPS.map(
+      (b) => `<button type="button" class="basemap-opt" data-id="${b.id}">${esc(b.name)}</button>`
+    ).join("");
+    // Collapsed = a single small icon button (same footprint as a zoom button,
+    // so it stacks cleanly beneath it and doesn't eat mobile screen). The style
+    // list is an absolutely-positioned dropdown that only overlays the map when
+    // open — closed, it takes zero layout space.
+    div.innerHTML =
+      `<button type="button" class="basemap-toggle" title="Basemap style" aria-label="Basemap style">▦</button>` +
+      `<div class="basemap-list" hidden>${opts}</div>`;
+    // Keep clicks/scroll on the control from reaching the map underneath.
+    L.DomEvent.disableClickPropagation(div);
+    L.DomEvent.disableScrollPropagation(div);
+    const list = div.querySelector(".basemap-list");
+    const toggle = div.querySelector(".basemap-toggle");
+    const setOpen = (open) => {
+      list.hidden = !open;
+      toggle.classList.toggle("open", open);
+    };
+    toggle.onclick = () => setOpen(list.hidden);
+    div.querySelectorAll(".basemap-opt").forEach((o) => {
+      o.onclick = () => {
+        setBasemap(o.dataset.id);
+        setOpen(false);
+      };
+    });
+    map.on("click", () => setOpen(false)); // a tap on the map collapses it
+    return div;
+  };
+  ctrl.addTo(map);
 }
 
 let drawHandler = null;
