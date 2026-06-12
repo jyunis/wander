@@ -1774,7 +1774,7 @@ function availBadgeHtml(m) {
     return `<div class="trip-avail ${cls}">${mark}${esc(a.summary)}</div>`;
   }
   if (a.status === "first_come") {
-    return `<div class="trip-avail firstcome">⛺ First-come, first-served — no online availability</div>`;
+    return `<div class="trip-avail firstcome">⛺ First-come, first-served</div>`;
   }
   if (a.status === "no_dates") {
     return `<div class="trip-avail muted">Set trip dates to check availability</div>`;
