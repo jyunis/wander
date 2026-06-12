@@ -360,10 +360,6 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .trip-avail.checking { font-style: italic; }
 .trip-avail.link a { color: var(--accent); text-decoration: none; }
 .trip-avail.link a:hover { text-decoration: underline; }
-.trip-avail-controls { display: flex; gap: 12px; margin: 2px 0 6px; }
-.trip-avail-controls label { font-size: 10.5px; color: var(--muted);
-  display: flex; align-items: center; gap: 4px; cursor: pointer; }
-.trip-avail-controls input { margin: 0; cursor: pointer; }
 
 .trip-add { margin-top: 12px; }
 .trip-add-toggle { width: 100%; text-align: left; background: none; border: 1px dashed var(--line);

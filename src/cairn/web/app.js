@@ -1535,8 +1535,6 @@ let activeTrip = null; // hydrated trip open in the detail view
 // detail renders instantly; a fetch failure just drops the badges (degradable).
 let tripAvail = {}; // saved_id(str) -> badge {system,status,open_sites,total_sites,summary}
 let tripAvailLoading = false;
-let tripAvailFilterOpen = false; // "Open only" filter over campground members
-let tripAvailSort = false; // sort campground members by open-count desc
 
 function setupTabs() {
   document.querySelectorAll(".tab").forEach((tab) => {
@@ -1644,8 +1642,6 @@ async function openTrip(id) {
   if (!r.ok) return showTripsList();
   activeTrip = await r.json();
   tripAvail = {};
-  tripAvailFilterOpen = false;
-  tripAvailSort = false;
   $("trips-list-view").hidden = true;
   $("trip-detail").hidden = false;
   renderTripDetail();
@@ -1778,7 +1774,7 @@ function availBadgeHtml(m) {
     return `<div class="trip-avail ${cls}">${mark}${esc(a.summary)}</div>`;
   }
   if (a.status === "first_come") {
-    return `<div class="trip-avail firstcome">⛺ First-come · no reservation</div>`;
+    return `<div class="trip-avail firstcome">⛺ First-come, first-served — no online availability</div>`;
   }
   if (a.status === "no_dates") {
     return `<div class="trip-avail muted">Set trip dates to check availability</div>`;
@@ -1793,64 +1789,20 @@ function availBadgeHtml(m) {
   return `<div class="trip-avail muted">Availability unavailable</div>`; // error
 }
 
-// A campground's rank for "sort by availability" (-1 = no count / non-
-// campground). First-come is always bookable, so it sorts to the top.
-function availRank(m) {
-  if (m.kind !== "campground") return -1;
-  const a = tripAvail[String(m.saved_id)];
-  if (!a) return -1;
-  if (a.status === "first_come") return Number.MAX_SAFE_INTEGER;
-  return a.status === "ok" ? a.open_sites : -1;
-}
-
-// Apply the "Open only" filter + "Sort by availability" toggle to one group's
-// members (display-only — never mutates activeTrip.members). Non-campgrounds
-// are always kept; the filter only ever hides bookable campgrounds with 0 open.
-function arrangeForAvail(list) {
-  let out = list;
-  if (tripAvailFilterOpen) {
-    out = out.filter((m) => {
-      if (m.kind !== "campground") return true;
-      const a = tripAvail[String(m.saved_id)];
-      if (!a) return false;
-      // First-come is always bookable; otherwise keep only sites with openings.
-      return a.status === "first_come" || (a.status === "ok" && a.open_sites > 0);
-    });
-  }
-  if (tripAvailSort) out = out.slice().sort((x, y) => availRank(y) - availRank(x));
-  return out;
-}
-
-function availControlsHtml() {
-  return (
-    `<div class="trip-avail-controls">` +
-    `<label><input type="checkbox" class="avail-open"${tripAvailFilterOpen ? " checked" : ""}/> Open only</label>` +
-    `<label><input type="checkbox" class="avail-sort"${tripAvailSort ? " checked" : ""}/> Sort by availability</label>` +
-    `</div>`
-  );
-}
-
 function renderTripMembers() {
   const host = $("trip-members");
   const members = activeTrip.members || [];
-  const hasCg = members.some((m) => m.kind === "campground");
-  const showControls = hasCg && activeTrip.start_date && activeTrip.end_date;
   host.innerHTML =
-    (showControls ? availControlsHtml() : "") +
     tripGroupHtml(
       "Primary · first choice",
-      arrangeForAvail(members.filter((m) => m.role === "primary")),
+      members.filter((m) => m.role === "primary"),
       "No primary picks yet."
     ) +
     tripGroupHtml(
       "Fallback · backup",
-      arrangeForAvail(members.filter((m) => m.role === "fallback")),
+      members.filter((m) => m.role === "fallback"),
       "No backups yet."
     );
-  const oc = host.querySelector(".avail-open");
-  if (oc) oc.onchange = () => { tripAvailFilterOpen = oc.checked; renderTripMembers(); };
-  const sc = host.querySelector(".avail-sort");
-  if (sc) sc.onchange = () => { tripAvailSort = sc.checked; renderTripMembers(); };
   host.querySelectorAll(".trip-mem").forEach((row) => {
     const id = parseInt(row.dataset.id, 10);
     row.querySelector(".trip-role").onclick = () => toggleMemberRole(id);
