@@ -35,6 +35,24 @@ SYSTEM_RECGOV = "recreation.gov"
 SYSTEM_USEDIRECT = "usedirect"
 
 
+def is_mn_state_forest(payload: dict | None) -> bool:
+    """True for a MN state-FOREST campground (display-only). MN state forest
+    campgrounds are first-come, first-served — they take no online reservation
+    (UseDirect lists every one with AllowWebBooking=False; only state PARKS are
+    bookable). So they get a "first-come" badge, not an availability count.
+
+    WI forests (which DO reserve, via GoingToCamp) are excluded by their url and
+    stay link-out."""
+    if not payload:
+        return False
+    url = str(payload.get("url") or "").lower()
+    if "wisconsin" in url or "dnr.wi.gov" in url or "goingtocamp" in url:
+        return False  # WI -> link out (GoingToCamp), not first-come
+    cat = str(payload.get("category") or "")
+    name = str(payload.get("name") or "")
+    return cat == "State Forest" or "state forest" in name.lower()
+
+
 def usedirect_facility_ids(
     payload: dict | None, mapping: dict | None
 ) -> list[int]:
@@ -212,6 +230,10 @@ async def trip_availability(
         ud_fids = usedirect_facility_ids(payload, usedirect_map)
         if ud_fids:
             return await resolve_usedirect(saved_id, ud_fids)
+        if is_mn_state_forest(payload):
+            # MN state forests are first-come (no online reservation) — date-
+            # independent, so this holds with or without trip dates.
+            return saved_id, {"system": SYSTEM_USEDIRECT, "status": "first_come"}
         return saved_id, {"system": None, "status": "unsupported"}
 
     results = await asyncio.gather(*(resolve(m) for m in cg_members))

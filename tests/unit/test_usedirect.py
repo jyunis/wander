@@ -12,7 +12,11 @@ import json
 import httpx
 import pytest
 
-from cairn.availability import trip_availability, usedirect_facility_ids
+from cairn.availability import (
+    is_mn_state_forest,
+    trip_availability,
+    usedirect_facility_ids,
+)
 from cairn.clients.usedirect import UseDirectClient
 from cairn.config import Settings
 from cairn.errors import AvailabilityBadResponse, AvailabilityUnreachable
@@ -180,6 +184,36 @@ async def test_trip_usedirect_no_dates_and_error_and_unsupported():
     t3 = _trip([_cg(9, "Some Unmapped Campground — Nowhere State Park")])
     o3 = await trip_availability(t3, None, usedirect_client=_FakeUD({}), usedirect_map=_MAP)
     assert o3["members"]["9"] == {"system": None, "status": "unsupported"}
+
+
+def test_is_mn_state_forest():
+    # MN state forest (category) -> first-come.
+    assert is_mn_state_forest({"category": "State Forest", "url": None}) is True
+    # MN forest mislabeled "State Park" but named a forest -> still first-come.
+    forest_named = {"category": "State Park",
+                    "name": "Isinours — Richard J. Dorer Memorial Hardwood State Forest"}
+    assert is_mn_state_forest(forest_named) is True
+    # WI forest (GoingToCamp) -> NOT first-come (link out).
+    assert is_mn_state_forest(
+        {"category": "State Forest", "url": "https://dnr.wisconsin.gov/topic/StateForests/x"}
+    ) is False
+    # A reservable state park -> not a forest.
+    assert is_mn_state_forest({"category": "State Park", "name": "Bear Paw Campground"}) is False
+
+
+async def test_trip_mn_state_forest_is_first_come():
+    forest = {"saved_id": 51, "kind": "campground", "role": "primary",
+              "payload": {"category": "State Forest", "name": "Shell City Horse Campground"}}
+    out = await trip_availability(
+        _trip([forest]), None, usedirect_client=_FakeUD({}), usedirect_map=_MAP
+    )
+    assert out["members"]["51"] == {"system": "usedirect", "status": "first_come"}
+    # Holds even with no trip dates (first-come is date-independent).
+    out2 = await trip_availability(
+        {"start_date": None, "end_date": None, "members": [forest]},
+        None, usedirect_client=_FakeUD({}), usedirect_map=_MAP,
+    )
+    assert out2["members"]["51"]["status"] == "first_come"
 
 
 async def test_trip_usedirect_no_client_degrades():
