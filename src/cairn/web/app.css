@@ -252,6 +252,17 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
   cursor: pointer; padding: 0; }
 .coll-swatch.sel { border-color: var(--ink); }
 
+/* Collection filter/legend bar — chips filter the list + colorize map markers. */
+.coll-filter-bar { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+.coll-filter-bar:empty { display: none; }
+.cf-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px;
+  padding: 3px 9px; border-radius: 13px; border: 1px solid var(--line);
+  background: none; color: var(--muted); cursor: pointer; }
+.cf-chip .cf-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--cf, #8a97a3); }
+.cf-chip.on { background: var(--cf, #5b9c5a); border-color: var(--cf, #5b9c5a); color: #10151a; }
+.cf-chip.on .cf-dot { background: #10151a; opacity: 0.45; }
+.cf-n { opacity: 0.7; font-variant-numeric: tabular-nums; }
+
 .bd-toggle { display: block; width: 100%; text-align: left; background: none; border: none;
   border-top: 1px solid var(--line); color: var(--muted); font-size: 10px;
   text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer;

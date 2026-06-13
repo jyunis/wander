@@ -5,6 +5,7 @@ let CONFIG = null;
 let map, drawnItems, heatLayer, pinLayer, candidatesLayer, roadsLayer, canvasRenderer, gotoMarker;
 let nearbyCgLayer; // ephemeral markers: the campgrounds near the open scored site
 let tripLayer; // markers for the currently plotted trip's members
+let savedLayer; // saved-place markers shown on the Saved tab (collection-colored)
 let tripPlotMode = false; // "Plot on map" is showing ONLY trip stops (results/overlays hidden)
 let selectedMarker = null; // marker for the currently-selected (saved) place
 let baseLayers = []; // current basemap tile layer(s): imagery + optional labels
@@ -309,6 +310,7 @@ function setupMap() {
   pinLayer = new L.LayerGroup().addTo(map);
   nearbyCgLayer = new L.LayerGroup().addTo(map);
   tripLayer = new L.LayerGroup().addTo(map);
+  savedLayer = new L.LayerGroup().addTo(map);
 
   map.on(L.Draw.Event.CREATED, (e) => {
     drawnItems.clearLayers();
@@ -1320,6 +1322,85 @@ const COLLECTION_PALETTE = [
   "#5b9c5a", "#3a6ea5", "#b5651d", "#8e6bc9",
   "#c8a24a", "#d96c6c", "#4aa3a3", "#9c5a8e",
 ];
+const SAVED_MARKER_DEFAULT = "#f3c64b"; // gold (★ theme) when no collection filter
+const UNFILED = "__unfiled__"; // filter token for places with no collection
+// Active collection filters (ids + UNFILED). Empty = show all. The filter bar
+// doubles as the map legend: a matching place lights up in its collection color.
+const activeCollFilters = new Set();
+
+function placePassesFilter(place) {
+  if (!activeCollFilters.size) return true;
+  const ids = place.collection_ids || [];
+  if (activeCollFilters.has(UNFILED) && ids.length === 0) return true;
+  return ids.some((id) => activeCollFilters.has(id));
+}
+
+// A filtered place's marker color: the first SELECTED collection it belongs to
+// (collections are in position order, so this is deterministic); gold default
+// when no filter is active.
+function savedMarkerColor(place) {
+  if (!activeCollFilters.size) return SAVED_MARKER_DEFAULT;
+  const ids = place.collection_ids || [];
+  for (const c of collections) {
+    if (activeCollFilters.has(c.id) && ids.includes(c.id)) return c.color || SAVED_MARKER_DEFAULT;
+  }
+  return SAVED_MARKER_DEFAULT; // matched via Unfiled, or fallback
+}
+
+// The collection chip bar — a filter AND the on-map color legend.
+function renderCollFilterBar() {
+  const host = $("coll-filter-bar");
+  if (!host) return;
+  const unfiledCount = savedPlaces.filter((s) => !(s.collection_ids || []).length).length;
+  const chips = collections
+    .map((c) => {
+      const on = activeCollFilters.has(c.id);
+      const col = c.color || "#8a97a3";
+      return (
+        `<button class="cf-chip${on ? " on" : ""}" data-id="${c.id}" style="--cf:${esc(col)}">` +
+        `<span class="cf-dot"></span>${esc(c.name)} <span class="cf-n">${c.count}</span></button>`
+      );
+    })
+    .join("");
+  const unfiled =
+    `<button class="cf-chip cf-unfiled${activeCollFilters.has(UNFILED) ? " on" : ""}" ` +
+    `data-id="${UNFILED}" style="--cf:#8a97a3"><span class="cf-dot"></span>` +
+    `Unfiled <span class="cf-n">${unfiledCount}</span></button>`;
+  host.innerHTML = collections.length || unfiledCount ? chips + unfiled : "";
+  host.querySelectorAll(".cf-chip").forEach((b) => {
+    b.onclick = () =>
+      toggleCollFilter(b.dataset.id === UNFILED ? UNFILED : parseInt(b.dataset.id, 10));
+  });
+}
+
+function toggleCollFilter(key) {
+  if (activeCollFilters.has(key)) activeCollFilters.delete(key);
+  else activeCollFilters.add(key);
+  renderCollFilterBar();
+  renderSavedList(); // also repaints markers
+}
+
+// Saved-place markers on the map, filtered + collection-colored. Only shown
+// while the Saved tab is active (cleared otherwise).
+function renderSavedMarkers() {
+  if (!savedLayer) return;
+  savedLayer.clearLayers();
+  const tab = $("saved-section-tab");
+  if (!tab || tab.hidden) return;
+  savedPlaces.filter(placePassesFilter).forEach((s) => {
+    const mk = L.circleMarker([s.lat, s.lon], {
+      renderer: canvasRenderer,
+      radius: 6,
+      color: "#10151a",
+      weight: 1,
+      fillColor: savedMarkerColor(s),
+      fillOpacity: 0.95,
+    });
+    if (s.name) mk.bindTooltip(s.name, { direction: "top" });
+    mk.on("click", () => reopenSaved(s));
+    savedLayer.addLayer(mk);
+  });
+}
 
 async function loadCollections() {
   try {
@@ -1430,8 +1511,9 @@ function renderSavedList() {
   if (!host) return;
   const empty = $("saved-empty");
   if (empty) empty.hidden = savedPlaces.length > 0;
-  host.innerHTML = savedPlaces
-    .map((s, i) => {
+  const shown = savedPlaces.filter(placePassesFilter);
+  host.innerHTML = shown
+    .map((s) => {
       // Three kinds share the list: a campground, a Cairn-scored dispersed
       // site (payload carries a total), and a manually dropped pin (no score).
       const scored = s.kind === "site" && s.payload && s.payload.total != null;
@@ -1446,7 +1528,7 @@ function renderSavedList() {
         : "";
       const noteLine = s.note ? `<div class="saved-note">${esc(s.note)}</div>` : "";
       return (
-        `<div class="saved-row" data-i="${i}"><div class="saved-main">` +
+        `<div class="saved-row" data-id="${s.id}"><div class="saved-main">` +
         `<div class="saved-name">${icon} ${esc(label)}</div>` +
         `<div class="saved-coords">${coords}${score}${stars}</div>` +
         noteLine +
@@ -1458,21 +1540,24 @@ function renderSavedList() {
       );
     })
     .join("");
-  host.querySelectorAll(".saved-row").forEach((row, i) => {
-    row.querySelector(".saved-main").onclick = () => reopenSaved(savedPlaces[i]);
+  host.querySelectorAll(".saved-row").forEach((row) => {
+    const s = savedPlaces.find((x) => x.id === parseInt(row.dataset.id, 10));
+    if (!s) return;
+    row.querySelector(".saved-main").onclick = () => reopenSaved(s);
     row.querySelector(".saved-tag").onclick = (e) => {
       e.stopPropagation();
-      openCollectionPicker(savedPlaces[i], e.currentTarget);
+      openCollectionPicker(s, e.currentTarget);
     };
     row.querySelector(".saved-add").onclick = (e) => {
       e.stopPropagation();
-      openTripPickerAt(savedPlaces[i], e.currentTarget);
+      openTripPickerAt(s, e.currentTarget);
     };
     row.querySelector(".saved-del").onclick = (e) => {
       e.stopPropagation();
-      toggleFav(savedPlaces[i]);
+      toggleFav(s);
     };
   });
+  renderSavedMarkers();
 }
 
 function reopenSaved(s) {
@@ -1652,6 +1737,7 @@ function setupTabs() {
       if (which === "trips") loadTrips();
       else exitTripPlot(); // back to Score/Saved: restore the normal map
       if (which === "saved") openSavedTab();
+      else renderSavedMarkers(); // leaving Saved -> clear its markers
     };
   });
   buildCollSwatches();
@@ -2253,7 +2339,8 @@ function tripToast(msg) {
 // --- Saved tab + collections ------------------------------------------------
 async function openSavedTab() {
   await loadCollections();
-  await loadSaved(); // renderSavedList reads collById for the chips
+  renderCollFilterBar();
+  await loadSaved(); // renderSavedList reads collById for the chips + paints markers
 }
 
 let _collFormColor = COLLECTION_PALETTE[0];
@@ -2296,7 +2383,8 @@ async function createCollectionFromForm() {
   err.textContent = "";
   err.className = "status";
   toggleCollForm(false);
-  renderSavedList(); // pick up the new collection in chip lookups
+  renderCollFilterBar(); // surface the new collection as a filter chip
+  renderSavedList();
 }
 
 // The per-place tag picker — a floating popover (document-level so a Leaflet
@@ -2404,6 +2492,7 @@ async function toggleMembership(place, collId) {
   const i = savedPlaces.findIndex((s) => s.id === place.id);
   if (i >= 0) savedPlaces[i].collection_ids = updated.collection_ids;
   await loadCollections(); // member counts changed
+  renderCollFilterBar();
   renderSavedList();
   if (_collPicker && _collPicker._for === place.id) renderCollPickerBody(_collPicker, place);
 }
@@ -2413,10 +2502,12 @@ async function deleteCollection(id, place) {
   if (!confirm(`Delete collection "${c ? c.name : ""}"? Your saved places aren't deleted.`)) return;
   await fetch(`/collections/${id}`, { method: "DELETE" });
   await loadCollections();
+  activeCollFilters.delete(id); // drop it from any active filter
   // Drop the deleted id from any cached place membership.
   savedPlaces.forEach((s) => {
     if (s.collection_ids) s.collection_ids = s.collection_ids.filter((x) => x !== id);
   });
+  renderCollFilterBar();
   renderSavedList();
   if (_collPicker && place) renderCollPickerBody(_collPicker, place);
 }
