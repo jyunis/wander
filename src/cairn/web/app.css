@@ -119,6 +119,13 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .layers { display: flex; flex-wrap: wrap; gap: 8px 14px; font-size: 12.5px; }
 .layers label { cursor: pointer; display: flex; align-items: center; gap: 5px; }
 .layers input { accent-color: var(--accent); }
+.saved-layer-row { display: flex; align-items: center; gap: 8px; margin-top: 8px;
+  font-size: 12.5px; }
+.saved-layer-row label { display: flex; align-items: center; gap: 5px; cursor: pointer;
+  white-space: nowrap; }
+.saved-layer-row input[type="checkbox"] { accent-color: var(--accent); }
+.saved-layer-coll { flex: 1; min-width: 0; background: #313942; color: var(--ink);
+  border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; font: inherit; font-size: 12px; }
 .legend { display: flex; align-items: center; gap: 6px; margin-top: 8px;
           font-size: 10.5px; color: var(--muted); }
 .legend-bar { flex: 1; height: 7px; border-radius: 4px;
@@ -342,6 +349,11 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
   0 1px 4px rgba(0, 0, 0, 0.55); }
 .sel-pin { width: 26px; height: 26px; line-height: 26px; text-align: center; font-size: 19px;
   color: #f3c64b; text-shadow: 0 0 3px #000, 0 1px 3px rgba(0, 0, 0, 0.7); cursor: pointer; }
+/* Saved-layer ★ markers — same favorite star as the selected pin, tinted by
+   the place's collection color (--c); dark outline keeps it legible on imagery. */
+.saved-star { width: 22px; height: 22px; line-height: 22px; text-align: center;
+  font-size: 17px; color: var(--c, #f3c64b); cursor: pointer;
+  text-shadow: 0 0 3px #000, 0 1px 3px rgba(0, 0, 0, 0.7); }
 .drop-pin { font-size: 26px; line-height: 1; text-align: center;
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6)); cursor: grab; }
 .drop-pin:active { cursor: grabbing; }
@@ -381,7 +393,9 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
   .trip-dates input[type="date"],
   .coll-form input[type="text"],
   .coll-pick-input,
-  .ssb-coll {
+  .ssb-coll,
+  .saved-layer-coll,
+  .cpe-name {
     font-size: 16px;
   }
 }
@@ -520,9 +534,23 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .coll-pick-name { flex: 1; font-size: 12.5px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
 .coll-pick-check { flex: none; color: var(--accent); font-size: 12px; width: 12px; }
+.coll-pick-edit { flex: none; background: none; border: none; color: var(--muted);
+  cursor: pointer; font-size: 12px; line-height: 1; padding: 0 2px; opacity: 0.55; }
+.coll-pick-edit:hover { color: var(--accent); opacity: 1; }
 .coll-pick-del { flex: none; background: none; border: none; color: var(--muted);
   cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px; opacity: 0.5; }
 .coll-pick-del:hover { color: #e8786b; opacity: 1; }
+/* Inline collection editor (rename + recolor) inside the tag picker. */
+.coll-pick-editor { display: flex; flex-direction: column; gap: 6px; padding: 6px 5px;
+  border-radius: 6px; background: rgba(255, 255, 255, 0.04); }
+.cpe-name { background: #313942; color: var(--ink); border: 1px solid var(--line);
+  border-radius: 6px; padding: 5px 7px; font: inherit; font-size: 12.5px; }
+.cpe-swatches { display: flex; flex-wrap: wrap; gap: 5px; }
+.cpe-sw { width: 18px; height: 18px; border-radius: 50%; border: 2px solid transparent;
+  cursor: pointer; padding: 0; }
+.cpe-sw.sel { border-color: var(--ink); }
+.cpe-actions { display: flex; gap: 6px; }
+.coll-pick-editor .btn { padding: 4px 9px; font-size: 12px; }
 .coll-pick-empty { font-size: 11px; color: var(--muted); padding: 6px 4px; }
 .coll-pick-new { display: flex; gap: 5px; border-top: 1px solid var(--line); padding-top: 6px; }
 .coll-pick-input { flex: 1; min-width: 0; background: #313942; color: var(--ink);

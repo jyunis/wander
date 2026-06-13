@@ -173,9 +173,10 @@ async function init() {
   $("run-history").onchange = (e) => {
     if (e.target.value) loadRun(parseInt(e.target.value, 10));
   };
-  ["layer-pins", "layer-dots", "layer-heat", "layer-roads"].forEach((id) => {
+  ["layer-pins", "layer-dots", "layer-heat", "layer-roads", "layer-saved"].forEach((id) => {
     $(id).onchange = updateLayerVisibility;
   });
+  $("saved-layer-coll").onchange = renderSavedMarkers; // re-filter the saved layer
   $("min-score").oninput = (e) => {
     minScore = parseFloat(e.target.value);
     $("min-score-val").textContent = minScore.toFixed(2);
@@ -227,6 +228,7 @@ async function init() {
     }
   });
   loadSaved();
+  loadCollections(); // populate the Layers-panel saved-collection dropdown
   setupTabs();
 }
 
@@ -819,6 +821,7 @@ function updateLayerVisibility() {
   toggleLayer(heatLayer, $("layer-heat").checked);
   toggleLayer(roadsLayer, $("layer-roads").checked);
   if ($("layer-roads").checked) scheduleRoads(); // fetch the view when turned on
+  renderSavedMarkers(); // saved layer (clears itself when its checkbox is off)
 }
 
 function toggleLayer(layer, on) {
@@ -1353,16 +1356,45 @@ function placePassesFilter(place) {
   return ids.some((id) => activeCollFilters.has(id));
 }
 
-// A filtered place's marker color: the first SELECTED collection it belongs to
-// (collections are in position order, so this is deterministic); gold default
-// when no filter is active.
-function savedMarkerColor(place) {
-  if (!activeCollFilters.size) return SAVED_MARKER_DEFAULT;
+// --- Saved-places map layer (toggle + collection dropdown in the Layers panel),
+// independent of the Saved tab. The chip bar filters the LIST; this filters the
+// MAP layer.
+function savedLayerColl() {
+  const sel = $("saved-layer-coll");
+  return sel ? sel.value || "all" : "all";
+}
+
+function savedPassesLayerFilter(place) {
+  const v = savedLayerColl();
+  if (v === "all") return true;
   const ids = place.collection_ids || [];
-  for (const c of collections) {
-    if (activeCollFilters.has(c.id) && ids.includes(c.id)) return c.color || SAVED_MARKER_DEFAULT;
+  if (v === "unfiled") return ids.length === 0;
+  return ids.includes(parseInt(v, 10));
+}
+
+// Marker color: a selected collection -> its color; "All"/"Unfiled" -> the
+// place's first collection color, gold if uncategorized.
+function savedLayerMarkerColor(place) {
+  const v = savedLayerColl();
+  if (v !== "all" && v !== "unfiled") {
+    const c = collById.get(parseInt(v, 10));
+    return (c && c.color) || SAVED_MARKER_DEFAULT;
   }
-  return SAVED_MARKER_DEFAULT; // matched via Unfiled, or fallback
+  const ids = place.collection_ids || [];
+  for (const c of collections) if (ids.includes(c.id)) return c.color || SAVED_MARKER_DEFAULT;
+  return SAVED_MARKER_DEFAULT;
+}
+
+// Keep the Layers-panel collection dropdown in sync with the collection set.
+function populateSavedLayerColl() {
+  const sel = $("saved-layer-coll");
+  if (!sel) return;
+  const cur = sel.value || "all";
+  sel.innerHTML =
+    `<option value="all">All collections</option>` +
+    collections.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("") +
+    `<option value="unfiled">Unfiled</option>`;
+  if ([...sel.options].some((o) => o.value === cur)) sel.value = cur;
 }
 
 // The collection chip bar — a filter AND the on-map color legend.
@@ -1403,16 +1435,17 @@ function toggleCollFilter(key) {
 function renderSavedMarkers() {
   if (!savedLayer) return;
   savedLayer.clearLayers();
-  const tab = $("saved-section-tab");
-  if (!tab || tab.hidden) return;
-  savedPlaces.filter(placePassesFilter).forEach((s) => {
-    const mk = L.circleMarker([s.lat, s.lon], {
-      renderer: canvasRenderer,
-      radius: 6,
-      color: "#10151a",
-      weight: 1,
-      fillColor: savedMarkerColor(s),
-      fillOpacity: 0.95,
+  if (!$("layer-saved") || !$("layer-saved").checked) return; // layer off
+  savedPlaces.filter(savedPassesLayerFilter).forEach((s) => {
+    // A ★ favorite marker (matching the selected-site star), tinted by the
+    // place's collection so the grouping reads at a glance.
+    const mk = L.marker([s.lat, s.lon], {
+      icon: L.divIcon({
+        className: "",
+        html: `<div class="saved-star" style="--c:${savedLayerMarkerColor(s)}">★</div>`,
+        iconSize: [22, 22],
+        iconAnchor: [11, 11],
+      }),
     });
     if (s.name) mk.bindTooltip(s.name, { direction: "top" });
     mk.on("click", () => reopenSaved(s));
@@ -1429,6 +1462,7 @@ async function loadCollections() {
   collectionsLoaded = true;
   collById.clear();
   collections.forEach((c) => collById.set(c.id, c));
+  populateSavedLayerColl(); // keep the Layers-panel dropdown in sync
 }
 
 async function createCollection(name, color) {
@@ -1763,7 +1797,6 @@ function setupTabs() {
       if (which === "trips") loadTrips();
       else exitTripPlot(); // back to Score/Saved: restore the normal map
       if (which === "saved") openSavedTab();
-      else renderSavedMarkers(); // leaving Saved -> clear its markers
     };
   });
   buildCollSwatches();
@@ -2392,7 +2425,14 @@ function buildCollSwatches() {
 
 function toggleCollForm(show) {
   $("coll-new-form").hidden = !show;
-  if (show) $("coll-name").focus();
+  if (!show) return;
+  // Default to the next palette color so new collections get distinct colors
+  // (and the map layer's collection-coloring is useful out of the box).
+  const def = COLLECTION_PALETTE[collections.length % COLLECTION_PALETTE.length];
+  _collFormColor = def;
+  const host = $("coll-swatches");
+  if (host) host.querySelectorAll(".coll-swatch").forEach((x) => x.classList.toggle("sel", x.dataset.c === def));
+  $("coll-name").focus();
 }
 
 async function createCollectionFromForm() {
@@ -2421,6 +2461,50 @@ async function createCollectionFromForm() {
 // popup never clips it), modeled on the trip picker. Toggle collections on/off,
 // create a new one inline, or delete one. Stays open while you toggle several.
 let _collPicker = null;
+let _collEditing = null; // collection id being renamed/recolored inline, or null
+
+// Wire the inline name/color editor (one row of the picker, when _collEditing set).
+function wireCollEditor(pick, place) {
+  const editor = pick.querySelector(".coll-pick-editor");
+  if (!editor) return;
+  editor.querySelectorAll(".cpe-sw").forEach((b) => {
+    b.onclick = () =>
+      editor.querySelectorAll(".cpe-sw").forEach((x) => x.classList.toggle("sel", x === b));
+  });
+  editor.querySelector(".cpe-cancel").onclick = () => {
+    _collEditing = null;
+    renderCollPickerBody(pick, place);
+  };
+  const save = editor.querySelector(".cpe-save");
+  save.onclick = async () => {
+    const name = editor.querySelector(".cpe-name").value.trim();
+    const color = editor.querySelector(".cpe-sw.sel") ? editor.querySelector(".cpe-sw.sel").dataset.c : undefined;
+    if (!name) {
+      editor.querySelector(".cpe-name").focus();
+      return;
+    }
+    const r = await fetch(`/collections/${editor.dataset.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, color }),
+    });
+    if (!r.ok) {
+      pick.querySelector(".coll-pick-err").textContent = "Couldn't save.";
+      return;
+    }
+    await loadCollections();
+    _collEditing = null;
+    renderCollFilterBar();
+    renderSavedList(); // refresh chips + recolor the map layer
+    renderCollPickerBody(pick, place);
+  };
+  editor.querySelector(".cpe-name").onkeydown = (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      save.click();
+    }
+  };
+}
 function closeCollPicker() {
   if (_collPicker) {
     _collPicker.remove();
@@ -2441,6 +2525,7 @@ async function openCollectionPicker(place, anchorEl) {
   const pick = document.createElement("div");
   pick.className = "coll-picker floating";
   pick._for = place.id;
+  _collEditing = null; // start unedited
   document.body.appendChild(pick);
   _collPicker = pick;
   renderCollPickerBody(pick, place);
@@ -2449,10 +2534,26 @@ async function openCollectionPicker(place, anchorEl) {
   if (map) map.on("movestart", closeCollPicker);
 }
 
+function collEditorHtml(c) {
+  const sw = COLLECTION_PALETTE.map(
+    (p) =>
+      `<button type="button" class="cpe-sw${p === c.color ? " sel" : ""}" ` +
+      `data-c="${p}" style="background:${p}"></button>`
+  ).join("");
+  return (
+    `<div class="coll-pick-editor" data-id="${c.id}">` +
+    `<input class="cpe-name" type="text" value="${esc(c.name)}" autocomplete="off" />` +
+    `<div class="cpe-swatches">${sw}</div>` +
+    `<div class="cpe-actions"><button class="cpe-save btn">Save</button>` +
+    `<button class="cpe-cancel btn ghost">Cancel</button></div></div>`
+  );
+}
+
 function renderCollPickerBody(pick, place) {
   const ids = new Set(place.collection_ids || []);
   const rows = collections
     .map((c) => {
+      if (c.id === _collEditing) return collEditorHtml(c);
       const on = ids.has(c.id);
       const col = c.color || "#8a97a3";
       return (
@@ -2460,6 +2561,7 @@ function renderCollPickerBody(pick, place) {
         `<span class="coll-dot" style="background:${esc(col)}"></span>` +
         `<span class="coll-pick-name">${esc(c.name)}</span>` +
         `<span class="coll-pick-check">${on ? "✓" : ""}</span>` +
+        `<button class="coll-pick-edit" title="Edit name / color">✎</button>` +
         `<button class="coll-pick-del" title="Delete collection">×</button></div>`
       );
     })
@@ -2479,14 +2581,20 @@ function renderCollPickerBody(pick, place) {
   pick.querySelectorAll(".coll-pick-row").forEach((row) => {
     const id = parseInt(row.dataset.id, 10);
     row.onclick = (e) => {
-      if (e.target.closest(".coll-pick-del")) return;
+      if (e.target.closest(".coll-pick-del") || e.target.closest(".coll-pick-edit")) return;
       toggleMembership(place, id);
     };
     row.querySelector(".coll-pick-del").onclick = (e) => {
       e.stopPropagation();
       deleteCollection(id, place);
     };
+    row.querySelector(".coll-pick-edit").onclick = (e) => {
+      e.stopPropagation();
+      _collEditing = id;
+      renderCollPickerBody(pick, place);
+    };
   });
+  wireCollEditor(pick, place);
   const input = pick.querySelector(".coll-pick-input");
   const add = pick.querySelector(".coll-pick-add");
   add.onclick = async () => {
