@@ -302,6 +302,21 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
   background: #313942; color: var(--ink); border: 1px solid var(--line);
   border-radius: 7px; padding: 7px 9px; font: inherit; font-size: 12.5px; }
 .trip-form input:focus, .trip-dates input:focus { border-color: var(--accent); outline: none; }
+
+/* iOS Safari auto-zooms when a focused input's font-size is < 16px, and with
+   the fixed #app / 100dvh layout (no page scroll) that zoom gets stuck for the
+   session — pushing the edge-anchored map controls off-screen. On touch
+   devices keep every text-entry input at 16px so Safari never zooms; desktop
+   keeps the compact sizing. (range/checkbox inputs don't trigger it.) */
+@media (pointer: coarse) {
+  .goto-row input,
+  .cg-rv input,
+  .trip-form input[type="text"],
+  .trip-dates input[type="date"] {
+    font-size: 16px;
+  }
+}
+
 .trip-dates { display: flex; gap: 10px; }
 .trip-dates label { flex: 1; display: flex; flex-direction: column; gap: 3px;
   font-size: 11px; color: var(--muted); }
