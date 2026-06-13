@@ -110,7 +110,10 @@
       <section id="saved-section-tab" class="controls" hidden>
         <div class="row saved-top">
           <h2 class="saved-h">★ Saved</h2>
-          <button id="coll-new" class="btn ghost">＋ Collection</button>
+          <div class="saved-top-btns">
+            <button id="saved-select" class="btn ghost">Select</button>
+            <button id="coll-new" class="btn ghost">＋ Collection</button>
+          </div>
         </div>
         <form id="coll-new-form" class="coll-form" hidden>
           <input id="coll-name" type="text" placeholder="Collection name — e.g. Scouted" autocomplete="off" />
@@ -122,6 +125,12 @@
           <div id="coll-new-err" class="status"></div>
         </form>
         <div id="coll-filter-bar" class="coll-filter-bar"></div>
+        <div id="saved-select-bar" class="saved-select-bar" hidden>
+          <span id="ssb-count" class="ssb-count">0 selected</span>
+          <select id="ssb-coll" class="ssb-coll"></select>
+          <button id="ssb-add" class="btn">Add</button>
+          <button id="ssb-cancel" class="btn ghost">Done</button>
+        </div>
         <div id="saved-empty" class="hint" hidden>No saved places yet — tap ☆ on a site or campground to save it.</div>
         <div id="saved-list" class="saved-list"></div>
       </section>

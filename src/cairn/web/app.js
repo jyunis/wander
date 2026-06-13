@@ -1328,6 +1328,10 @@ const UNFILED = "__unfiled__"; // filter token for places with no collection
 // doubles as the map legend: a matching place lights up in its collection color.
 const activeCollFilters = new Set();
 
+// Multi-select bulk-add: a "Select" mode over the saved list -> "Add N to …".
+let selectMode = false;
+const selectedIds = new Set();
+
 function placePassesFilter(place) {
   if (!activeCollFilters.size) return true;
   const ids = place.collection_ids || [];
@@ -1527,8 +1531,11 @@ function renderSavedList() {
         ? ` · <span class="saved-stars">${"★".repeat(Math.round(s.rating))}</span>`
         : "";
       const noteLine = s.note ? `<div class="saved-note">${esc(s.note)}</div>` : "";
+      const sel = selectMode && selectedIds.has(s.id);
       return (
-        `<div class="saved-row" data-id="${s.id}"><div class="saved-main">` +
+        `<div class="saved-row${sel ? " selected" : ""}" data-id="${s.id}">` +
+        `<input type="checkbox" class="saved-check"${sel ? " checked" : ""} tabindex="-1">` +
+        `<div class="saved-main">` +
         `<div class="saved-name">${icon} ${esc(label)}</div>` +
         `<div class="saved-coords">${coords}${score}${stars}</div>` +
         noteLine +
@@ -1540,9 +1547,14 @@ function renderSavedList() {
       );
     })
     .join("");
+  host.classList.toggle("select-mode", selectMode);
   host.querySelectorAll(".saved-row").forEach((row) => {
     const s = savedPlaces.find((x) => x.id === parseInt(row.dataset.id, 10));
     if (!s) return;
+    if (selectMode) {
+      row.onclick = () => toggleSelected(s.id); // whole row toggles selection
+      return;
+    }
     row.querySelector(".saved-main").onclick = () => reopenSaved(s);
     row.querySelector(".saved-tag").onclick = (e) => {
       e.stopPropagation();
@@ -1747,6 +1759,9 @@ function setupTabs() {
     e.preventDefault();
     createCollectionFromForm();
   };
+  $("saved-select").onclick = () => toggleSelectMode(!selectMode);
+  $("ssb-add").onclick = bulkAddSelected;
+  $("ssb-cancel").onclick = () => toggleSelectMode(false);
   $("trip-new").onclick = () => toggleTripForm(true);
   $("trip-new-cancel").onclick = () => toggleTripForm(false);
   $("trip-new-form").onsubmit = (e) => {
@@ -2338,6 +2353,7 @@ function tripToast(msg) {
 
 // --- Saved tab + collections ------------------------------------------------
 async function openSavedTab() {
+  if (selectMode) toggleSelectMode(false); // start fresh each visit
   await loadCollections();
   renderCollFilterBar();
   await loadSaved(); // renderSavedList reads collById for the chips + paints markers
@@ -2434,7 +2450,10 @@ function renderCollPickerBody(pick, place) {
       );
     })
     .join("");
+  const title = place.name || (place.kind === "campground" ? "Campground" : "Place");
   pick.innerHTML =
+    `<div class="coll-pick-head"><span class="coll-pick-title">${esc(title)}</span>` +
+    `<button class="coll-pick-close" title="Done">×</button></div>` +
     `<div class="coll-pick-list">${
       rows || '<div class="coll-pick-empty">No collections yet.</div>'
     }</div>` +
@@ -2442,6 +2461,7 @@ function renderCollPickerBody(pick, place) {
     `<input class="coll-pick-input" type="text" placeholder="＋ New collection" autocomplete="off" />` +
     `<button class="coll-pick-add btn">Add</button></div>` +
     `<div class="coll-pick-err"></div>`;
+  pick.querySelector(".coll-pick-close").onclick = closeCollPicker;
   pick.querySelectorAll(".coll-pick-row").forEach((row) => {
     const id = parseInt(row.dataset.id, 10);
     row.onclick = (e) => {
@@ -2510,6 +2530,75 @@ async function deleteCollection(id, place) {
   renderCollFilterBar();
   renderSavedList();
   if (_collPicker && place) renderCollPickerBody(_collPicker, place);
+}
+
+// --- multi-select bulk-add --------------------------------------------------
+function toggleSelectMode(on) {
+  selectMode = on;
+  selectedIds.clear();
+  const btn = $("saved-select");
+  if (btn) btn.textContent = on ? "Cancel" : "Select";
+  $("saved-select-bar").hidden = !on;
+  if (on) populateSelectColl();
+  updateSelectCount();
+  renderSavedList();
+}
+
+function toggleSelected(id) {
+  if (selectedIds.has(id)) selectedIds.delete(id);
+  else selectedIds.add(id);
+  const row = document.querySelector(`#saved-list .saved-row[data-id="${id}"]`);
+  if (row) {
+    const on = selectedIds.has(id);
+    row.classList.toggle("selected", on);
+    const cb = row.querySelector(".saved-check");
+    if (cb) cb.checked = on;
+  }
+  updateSelectCount();
+}
+
+function updateSelectCount() {
+  const n = selectedIds.size;
+  const c = $("ssb-count");
+  if (c) c.textContent = `${n} selected`;
+  const add = $("ssb-add");
+  if (add) add.disabled = n === 0;
+}
+
+function populateSelectColl() {
+  const sel = $("ssb-coll");
+  if (!sel) return;
+  sel.innerHTML =
+    collections.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("") +
+    `<option value="__new__">＋ New collection…</option>`;
+}
+
+async function bulkAddSelected() {
+  if (!selectedIds.size) return;
+  const sel = $("ssb-coll");
+  let cid;
+  if (sel.value === "__new__") {
+    const name = (prompt("New collection name") || "").trim();
+    if (!name) return;
+    const col = await createCollection(name);
+    if (!col) return;
+    cid = col.id;
+  } else {
+    cid = parseInt(sel.value, 10);
+  }
+  const count = selectedIds.size;
+  const r = await fetch(`/collections/${cid}/places`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ saved_ids: [...selectedIds] }),
+  });
+  if (!r.ok) return;
+  await loadCollections();
+  await loadSaved(); // re-hydrate collection_ids on the tagged places
+  renderCollFilterBar();
+  const c = collById.get(cid);
+  tripToast(`Added ${count} to ${c ? c.name : "collection"}`);
+  toggleSelectMode(false);
 }
 
 init();
