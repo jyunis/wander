@@ -259,6 +259,12 @@ function setNav(open) {
   setTimeout(() => map && map.invalidateSize(), 260);
 }
 
+// On mobile the panel is an overlay drawer over the map; on desktop it's a
+// side column. Some flows (e.g. drawing a bbox) need the map reachable.
+function isMobile() {
+  return window.matchMedia("(max-width: 640px)").matches;
+}
+
 function setupMap() {
   // Zoom on the right so the floating menu button can live top-left.
   map = L.map("map", { zoomControl: false }).setView([47.9, -91.86], 11);
@@ -297,6 +303,9 @@ function setupMap() {
     drawnItems.clearLayers();
     drawnItems.addLayer(e.layer);
     setBboxFromBounds(e.layer.getBounds());
+    // Mobile: the panel was closed to let the user draw — bring it back so the
+    // bbox readout + Score button are reachable again.
+    if (isMobile()) setNav(true);
   });
 }
 
@@ -388,6 +397,10 @@ function startDraw() {
   if (drawHandler) drawHandler.disable();
   drawHandler = new L.Draw.Rectangle(map, { shapeOptions: { color: "#5b9c5a" } });
   drawHandler.enable();
+  // Mobile: the panel overlays the whole map, so close it — otherwise there's
+  // no map to draw on and the drawer looks frozen. Leaflet's own draw tooltip
+  // guides the drag; the panel reopens automatically once the box is drawn.
+  if (isMobile()) setNav(false);
 }
 
 // Parse "lat, lon" forgivingly — grabs the first two numbers (commas, spaces,
