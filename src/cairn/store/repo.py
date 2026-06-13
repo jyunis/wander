@@ -921,39 +921,64 @@ class Store:
         transportation reference layer carries no forest roads. Carries the
         TLC-3 disclaimer; suitability not legality."""
         from cairn import DISCLAIMER
-        from cairn.engine.features import road_is_rough
 
         run = await self.get_run(run_id)
         ways = await self.load_drivable_ways(run.bbox, clip=True)
         tags_by_id = await self.drivable_way_tags(run.bbox)
-
-        features = []
-        for way in ways:
-            tags = tags_by_id.get(way.osm_id, {})
-            operator = (tags.get("operator") or "").lower()
-            is_forest = "mvum_access" in tags or "forest service" in operator
-            features.append(
-                {
-                    "type": "Feature",
-                    "geometry": {
-                        "type": "LineString",
-                        "coordinates": [list(c) for c in way.coords],
-                    },
-                    "properties": {
-                        "osm_id": way.osm_id,
-                        "highway": tags.get("highway"),
-                        "name": tags.get("name") or tags.get("ref"),
-                        "forest_road": is_forest,
-                        "rough": road_is_rough(tags),
-                    },
-                }
-            )
         return {
             "type": "FeatureCollection",
             "disclaimer": DISCLAIMER,
             "run": {"id": run.id, "status": run.status},
-            "features": features,
+            "features": _roads_features(ways, tags_by_id),
         }
+
+    async def get_roads_geojson(self, bbox: Bbox, max_features: int = 4000) -> dict:
+        """Drivable ways (OSM ∪ MVUM) within `bbox`, independent of any run —
+        the viewport roads overlay. Reads whatever ways prior runs ingested into
+        the store for this area (areas never scored have no road data). Clipped
+        to the bbox and capped at `max_features` (sets `truncated`). Same vector
+        overlay as the per-run roads; display-only (TLC-3)."""
+        from cairn import DISCLAIMER
+
+        ways = await self.load_drivable_ways(bbox, clip=True)
+        tags_by_id = await self.drivable_way_tags(bbox)
+        features = _roads_features(ways, tags_by_id)
+        return {
+            "type": "FeatureCollection",
+            "disclaimer": DISCLAIMER,
+            "truncated": len(features) > max_features,
+            "features": features[:max_features],
+        }
+
+
+def _roads_features(ways: list, tags_by_id: dict[int, dict]) -> list[dict]:
+    """Build LineString Features for drivable ways + their source tags. Shared by
+    the per-run and viewport roads overlays. `forest_road` (MVUM/USFS) drives the
+    orange styling; `rough` drives the dashed style."""
+    from cairn.engine.features import road_is_rough
+
+    features = []
+    for way in ways:
+        tags = tags_by_id.get(way.osm_id, {})
+        operator = (tags.get("operator") or "").lower()
+        is_forest = "mvum_access" in tags or "forest service" in operator
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": [list(c) for c in way.coords],
+                },
+                "properties": {
+                    "osm_id": way.osm_id,
+                    "highway": tags.get("highway"),
+                    "name": tags.get("name") or tags.get("ref"),
+                    "forest_road": is_forest,
+                    "rough": road_is_rough(tags),
+                },
+            }
+        )
+    return features
 
 
 def _line_parts(geom: dict) -> list[list[tuple[float, float]]]:

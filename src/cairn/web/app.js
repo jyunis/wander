@@ -102,6 +102,9 @@ const CAMPGROUND_COLORS = {
 };
 // Below this zoom, ownership parcels are too numerous/tiny to fetch usefully.
 const OWNERSHIP_MIN_ZOOM = 11;
+// Roads are a zoomed-in detail; below this we don't refetch (a wide viewport
+// would pull the whole region). Keeps general browsing cheap.
+const ROADS_MIN_ZOOM = 11;
 
 let overlayDefs = []; // from GET /overlays
 const overlayLayers = {}; // id -> L.GeoJSON
@@ -156,6 +159,7 @@ async function init() {
   setupMap();
   await loadRuns();
   await initLandOverlays();
+  scheduleRoads(); // roads default on — load them for the opening view
 
   $("draw-bbox").onclick = startDraw;
   $("use-view").onclick = useCurrentView;
@@ -279,6 +283,7 @@ function setupMap() {
   map.createPane("land");
   map.getPane("land").style.zIndex = 250;
   map.on("moveend", refreshActiveOverlays);
+  map.on("moveend", scheduleRoads); // viewport roads overlay follows the map
   // Keep info windows from opening hidden behind the bottom sheet.
   map.on("popupopen", (e) => {
     _popupOpen = true;
@@ -624,23 +629,45 @@ async function loadRun(runId) {
   activeRunId = runId;
   $("run-history").value = String(runId);
   const gj = await (await fetch(`/runs/${runId}/geojson`)).json();
-  renderResults(gj);
+  renderResults(gj); // fitBounds here fires moveend -> scheduleRoads() fetches the area
   renderMeta(gj.run);
-  loadRoads(runId);
 }
 
-// Cairn's own scored road network (OSM ∪ MVUM forest spurs) as vector lines.
-// Far better than the satellite basemap's transportation overlay, which is
-// blank in the forest and drops linework above z18. Best-effort: a roads
-// fetch failure just leaves the overlay empty, never blocks results.
-async function loadRoads(runId) {
-  roadsLayer.clearLayers();
+// Cairn's own road network (OSM ∪ MVUM forest spurs) as vector lines — far
+// better than the satellite basemap's transportation overlay, which is blank in
+// the forest and drops linework above z18. Viewport-driven (GET /roads?bbox=):
+// the overlay follows wherever you browse, for any area a prior run ingested,
+// not just the loaded run's box. Best-effort: a fetch failure leaves it empty.
+let _roadsBounds = null; // padded LatLngBounds last fetched (skip refetch within)
+let _roadsTimer = null;
+
+function scheduleRoads() {
+  clearTimeout(_roadsTimer);
+  _roadsTimer = setTimeout(loadRoadsForView, 300);
+}
+
+async function loadRoadsForView() {
+  if (!$("layer-roads").checked) return; // layer off — nothing to fetch
+  if (map.getZoom() < ROADS_MIN_ZOOM) return; // too far out — keep what's drawn
+  const view = map.getBounds();
+  // Already have this area (we fetch a padded box, so small pans don't refetch).
+  // Re-fetch if the layer was cleared out from under us (e.g. trip-plot view).
+  if (_roadsBounds && _roadsBounds.contains(view) && roadsLayer.getLayers().length) return;
+  const padded = view.pad(0.4);
+  const bbox = [padded.getWest(), padded.getSouth(), padded.getEast(), padded.getNorth()].join(",");
   let gj;
   try {
-    gj = await (await fetch(`/runs/${runId}/roads`)).json();
+    gj = await (await fetch(`/roads?bbox=${bbox}`)).json();
   } catch {
     return;
   }
+  if (!$("layer-roads").checked) return; // toggled off mid-fetch
+  renderRoads(gj);
+  _roadsBounds = padded;
+}
+
+function renderRoads(gj) {
+  roadsLayer.clearLayers();
   (gj.features || []).forEach((f) => {
     const p = f.properties || {};
     const forest = p.forest_road;
@@ -656,7 +683,6 @@ async function loadRoads(runId) {
     if (p.name) line.bindTooltip(String(p.name), { sticky: true });
     roadsLayer.addLayer(line);
   });
-  updateLayerVisibility();
 }
 
 function renderMeta(run) {
@@ -775,6 +801,7 @@ function updateLayerVisibility() {
   toggleLayer(candidatesLayer, $("layer-dots").checked);
   toggleLayer(heatLayer, $("layer-heat").checked);
   toggleLayer(roadsLayer, $("layer-roads").checked);
+  if ($("layer-roads").checked) scheduleRoads(); // fetch the view when turned on
 }
 
 function toggleLayer(layer, on) {

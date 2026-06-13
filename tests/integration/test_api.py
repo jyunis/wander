@@ -111,6 +111,33 @@ def test_roads_unknown_run_returns_404(client):
     assert r.json()["error"] == "RunNotFound"
 
 
+def test_roads_viewport_geojson(client):
+    # The viewport roads overlay: drivable ways in a bbox, independent of any
+    # run. Score first so the store has road data for the area.
+    client.post("/score", json={"bbox": TEST_BBOX})
+    bbox = ",".join(str(x) for x in TEST_BBOX)
+    r = client.get(f"/roads?bbox={bbox}")
+    assert r.status_code == 200
+    gj = r.json()
+    assert gj["type"] == "FeatureCollection"
+    assert "physical suitability only" in gj["disclaimer"].lower()
+    assert "truncated" in gj and len(gj["features"]) > 0
+    geom = gj["features"][0]["geometry"]
+    assert geom["type"] == "LineString" and len(geom["coordinates"]) >= 2
+    props = gj["features"][0]["properties"]
+    assert "forest_road" in props and "rough" in props
+
+
+def test_roads_viewport_empty_area(client):
+    # An unscored bbox has no ingested road data -> empty, not an error.
+    gj = client.get("/roads?bbox=10,10,10.01,10.01").json()
+    assert gj["type"] == "FeatureCollection" and gj["features"] == []
+
+
+def test_roads_viewport_bad_bbox_422(client):
+    assert client.get("/roads?bbox=1,2,3").status_code == 422
+
+
 class _FakeGeocoder:
     def __init__(self, results):
         self._r = results

@@ -6,7 +6,7 @@ typed engine errors to HTTP codes, and returns `failed` runs as status+reason
 (not a 500, TLC-10). Every results response carries the TLC-3 disclaimer.
 
 Endpoints: POST /score, GET /runs, GET /runs/{id}, GET /runs/{id}/geojson,
-GET /runs/{id}/roads, GET /overlays, GET /overlays/{layer},
+GET /runs/{id}/roads, GET /roads, GET /overlays, GET /overlays/{layer},
 GET /nearby-campgrounds, GET /saved, POST /saved, PATCH/DELETE /saved/{id},
 GET/POST /trips, GET/PATCH/DELETE /trips/{id}, POST /trips/{id}/members,
 DELETE /trips/{id}/members/{saved_id}, GET /trips/{id}/export.gpx|.kml,
@@ -292,6 +292,22 @@ async def get_run_roads(run_id: int, request: Request) -> dict:
     store: Store = request.app.state.store
     await store.get_run(run_id)  # 404 if missing
     return await store.get_run_roads_geojson(run_id)
+
+
+@app.get("/roads")
+async def get_roads(request: Request, bbox: str) -> dict:
+    """Drivable ways (OSM ∪ MVUM) within `bbox` — the viewport roads overlay,
+    independent of any run, so forest spurs show wherever you browse (anywhere a
+    prior run ingested road data). Clipped + capped. Display-only (TLC-3)."""
+    store: Store = request.app.state.store
+    settings = request.app.state.settings
+    try:
+        parts = [float(x) for x in bbox.split(",")]
+        if len(parts) != 4:
+            raise ValueError
+    except ValueError:
+        raise ValidationError("bbox must be 'min_lon,min_lat,max_lon,max_lat'") from None
+    return await store.get_roads_geojson(Bbox(*parts), max_features=settings.overlay_max_features)
 
 
 @app.get("/overlays")
