@@ -190,7 +190,15 @@ async function init() {
   // mobile (closed by default). One state class on #app; CSS interprets it
   // per viewport.
   setNav(!window.matchMedia("(max-width: 640px)").matches);
-  $("nav-open").onclick = () => setNav(true);
+  // Reopening the drawer also bails out of an in-progress draw (mobile closes
+  // the drawer to draw). Leaflet.Draw, while active, adds a document-level
+  // touchstart preventDefault that cancels the click on iOS — so stop the fab's
+  // touchstart from reaching that handler, keeping the fab tappable mid-draw.
+  $("nav-open").onclick = () => {
+    cancelDraw();
+    setNav(true);
+  };
+  $("nav-open").addEventListener("touchstart", (e) => e.stopPropagation(), { passive: true });
   $("nav-close").onclick = () => setNav(false);
   $("nav-backdrop").onclick = () => setNav(false);
   // Delegated ★ handler — works for the site sheet and every campground card.
@@ -404,6 +412,12 @@ function addBasemapControl() {
 }
 
 let drawHandler = null;
+function cancelDraw() {
+  if (drawHandler) {
+    drawHandler.disable();
+    drawHandler = null;
+  }
+}
 function startDraw() {
   if (drawHandler) drawHandler.disable();
   drawHandler = new L.Draw.Rectangle(map, { shapeOptions: { color: "#5b9c5a" } });
