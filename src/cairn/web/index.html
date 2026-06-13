@@ -154,6 +154,10 @@
 
     <!-- Bottom sheet: selected-site detail (persistent; mobile-friendly) -->
     <section id="sheet" class="sheet hidden" aria-label="Selected site">
+      <button id="sheet-handle" class="sheet-handle" title="Collapse / expand" aria-label="Collapse or expand">
+        <span class="sheet-grip"></span>
+        <span id="sheet-peek" class="sheet-peek"></span>
+      </button>
       <button id="sheet-close" class="sheet-x" title="Close">×</button>
       <div id="sheet-body"></div>
     </section>

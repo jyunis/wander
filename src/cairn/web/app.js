@@ -185,6 +185,7 @@ async function init() {
     if (el) el.addEventListener("input", applyCampgroundFilters);
   });
   $("sheet-close").onclick = closeSite;
+  $("sheet-handle").onclick = () => $("sheet").classList.toggle("collapsed");
   // Sidebar: a left column on desktop (collapsible), an overlay drawer on
   // mobile (closed by default). One state class on #app; CSS interprets it
   // per viewport.
@@ -1114,7 +1115,9 @@ function showSite(p, lat, lon, presetName) {
   clearSelectedMarker(); // any prior saved-place marker is no longer current
   const body = $("sheet-body");
   body.innerHTML = breakdownHtml(p, lat, lon);
-  $("sheet").classList.remove("hidden");
+  $("sheet").classList.remove("hidden", "collapsed"); // a new selection opens expanded
+  $("sheet-peek").textContent =
+    (p && p.name) || presetName || `${(+lat).toFixed(4)}, ${(+lon).toFixed(4)}`;
   const btn = body.querySelector(".bd-toggle");
   const details = body.querySelector(".bd-details");
   if (btn && details) {
@@ -1255,6 +1258,7 @@ function wireSiteName(nameEl, lat, lon, presetName) {
 
 function closeSite() {
   $("sheet").classList.add("hidden");
+  $("sheet").classList.remove("collapsed"); // reset for next open
   nearbyCgLayer.clearLayers();
   clearSelectedMarker();
   map.closePopup();

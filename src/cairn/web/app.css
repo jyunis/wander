@@ -192,8 +192,24 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .sheet-x { position: absolute; top: 7px; right: 11px; background: none; border: none;
   color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer; padding: 2px; }
 .sheet-x:hover { color: var(--ink); }
+
+/* Collapse handle — mobile only (the desktop sheet is small and off to the
+   side, so there's nothing to minimize). Tap the grip to collapse the sheet to
+   a slim peek bar (grip + site name) and tap again to expand. */
+.sheet-handle { display: none; }
+.sheet-grip { display: block; width: 36px; height: 4px; border-radius: 2px;
+  background: var(--line); margin: 0 auto; }
+.sheet-peek { display: none; }
 @media (max-width: 640px) {
   .sheet { left: 8px; right: 8px; width: auto; bottom: 8px; max-height: 55vh; border-radius: 14px; }
+  .sheet-handle { display: block; width: 100%; background: none; border: none;
+    padding: 2px 0 8px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .sheet.collapsed { max-height: none; overflow: visible; }
+  .sheet.collapsed #sheet-body { display: none; }
+  .sheet.collapsed .sheet-handle { padding-bottom: 2px; }
+  .sheet.collapsed .sheet-peek { display: block; margin-top: 5px; padding: 0 28px;
+    font-size: 12.5px; color: var(--muted); text-align: center;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 /* ★ save toggle (sheet + campground cards) */
 .star { background: none; border: none; cursor: pointer; font-size: 16px; line-height: 1;
