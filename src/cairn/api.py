@@ -8,6 +8,8 @@ typed engine errors to HTTP codes, and returns `failed` runs as status+reason
 Endpoints: POST /score, GET /runs, GET /runs/{id}, GET /runs/{id}/geojson,
 GET /runs/{id}/roads, GET /roads, GET /overlays, GET /overlays/{layer},
 GET /nearby-campgrounds, GET /saved, POST /saved, PATCH/DELETE /saved/{id},
+PUT /saved/{id}/collections, GET/POST /collections,
+PATCH/DELETE /collections/{id}, POST /collections/{id}/places,
 GET/POST /trips, GET/PATCH/DELETE /trips/{id}, POST /trips/{id}/members,
 DELETE /trips/{id}/members/{saved_id}, GET /trips/{id}/export.gpx|.kml,
 GET /trips/{id}/availability,
@@ -19,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from contextlib import asynccontextmanager
 from importlib.resources import files
 from pathlib import Path
@@ -205,6 +208,26 @@ class MemberRequest(BaseModel):
     role: str | None = Field(default="primary", description="'primary' or 'fallback'")
 
 
+class CollectionRequest(BaseModel):
+    name: str
+    color: str | None = Field(default=None, description="hex swatch, e.g. '#5b9c5a'")
+
+
+class CollectionUpdateRequest(BaseModel):
+    # Partial update (model_fields_set tracks which fields were sent).
+    name: str | None = None
+    color: str | None = None
+    position: int | None = None
+
+
+class PlaceCollectionsRequest(BaseModel):
+    collection_ids: list[int] = Field(default_factory=list)
+
+
+class BulkPlacesRequest(BaseModel):
+    saved_ids: list[int] = Field(default_factory=list)
+
+
 # --- error handling --------------------------------------------------------
 
 
@@ -375,6 +398,93 @@ async def update_saved(saved_id: int, req: SavedUpdateRequest, request: Request)
     if row is None:
         return JSONResponse(status_code=404, content={"error": "NotFound"})
     return JSONResponse(status_code=200, content=row)
+
+
+# --- collections (multi-membership tags over saved places — TLC-3) ----------
+
+_HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?$")
+
+
+def _check_collection_name(name: str | None) -> None:
+    if not name or not name.strip():
+        raise ValidationError("name is required")
+
+
+def _check_color(color: str | None) -> None:
+    if color is not None and not _HEX_COLOR.match(color):
+        raise ValidationError("color must be a hex color like '#5b9c5a'")
+
+
+@app.get("/collections")
+async def list_collections(request: Request) -> dict:
+    """The user's collections (each with a member count), ordered by position."""
+    store: Store = request.app.state.store
+    return {"collections": await store.list_collections(), "disclaimer": DISCLAIMER}
+
+
+@app.post("/collections")
+async def create_collection(req: CollectionRequest, request: Request) -> JSONResponse:
+    store: Store = request.app.state.store
+    _check_collection_name(req.name)
+    _check_color(req.color)
+    col = await store.add_collection(req.name.strip(), req.color)
+    return JSONResponse(status_code=201, content=col)
+
+
+@app.patch("/collections/{collection_id}")
+async def update_collection(
+    collection_id: int, req: CollectionUpdateRequest, request: Request
+) -> JSONResponse:
+    store: Store = request.app.state.store
+    sent = req.model_fields_set
+    if "name" in sent:
+        _check_collection_name(req.name)
+    if "color" in sent:
+        _check_color(req.color)
+    col = await store.update_collection(
+        collection_id,
+        name=req.name.strip() if "name" in sent else UNSET,
+        color=req.color if "color" in sent else UNSET,
+        position=req.position if "position" in sent else UNSET,
+    )
+    if col is None:
+        return JSONResponse(status_code=404, content={"error": "NotFound"})
+    return JSONResponse(status_code=200, content=col)
+
+
+@app.delete("/collections/{collection_id}")
+async def delete_collection(collection_id: int, request: Request) -> dict:
+    """Delete a collection (its memberships cascade away; saved places stay)."""
+    store: Store = request.app.state.store
+    return {"deleted": await store.delete_collection(collection_id)}
+
+
+@app.put("/saved/{saved_id}/collections")
+async def set_saved_collections(
+    saved_id: int, req: PlaceCollectionsRequest, request: Request
+) -> JSONResponse:
+    """Replace a saved place's full collection set (the per-place tag editor).
+    Unknown collection ids are ignored. Returns the hydrated saved place."""
+    store: Store = request.app.state.store
+    place = await store.set_place_collections(saved_id, req.collection_ids)
+    if place is None:
+        return JSONResponse(status_code=404, content={"error": "NotFound"})
+    return JSONResponse(status_code=200, content=place)
+
+
+@app.post("/collections/{collection_id}/places")
+async def add_collection_places(
+    collection_id: int, req: BulkPlacesRequest, request: Request
+) -> JSONResponse:
+    """Bulk-add a collection tag to many saved places (multi-select). Returns
+    the count of new memberships; unknown saved ids are skipped."""
+    store: Store = request.app.state.store
+    added = await store.add_places_to_collection(collection_id, req.saved_ids)
+    if added is None:
+        return JSONResponse(
+            status_code=404, content={"error": "NotFound", "detail": "collection not found"}
+        )
+    return JSONResponse(status_code=200, content={"added": added})
 
 
 # --- trips (a dated grouping of saved places — user data + display, TLC-3) --
