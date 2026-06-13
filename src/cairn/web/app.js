@@ -16,6 +16,10 @@ let minScore = 0.45; // hide candidates/sites below this absolute total (noise f
 // Keyless basemap sources. Add more here — the selector is data-driven.
 // maxNativeZoom = the source's real max; maxZoom lets Leaflet over-zoom
 // (blurry but navigable) so switching sources never loses the current zoom.
+// Satellite is the default: in the backcountry the imagery (+ Cairn's own roads
+// overlay) reads better than a street map, and it's where the vector roads earn
+// their keep. Switch the menu's default by changing this id.
+const DEFAULT_BASEMAP = "satellite";
 const BASEMAPS = [
   {
     id: "topo",
@@ -270,7 +274,7 @@ function setupMap() {
   map = L.map("map", { zoomControl: false }).setView([47.9, -91.86], 11);
   L.control.zoom({ position: "topright" }).addTo(map);
   addBasemapControl(); // small on-map style picker (synced with the panel select)
-  setBasemap(BASEMAPS[0].id);
+  setBasemap(DEFAULT_BASEMAP);
   // Land overlays sit above the basemap but below roads/dots/pins.
   map.createPane("land");
   map.getPane("land").style.zIndex = 250;
@@ -292,7 +296,8 @@ function setupMap() {
   // Canvas renderer so thousands of candidate dots stay smooth.
   canvasRenderer = L.canvas({ padding: 0.5 });
   // roadsLayer holds Cairn's own drivable ways (OSM ∪ MVUM) as vector lines —
-  // off by default. Added before candidates/pins so it renders beneath them.
+  // on by default (the "Roads" checkbox is checked), since satellite imagery
+  // shows no forest roads. updateLayerVisibility adds it once a run loads.
   roadsLayer = new L.LayerGroup();
   candidatesLayer = new L.LayerGroup().addTo(map);
   pinLayer = new L.LayerGroup().addTo(map);
@@ -318,7 +323,7 @@ function buildBasemaps() {
     opt.textContent = b.name;
     sel.appendChild(opt);
   });
-  sel.value = BASEMAPS[0].id;
+  sel.value = DEFAULT_BASEMAP;
   sel.onchange = (e) => setBasemap(e.target.value);
 }
 
