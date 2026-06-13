@@ -33,7 +33,7 @@ from cairn.store.types import Bbox, Run
 
 _M_PER_DEG = 111320.0
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 # Sentinel for partial updates: distinguishes "field omitted" from "set to NULL".
@@ -93,6 +93,23 @@ _MIGRATIONS: dict[int, list[str]] = {
         "  PRIMARY KEY (trip_id, saved_id))",
         "CREATE INDEX IF NOT EXISTS idx_trip_members_trip ON trip_members (trip_id)",
         "INSERT INTO schema_version (version) VALUES (8)",
+    ],
+    8: [
+        # Collections (v9): named, color-tagged groups for organizing saved
+        # places — MULTI-membership (a place can belong to several), so a join
+        # table, not a column. User data + display, never scoring (TLC-3);
+        # orthogonal to trips. FK cascade prunes memberships when a collection
+        # or the saved place is deleted (foreign_keys is ON).
+        "CREATE TABLE IF NOT EXISTS collections ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, "
+        "  color TEXT, position INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS place_collections ("
+        "  collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE, "
+        "  saved_id INTEGER NOT NULL REFERENCES saved_places(id) ON DELETE CASCADE, "
+        "  PRIMARY KEY (collection_id, saved_id))",
+        "CREATE INDEX IF NOT EXISTS idx_place_collections_saved "
+        "ON place_collections (saved_id)",
+        "INSERT INTO schema_version (version) VALUES (9)",
     ],
 }
 
@@ -386,17 +403,37 @@ class Store:
              json.dumps(payload) if payload is not None else None, note, created, rating),
         )
         await self.db.commit()
-        return self._saved_row(
+        place = self._saved_row(
             await (await self.db.execute(
                 f"SELECT {self._SAVED_COLS} FROM saved_places WHERE id=?", (cur.lastrowid,)
             )).fetchone()
         )
+        place["collection_ids"] = []  # newly saved -> no collections yet
+        return place
 
     async def list_saved(self) -> list[dict]:
         cur = await self.db.execute(
             f"SELECT {self._SAVED_COLS} FROM saved_places ORDER BY created_at DESC, id DESC"
         )
-        return [self._saved_row(r) for r in await cur.fetchall()]
+        places = [self._saved_row(r) for r in await cur.fetchall()]
+        # Hydrate collection membership (TLC-3 — display/organization) in bulk.
+        by_place: dict[int, list[int]] = {}
+        pc = await self.db.execute(
+            "SELECT saved_id, collection_id FROM place_collections ORDER BY collection_id"
+        )
+        for sid, cid in await pc.fetchall():
+            by_place.setdefault(sid, []).append(cid)
+        for p in places:
+            p["collection_ids"] = by_place.get(p["id"], [])
+        return places
+
+    async def _collection_ids_for(self, saved_id: int) -> list[int]:
+        cur = await self.db.execute(
+            "SELECT collection_id FROM place_collections WHERE saved_id=? "
+            "ORDER BY collection_id",
+            (saved_id,),
+        )
+        return [r[0] for r in await cur.fetchall()]
 
     async def delete_saved(self, saved_id: int) -> bool:
         cur = await self.db.execute("DELETE FROM saved_places WHERE id=?", (saved_id,))
@@ -428,7 +465,162 @@ class Store:
         row = await (await self.db.execute(
             f"SELECT {self._SAVED_COLS} FROM saved_places WHERE id=?", (saved_id,)
         )).fetchone()
-        return self._saved_row(row) if row else None
+        if row is None:
+            return None
+        place = self._saved_row(row)
+        place["collection_ids"] = await self._collection_ids_for(saved_id)
+        return place
+
+    # --- Collections (multi-membership tags over saved places — TLC-3) -------
+
+    @staticmethod
+    def _collection_row(row) -> dict:
+        return {
+            "id": row[0], "name": row[1], "color": row[2],
+            "position": row[3], "created_at": row[4],
+        }
+
+    _COLLECTION_COLS = "id, name, color, position, created_at"
+
+    async def list_collections(self) -> list[dict]:
+        """All collections (by position then id), each with a member `count`."""
+        cur = await self.db.execute(
+            f"SELECT {', '.join('c.' + x for x in self._COLLECTION_COLS.split(', '))}, "
+            "COUNT(pc.saved_id) AS count "
+            "FROM collections c LEFT JOIN place_collections pc ON pc.collection_id = c.id "
+            "GROUP BY c.id ORDER BY c.position, c.id"
+        )
+        out = []
+        for row in await cur.fetchall():
+            col = self._collection_row(row)
+            col["count"] = row[5]
+            out.append(col)
+        return out
+
+    async def add_collection(self, name: str, color: str | None = None) -> dict:
+        import datetime as _dt
+
+        created = _dt.datetime.now(tz=_dt.timezone.utc).replace(microsecond=0).isoformat()
+        pos = (await (await self.db.execute(
+            "SELECT COALESCE(MAX(position), -1) + 1 FROM collections"
+        )).fetchone())[0]
+        cur = await self.db.execute(
+            "INSERT INTO collections (name, color, position, created_at) VALUES (?, ?, ?, ?)",
+            (name, color, pos, created),
+        )
+        await self.db.commit()
+        col = self._collection_row(await (await self.db.execute(
+            f"SELECT {self._COLLECTION_COLS} FROM collections WHERE id=?", (cur.lastrowid,)
+        )).fetchone())
+        col["count"] = 0
+        return col
+
+    async def update_collection(
+        self, collection_id: int, name: object = UNSET,
+        color: object = UNSET, position: object = UNSET,
+    ) -> dict | None:
+        """Partial update (UNSET fields untouched). Returns the hydrated
+        collection (with count), or None if it doesn't exist."""
+        sets, params = [], []
+        for col, val in (("name", name), ("color", color), ("position", position)):
+            if val is not UNSET:
+                sets.append(f"{col}=?")
+                params.append(val)
+        if sets:
+            params.append(collection_id)
+            await self.db.execute(
+                f"UPDATE collections SET {', '.join(sets)} WHERE id=?", params
+            )
+            await self.db.commit()
+        row = await (await self.db.execute(
+            f"SELECT {self._COLLECTION_COLS} FROM collections WHERE id=?", (collection_id,)
+        )).fetchone()
+        if row is None:
+            return None
+        col = self._collection_row(row)
+        col["count"] = (await (await self.db.execute(
+            "SELECT COUNT(*) FROM place_collections WHERE collection_id=?", (collection_id,)
+        )).fetchone())[0]
+        return col
+
+    async def delete_collection(self, collection_id: int) -> bool:
+        """Delete a collection; FK cascade drops its place_collections rows.
+        The saved places themselves are untouched."""
+        cur = await self.db.execute(
+            "DELETE FROM collections WHERE id=?", (collection_id,)
+        )
+        await self.db.commit()
+        return cur.rowcount > 0
+
+    async def _existing_collection_ids(self, ids: list[int]) -> list[int]:
+        if not ids:
+            return []
+        qs = ",".join("?" * len(ids))
+        cur = await self.db.execute(
+            f"SELECT id FROM collections WHERE id IN ({qs})", tuple(ids)
+        )
+        present = {r[0] for r in await cur.fetchall()}
+        return [i for i in ids if i in present]  # preserve caller order, drop unknowns
+
+    async def set_place_collections(
+        self, saved_id: int, collection_ids: list[int]
+    ) -> dict | None:
+        """Replace a saved place's full collection-membership set (PUT
+        semantics). Unknown collection ids are ignored (rather than FK-erroring
+        the whole set). Returns the hydrated saved place, or None if absent."""
+        if await (await self.db.execute(
+            "SELECT 1 FROM saved_places WHERE id=?", (saved_id,)
+        )).fetchone() is None:
+            return None
+        await self.db.execute(
+            "DELETE FROM place_collections WHERE saved_id=?", (saved_id,)
+        )
+        valid = await self._existing_collection_ids(list(dict.fromkeys(collection_ids)))
+        if valid:
+            await self.db.executemany(
+                "INSERT OR IGNORE INTO place_collections (collection_id, saved_id) "
+                "VALUES (?, ?)",
+                [(cid, saved_id) for cid in valid],
+            )
+        await self.db.commit()
+        place = self._saved_row(await (await self.db.execute(
+            f"SELECT {self._SAVED_COLS} FROM saved_places WHERE id=?", (saved_id,)
+        )).fetchone())
+        place["collection_ids"] = await self._collection_ids_for(saved_id)
+        return place
+
+    async def add_places_to_collection(
+        self, collection_id: int, saved_ids: list[int]
+    ) -> int | None:
+        """Bulk-add a collection tag to many saved places (multi-select).
+        Returns the number of NEW memberships created (existing ones ignored),
+        or None if the collection doesn't exist. Unknown saved ids are skipped."""
+        if await (await self.db.execute(
+            "SELECT 1 FROM collections WHERE id=?", (collection_id,)
+        )).fetchone() is None:
+            return None
+        ids = list(dict.fromkeys(saved_ids))
+        if not ids:
+            return 0
+        qs = ",".join("?" * len(ids))
+        cur = await self.db.execute(
+            f"SELECT id FROM saved_places WHERE id IN ({qs})", tuple(ids)
+        )
+        valid = [r[0] for r in await cur.fetchall()]
+        before = (await (await self.db.execute(
+            "SELECT COUNT(*) FROM place_collections WHERE collection_id=?", (collection_id,)
+        )).fetchone())[0]
+        if valid:
+            await self.db.executemany(
+                "INSERT OR IGNORE INTO place_collections (collection_id, saved_id) "
+                "VALUES (?, ?)",
+                [(collection_id, sid) for sid in valid],
+            )
+            await self.db.commit()
+        after = (await (await self.db.execute(
+            "SELECT COUNT(*) FROM place_collections WHERE collection_id=?", (collection_id,)
+        )).fetchone())[0]
+        return after - before
 
     # --- Trips (a dated grouping of saved places — user data, TLC-3) ---------
 

@@ -21,6 +21,8 @@
 -- v=6: saved_places — user favorites (dispersed sites + campgrounds).
 -- v=7: saved_places.rating — user quality rating, 0-5 stars.
 -- v=8: trip planner — trips + trip_members (a dated grouping of saved places).
+-- v=9: collections — multi-membership tag groups for organizing saved places
+--      (collections + place_collections join). User data, never scoring.
 
 CREATE TABLE IF NOT EXISTS schema_version (
     version     INTEGER PRIMARY KEY,
@@ -158,3 +160,24 @@ CREATE TABLE IF NOT EXISTS trip_members (
 );
 
 CREATE INDEX IF NOT EXISTS idx_trip_members_trip ON trip_members (trip_id);
+
+-- --- Collections (v9) — named, color-tagged groups for organizing saved
+-- places. MULTI-membership (a place can be in several), so a join table.
+-- User data + display, never scoring (TLC-3); orthogonal to trips.
+CREATE TABLE IF NOT EXISTS collections (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    color       TEXT,                              -- UI swatch (e.g. '#5b9c5a')
+    position    INTEGER NOT NULL DEFAULT 0,        -- display order
+    created_at  TEXT NOT NULL
+);
+
+-- A saved place ↔ collection membership. FK cascade prunes memberships when a
+-- collection or the saved place is deleted; the place/collection survive.
+CREATE TABLE IF NOT EXISTS place_collections (
+    collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    saved_id      INTEGER NOT NULL REFERENCES saved_places(id) ON DELETE CASCADE,
+    PRIMARY KEY (collection_id, saved_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_place_collections_saved ON place_collections (saved_id);

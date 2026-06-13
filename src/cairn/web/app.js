@@ -1311,6 +1311,39 @@ function badgeRowHtml(badges) {
 // --- saved places (favorites; server-side so they sync laptop↔phone) -------
 let savedPlaces = [];
 const savedByKey = new Map(); // key -> id
+
+// Collections (multi-membership tags over saved places — TLC-3, display-only).
+let collections = []; // GET /collections — [{id,name,color,position,count}]
+let collectionsLoaded = false;
+const collById = new Map();
+const COLLECTION_PALETTE = [
+  "#5b9c5a", "#3a6ea5", "#b5651d", "#8e6bc9",
+  "#c8a24a", "#d96c6c", "#4aa3a3", "#9c5a8e",
+];
+
+async function loadCollections() {
+  try {
+    collections = (await (await fetch("/collections")).json()).collections || [];
+  } catch {
+    collections = [];
+  }
+  collectionsLoaded = true;
+  collById.clear();
+  collections.forEach((c) => collById.set(c.id, c));
+}
+
+async function createCollection(name, color) {
+  color = color || COLLECTION_PALETTE[collections.length % COLLECTION_PALETTE.length];
+  const r = await fetch("/collections", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, color }),
+  });
+  if (!r.ok) return null;
+  const col = await r.json();
+  await loadCollections();
+  return col;
+}
 const savedKey = (kind, lat, lon) => `${kind}:${(+lat).toFixed(5)}:${(+lon).toFixed(5)}`;
 const isSaved = (kind, lat, lon) => savedByKey.has(savedKey(kind, lat, lon));
 
@@ -1378,10 +1411,25 @@ async function toggleFav(fav, btn) {
   renderSavedList();
 }
 
+// Colored membership chips for a saved place (looked up against collById).
+function collChipsHtml(place) {
+  const ids = place.collection_ids || [];
+  const chips = ids
+    .map((id) => {
+      const c = collById.get(id);
+      if (!c) return "";
+      const col = c.color || "#8a97a3";
+      return `<span class="coll-chip" style="border-color:${esc(col)};background:${esc(col)}22">${esc(c.name)}</span>`;
+    })
+    .join("");
+  return chips ? `<div class="coll-chips">${chips}</div>` : "";
+}
+
 function renderSavedList() {
   const host = $("saved-list");
   if (!host) return;
-  $("saved-section").hidden = savedPlaces.length === 0;
+  const empty = $("saved-empty");
+  if (empty) empty.hidden = savedPlaces.length > 0;
   host.innerHTML = savedPlaces
     .map((s, i) => {
       // Three kinds share the list: a campground, a Cairn-scored dispersed
@@ -1402,7 +1450,9 @@ function renderSavedList() {
         `<div class="saved-name">${icon} ${esc(label)}</div>` +
         `<div class="saved-coords">${coords}${score}${stars}</div>` +
         noteLine +
+        collChipsHtml(s) +
         `</div>` +
+        `<button class="saved-tag" title="Collections">🏷</button>` +
         `<button class="saved-add" title="Add to a trip">＋</button>` +
         `<button class="saved-del" title="Remove">×</button></div>`
       );
@@ -1410,6 +1460,10 @@ function renderSavedList() {
     .join("");
   host.querySelectorAll(".saved-row").forEach((row, i) => {
     row.querySelector(".saved-main").onclick = () => reopenSaved(savedPlaces[i]);
+    row.querySelector(".saved-tag").onclick = (e) => {
+      e.stopPropagation();
+      openCollectionPicker(savedPlaces[i], e.currentTarget);
+    };
     row.querySelector(".saved-add").onclick = (e) => {
       e.stopPropagation();
       openTripPickerAt(savedPlaces[i], e.currentTarget);
@@ -1594,10 +1648,19 @@ function setupTabs() {
       const which = tab.dataset.tab;
       $("score-section").hidden = which !== "score";
       $("trips-section").hidden = which !== "trips";
+      $("saved-section-tab").hidden = which !== "saved";
       if (which === "trips") loadTrips();
-      else exitTripPlot(); // back to Score: restore the normal map
+      else exitTripPlot(); // back to Score/Saved: restore the normal map
+      if (which === "saved") openSavedTab();
     };
   });
+  buildCollSwatches();
+  $("coll-new").onclick = () => toggleCollForm(true);
+  $("coll-new-cancel").onclick = () => toggleCollForm(false);
+  $("coll-new-form").onsubmit = (e) => {
+    e.preventDefault();
+    createCollectionFromForm();
+  };
   $("trip-new").onclick = () => toggleTripForm(true);
   $("trip-new-cancel").onclick = () => toggleTripForm(false);
   $("trip-new-form").onsubmit = (e) => {
@@ -2185,6 +2248,177 @@ function tripToast(msg) {
   el.classList.add("show");
   clearTimeout(_toastTimer);
   _toastTimer = setTimeout(() => el.classList.remove("show"), 1900);
+}
+
+// --- Saved tab + collections ------------------------------------------------
+async function openSavedTab() {
+  await loadCollections();
+  await loadSaved(); // renderSavedList reads collById for the chips
+}
+
+let _collFormColor = COLLECTION_PALETTE[0];
+function buildCollSwatches() {
+  const host = $("coll-swatches");
+  if (!host) return;
+  host.innerHTML = COLLECTION_PALETTE.map(
+    (c, i) =>
+      `<button type="button" class="coll-swatch${i === 0 ? " sel" : ""}" ` +
+      `data-c="${c}" style="background:${c}" aria-label="color"></button>`
+  ).join("");
+  host.querySelectorAll(".coll-swatch").forEach((b) => {
+    b.onclick = () => {
+      _collFormColor = b.dataset.c;
+      host.querySelectorAll(".coll-swatch").forEach((x) => x.classList.toggle("sel", x === b));
+    };
+  });
+}
+
+function toggleCollForm(show) {
+  $("coll-new-form").hidden = !show;
+  if (show) $("coll-name").focus();
+}
+
+async function createCollectionFromForm() {
+  const name = $("coll-name").value.trim();
+  const err = $("coll-new-err");
+  if (!name) {
+    err.textContent = "Name the collection.";
+    err.className = "status err";
+    return;
+  }
+  const col = await createCollection(name, _collFormColor);
+  if (!col) {
+    err.textContent = "Couldn't create the collection.";
+    err.className = "status err";
+    return;
+  }
+  $("coll-name").value = "";
+  err.textContent = "";
+  err.className = "status";
+  toggleCollForm(false);
+  renderSavedList(); // pick up the new collection in chip lookups
+}
+
+// The per-place tag picker — a floating popover (document-level so a Leaflet
+// popup never clips it), modeled on the trip picker. Toggle collections on/off,
+// create a new one inline, or delete one. Stays open while you toggle several.
+let _collPicker = null;
+function closeCollPicker() {
+  if (_collPicker) {
+    _collPicker.remove();
+    _collPicker = null;
+    document.removeEventListener("click", _onCollPickerOutside, true);
+    if (map) map.off("movestart", closeCollPicker);
+  }
+}
+function _onCollPickerOutside(e) {
+  if (_collPicker && !_collPicker.contains(e.target)) closeCollPicker();
+}
+
+async function openCollectionPicker(place, anchorEl) {
+  const same = _collPicker && _collPicker._for === place.id;
+  closeCollPicker();
+  if (same) return; // a second click toggles it closed
+  if (!collectionsLoaded) await loadCollections();
+  const pick = document.createElement("div");
+  pick.className = "coll-picker floating";
+  pick._for = place.id;
+  document.body.appendChild(pick);
+  _collPicker = pick;
+  renderCollPickerBody(pick, place);
+  positionPicker(pick, anchorEl);
+  setTimeout(() => document.addEventListener("click", _onCollPickerOutside, true), 0);
+  if (map) map.on("movestart", closeCollPicker);
+}
+
+function renderCollPickerBody(pick, place) {
+  const ids = new Set(place.collection_ids || []);
+  const rows = collections
+    .map((c) => {
+      const on = ids.has(c.id);
+      const col = c.color || "#8a97a3";
+      return (
+        `<div class="coll-pick-row${on ? " on" : ""}" data-id="${c.id}">` +
+        `<span class="coll-dot" style="background:${esc(col)}"></span>` +
+        `<span class="coll-pick-name">${esc(c.name)}</span>` +
+        `<span class="coll-pick-check">${on ? "✓" : ""}</span>` +
+        `<button class="coll-pick-del" title="Delete collection">×</button></div>`
+      );
+    })
+    .join("");
+  pick.innerHTML =
+    `<div class="coll-pick-list">${
+      rows || '<div class="coll-pick-empty">No collections yet.</div>'
+    }</div>` +
+    `<div class="coll-pick-new">` +
+    `<input class="coll-pick-input" type="text" placeholder="＋ New collection" autocomplete="off" />` +
+    `<button class="coll-pick-add btn">Add</button></div>` +
+    `<div class="coll-pick-err"></div>`;
+  pick.querySelectorAll(".coll-pick-row").forEach((row) => {
+    const id = parseInt(row.dataset.id, 10);
+    row.onclick = (e) => {
+      if (e.target.closest(".coll-pick-del")) return;
+      toggleMembership(place, id);
+    };
+    row.querySelector(".coll-pick-del").onclick = (e) => {
+      e.stopPropagation();
+      deleteCollection(id, place);
+    };
+  });
+  const input = pick.querySelector(".coll-pick-input");
+  const add = pick.querySelector(".coll-pick-add");
+  add.onclick = async () => {
+    const name = input.value.trim();
+    if (!name) {
+      input.focus();
+      return;
+    }
+    const col = await createCollection(name);
+    if (!col) {
+      pick.querySelector(".coll-pick-err").textContent = "Couldn't create.";
+      return;
+    }
+    input.value = "";
+    await toggleMembership(place, col.id); // tag the place with the new collection
+  };
+  input.onkeydown = (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      add.click();
+    }
+  };
+}
+
+async function toggleMembership(place, collId) {
+  const ids = new Set(place.collection_ids || []);
+  if (ids.has(collId)) ids.delete(collId);
+  else ids.add(collId);
+  const r = await fetch(`/saved/${place.id}/collections`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ collection_ids: [...ids] }),
+  });
+  if (!r.ok) return;
+  const updated = await r.json();
+  place.collection_ids = updated.collection_ids;
+  const i = savedPlaces.findIndex((s) => s.id === place.id);
+  if (i >= 0) savedPlaces[i].collection_ids = updated.collection_ids;
+  await loadCollections(); // member counts changed
+  renderSavedList();
+  if (_collPicker && _collPicker._for === place.id) renderCollPickerBody(_collPicker, place);
+}
+
+async function deleteCollection(id, place) {
+  const c = collById.get(id);
+  if (!confirm(`Delete collection "${c ? c.name : ""}"? Your saved places aren't deleted.`)) return;
+  await fetch(`/collections/${id}`, { method: "DELETE" });
+  await loadCollections();
+  // Drop the deleted id from any cached place membership.
+  savedPlaces.forEach((s) => {
+    if (s.collection_ids) s.collection_ids = s.collection_ids.filter((x) => x !== id);
+  });
+  renderSavedList();
+  if (_collPicker && place) renderCollPickerBody(_collPicker, place);
 }
 
 init();

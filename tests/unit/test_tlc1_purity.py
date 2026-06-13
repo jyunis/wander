@@ -83,6 +83,21 @@ def test_engine_never_references_trip_or_export_data_tlc3():
         )
 
 
+def test_engine_never_references_collections_data_tlc3():
+    # TLC-3: collections (multi-membership tags over saved places) are user data
+    # + display/organization — never a scoring input. Guard the engine against
+    # importing the collections store surface. Code-shaped tokens only.
+    forbidden = re.compile(
+        r"place_collections|add_collection|list_collections|set_place_collections|"
+        r"add_places_to_collection|delete_collection"
+    )
+    for path in ENGINE_DIR.glob("*.py"):
+        source = _strip_comments(path.read_text(encoding="utf-8"))
+        assert forbidden.search(source) is None, (
+            f"{path.name} references collections data (TLC-3 violation)"
+        )
+
+
 def test_engine_never_references_availability_data_tlc3():
     # TLC-3: live campground availability (Phase 2) is display-only — "is this
     # campground open on my dates," never a scoring input. Guard the engine
