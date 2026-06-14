@@ -431,7 +431,7 @@ def test_static_ui_served_and_does_not_shadow_api(client):
     # FC-9: the static UI is served at / without shadowing the JSON API.
     r = client.get("/")
     assert r.status_code == 200
-    assert "Cairn" in r.text and "disclaimer" in r.text.lower()
+    assert "Wander" in r.text and "disclaimer" in r.text.lower()
     js = client.get("/app.js")
     assert js.status_code == 200
     # UI assets revalidate so a rebuild isn't masked by a stale browser cache.

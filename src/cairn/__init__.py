@@ -12,6 +12,6 @@ __version__ = "0.1.0"
 # The single disclaimer string of record (TLC-3). Imported by the API,
 # GeoJSON serializer, and surfaced in the UI. Do not fork copies of this.
 DISCLAIMER = (
-    "Physical suitability only — Cairn does not verify land ownership or "
+    "Physical suitability only — Wander does not verify land ownership or "
     "camping legality. Confirm you are allowed to camp here before you go."
 )
