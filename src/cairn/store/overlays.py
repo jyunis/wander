@@ -33,6 +33,15 @@ LAYER_ORDER = ["campground", "national_forest", "state_forest", "state_park", "o
 # layer in `overlay_features`.
 POINT_LAYERS = {"campground"}
 
+# Simplification tolerance (degrees, ~110 m) for the discovery-highlight outline
+# served by `get_shape`. Coarse on purpose: even a national forest's full
+# MultiPolygon stays a sane payload, since the highlight only needs the shape's
+# silhouette, not survey-grade edges. The EXACT geometry is never shipped here.
+# Topology-preserving so no disjoint part is ever dropped or collapsed to a
+# degenerate sliver (plain ST_Simplify silently deleted whole forest parts,
+# leaving the highlight smaller than the bbox it reports).
+SHAPE_SIMPLIFY_TOL = 0.001
+
 DISCLAIMER = (
     "Land reference layers (ownership, boundaries, campgrounds) are public data "
     "shown for context only. They do NOT establish that camping is legal "
@@ -164,6 +173,42 @@ class OverlayStore:
             "geom_type": "point" if is_point else "polygon",
             "truncated": truncated,
             "features": features,
+            "disclaimer": DISCLAIMER,
+        }
+
+    async def get_shape(self, layer: str, name: str) -> dict | None:
+        """The FULL outline of one named polygon shape (forest/park) for the
+        discovery highlight + zoom-to-extent — NOT bbox-clipped like `query`.
+
+        UNIONs the 1-2 rows that share `(layer, name)` (a few park/forest names
+        span two rows) into one geometry, then returns a GeoJSON Feature whose
+        `geometry` is a **server-simplified** outline (`SHAPE_SIMPLIFY_TOL`) so
+        the payload stays bounded even for a national forest, plus a `bbox`
+        `[w, s, e, n]` taken from the **full** (unsimplified) geometry so the UI
+        can fit-zoom to every disjoint part precisely. Display-only (TLC-3).
+
+        Returns None if no row matches (the API maps that to 404).
+        """
+        if self._db is None:
+            return None
+        # COALESCE guards a tiny park whose outline simplifies away to NULL: fall
+        # back to the raw union so the highlight is never empty. Mbr* read the
+        # extent off the full union, independent of the simplification.
+        cur = await self._db.execute(
+            "SELECT AsGeoJSON(COALESCE(ST_SimplifyPreserveTopology(u, ?), u)), "
+            "  MbrMinX(u), MbrMinY(u), MbrMaxX(u), MbrMaxY(u) "
+            "FROM (SELECT ST_Union(geom) AS u FROM overlay_features WHERE layer=? AND name=?)",
+            (SHAPE_SIMPLIFY_TOL, layer, name),
+        )
+        row = await cur.fetchone()
+        if row is None or row[0] is None:
+            return None
+        gj, w, s, e, n = row
+        return {
+            "type": "Feature",
+            "geometry": json.loads(gj),
+            "properties": {"layer": layer, "name": name},
+            "bbox": [w, s, e, n],
             "disclaimer": DISCLAIMER,
         }
 

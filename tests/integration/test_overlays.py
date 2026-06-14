@@ -64,6 +64,123 @@ def overlay_settings(tmp_path):
     return Settings(_env_file=None, data_dir=tmp_path, overlays_db_path=db)
 
 
+def _build_shape_db(path: str) -> None:
+    """An overlays DB exercising get_shape: a national forest whose single
+    MultiPolygon row holds two disjoint parts, and a state forest whose shape
+    spans TWO rows under one name (the UNION case)."""
+    con = sqlite3.connect(path)
+    con.enable_load_extension(True)
+    con.load_extension("mod_spatialite")
+    con.execute("SELECT InitSpatialMetaData(1)")
+    con.execute(
+        "CREATE TABLE overlay_features ("
+        "fid INTEGER PRIMARY KEY AUTOINCREMENT, layer TEXT, category TEXT, name TEXT)"
+    )
+    con.execute("SELECT AddGeometryColumn('overlay_features','geom',4326,'MULTIPOLYGON','XY')")
+    con.execute("SELECT CreateSpatialIndex('overlay_features','geom')")
+    # One MultiPolygon row, two disjoint parts spanning lon 0..3.
+    con.execute(
+        "INSERT INTO overlay_features(layer, category, name, geom) VALUES "
+        "('national_forest','National Forest','Superior', "
+        "GeomFromText('MULTIPOLYGON("
+        "((0 0,1 0,1 1,0 1,0 0)),((2 2,3 2,3 3,2 3,2 2)))',4326))"
+    )
+    # Two rows, one name -> must UNION; together they span lon 10..12.
+    con.execute(
+        "INSERT INTO overlay_features(layer, category, name, geom) VALUES "
+        "('state_forest','State Forest','Split SF', "
+        "CastToMulti(GeomFromText('POLYGON((10 10,11 10,11 11,10 11,10 10))',4326)))"
+    )
+    con.execute(
+        "INSERT INTO overlay_features(layer, category, name, geom) VALUES "
+        "('state_forest','State Forest','Split SF', "
+        "CastToMulti(GeomFromText('POLYGON((11.5 10,12 10,12 11,11.5 11,11.5 10))',4326)))"
+    )
+    con.commit()
+    con.close()
+
+
+@pytest.fixture
+def shape_settings(tmp_path):
+    db = tmp_path / "overlays.db"
+    _build_shape_db(str(db))
+    return Settings(_env_file=None, data_dir=tmp_path, overlays_db_path=db)
+
+
+async def test_get_shape_unions_multipolygon_parts(shape_settings):
+    s = await OverlayStore.open(shape_settings)
+    shape = await s.get_shape("national_forest", "Superior")
+    assert shape is not None
+    assert shape["properties"] == {"layer": "national_forest", "name": "Superior"}
+    # bbox spans BOTH disjoint parts (0,0)-(3,3), not just one.
+    w, sth, e, n = shape["bbox"]
+    assert w == pytest.approx(0.0) and sth == pytest.approx(0.0)
+    assert e == pytest.approx(3.0) and n == pytest.approx(3.0)
+    assert shape["geometry"]["type"] in ("Polygon", "MultiPolygon")
+    assert "context only" in shape["disclaimer"].lower()
+    await s.close()
+
+
+async def test_get_shape_unions_multiple_rows(shape_settings):
+    s = await OverlayStore.open(shape_settings)
+    shape = await s.get_shape("state_forest", "Split SF")
+    assert shape is not None
+    # The two rows union into one shape spanning lon 10..12.
+    w, sth, e, n = shape["bbox"]
+    assert w == pytest.approx(10.0) and e == pytest.approx(12.0)
+    assert sth == pytest.approx(10.0) and n == pytest.approx(11.0)
+    await s.close()
+
+
+async def test_get_shape_missing_returns_none(shape_settings):
+    s = await OverlayStore.open(shape_settings)
+    assert await s.get_shape("national_forest", "Nope") is None
+    assert await s.get_shape("state_park", "Superior") is None  # wrong layer
+    await s.close()
+
+
+async def test_get_shape_inert_without_db(tmp_path):
+    s = await OverlayStore.open(
+        Settings(_env_file=None, data_dir=tmp_path, overlays_db_path=tmp_path / "nope.db")
+    )
+    assert await s.get_shape("national_forest", "Superior") is None
+    await s.close()
+
+
+def test_api_shape_endpoint(tmp_path, monkeypatch):
+    db = tmp_path / "overlays.db"
+    _build_shape_db(str(db))
+    monkeypatch.setenv("CAIRN_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CAIRN_OVERLAYS_DB_PATH", str(db))
+    config_module._settings = None
+    from cairn.api import app
+
+    with TestClient(app) as c:
+        r = c.get("/overlays/national_forest/shape?name=Superior")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["bbox"][2] == pytest.approx(3.0)  # spans both parts
+        assert body["geometry"]["type"] in ("Polygon", "MultiPolygon")
+
+        # missing name -> 404
+        r = c.get("/overlays/national_forest/shape?name=Nope")
+        assert r.status_code == 404
+        assert r.json()["error"] == "ShapeNotFound"
+    config_module._settings = None
+
+
+def test_api_shape_endpoint_404_when_inert(tmp_path, monkeypatch):
+    # No overlays.db -> store inert -> shape lookups 404 (not 500).
+    monkeypatch.setenv("CAIRN_DATA_DIR", str(tmp_path))
+    config_module._settings = None
+    from cairn.api import app
+
+    with TestClient(app) as c:
+        r = c.get("/overlays/state_park/shape?name=Anything")
+        assert r.status_code == 404
+    config_module._settings = None
+
+
 async def test_layers_report_categories(overlay_settings):
     s = await OverlayStore.open(overlay_settings)
     assert s.available

@@ -7,6 +7,7 @@ typed engine errors to HTTP codes, and returns `failed` runs as status+reason
 
 Endpoints: POST /score, GET /runs, GET /runs/{id}, GET /runs/{id}/geojson,
 GET /runs/{id}/roads, GET /roads, GET /overlays, GET /overlays/{layer},
+GET /overlays/{layer}/shape,
 GET /nearby-campgrounds, GET /saved, POST /saved, PATCH/DELETE /saved/{id},
 PUT /saved/{id}/collections, GET/POST /collections,
 PATCH/DELETE /collections/{id}, POST /collections/{id}/places,
@@ -377,6 +378,23 @@ async def get_overlay(layer: str, request: Request, bbox: str) -> dict:
     except ValueError:
         raise ValidationError("bbox must be 'min_lon,min_lat,max_lon,max_lat'") from None
     return await overlays.query(layer, Bbox(*parts))
+
+
+@app.get("/overlays/{layer}/shape")
+async def get_overlay_shape(layer: str, request: Request, name: str):
+    """The FULL outline of one named forest/park (all disjoint parts unioned) —
+    a server-simplified geometry for the highlight plus the precise full-geometry
+    bbox for zoom-to-extent. Unlike GET /overlays/{layer} this is NOT bbox-clipped
+    (the browser only ever has the viewport slice). Display-only (TLC-3). 404 if
+    no shape by that name exists."""
+    overlays: OverlayStore = request.app.state.overlays
+    shape = await overlays.get_shape(layer, name)
+    if shape is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": "ShapeNotFound", "detail": f"no {layer} shape named {name!r}"},
+        )
+    return shape
 
 
 @app.get("/saved")

@@ -113,6 +113,18 @@ const overlayLayers = {}; // id -> L.GeoJSON
 const overlayActive = new Set();
 const overlayTruncated = new Set(); // layers whose last fetch hit the cap
 
+// Land layers whose polygons are tap-to-discover: tap one -> highlight the whole
+// named shape (all disjoint parts) + zoom to fit. Ownership parcels are excluded
+// (their "name" is a county, which would union the whole county).
+const SHAPE_LAYERS = new Set(["national_forest", "state_forest", "state_park"]);
+// Discovery fit: keep the WHOLE shape in view (so the part you tapped never
+// scrolls off), but framed tight — small padding + a maxZoom so a small park
+// doesn't slam to street level.
+const SHAPE_FIT_PADDING = 12;
+const SHAPE_FIT_MAX_ZOOM = 13;
+let shapeSelectLayer = null; // L.GeoJSON highlight of the selected forest/park
+let selectedShape = null; // {layer, name} currently highlighted, or null
+
 const FEATURE_LABELS = {
   road_end: "Road end",
   road_character: "Forest road",
@@ -293,6 +305,12 @@ function setupMap() {
   // Land overlays sit above the basemap but below roads/dots/pins.
   map.createPane("land");
   map.getPane("land").style.zIndex = 250;
+  // The discovery highlight sits just above the land fills but takes no pointer
+  // events, so tapping a highlighted shape still selects whatever land polygon
+  // is underneath (lets you jump straight to an adjacent forest/park).
+  map.createPane("shapeHighlight");
+  map.getPane("shapeHighlight").style.zIndex = 260;
+  map.getPane("shapeHighlight").style.pointerEvents = "none";
   map.on("moveend", refreshActiveOverlays);
   map.on("moveend", scheduleRoads); // viewport roads overlay follows the map
   // Keep info windows from opening hidden behind the bottom sheet.
@@ -1040,6 +1058,10 @@ function renderOverlayLayer(layerId, gj) {
           ? `${p.category || "—"}${p.name ? " · " + p.name + " Co." : ""}`
           : p.name || overlayDefs.find((d) => d.id === layerId)?.title || layerId;
         if (tip) lyr.bindTooltip(tip, { sticky: true });
+        // Tap a forest/park polygon -> highlight the whole named shape + fit.
+        if (SHAPE_LAYERS.has(layerId) && p.name) {
+          lyr.on("click", () => selectShape(layerId, p.name));
+        }
       }
     },
   });
@@ -1048,6 +1070,70 @@ function renderOverlayLayer(layerId, gj) {
     campgroundGj = gj;
     updateCgCount(gj);
   }
+}
+
+// --- forest/park shape discovery -------------------------------------------
+// Tap a forest/park -> fetch its WHOLE outline (the overlay tiles only carry the
+// viewport slice) -> highlight every disjoint part and fit-zoom to all of them.
+async function selectShape(layer, name) {
+  let shape;
+  try {
+    const r = await fetch(`/overlays/${layer}/shape?name=${encodeURIComponent(name)}`);
+    if (!r.ok) return; // 404 (gone) / inert overlays -> silently no-op
+    shape = await r.json();
+  } catch {
+    return;
+  }
+  if (shapeSelectLayer) map.removeLayer(shapeSelectLayer);
+  shapeSelectLayer = L.geoJSON(shape, {
+    pane: "shapeHighlight",
+    interactive: false,
+    style: {
+      color: "#ffd23f",
+      weight: 3,
+      opacity: 0.95,
+      fillColor: "#ffd23f",
+      fillOpacity: 0.12,
+      className: "shape-pulse", // one-shot CSS pulse on (re)select
+    },
+  }).addTo(map);
+  selectedShape = { layer, name };
+  renderShapeChip();
+  const bb = shape.bbox; // [w, s, e, n] from the full geometry
+  if (bb && bb.every((v) => typeof v === "number")) {
+    map.fitBounds(
+      [
+        [bb[1], bb[0]],
+        [bb[3], bb[2]],
+      ],
+      { padding: [SHAPE_FIT_PADDING, SHAPE_FIT_PADDING], maxZoom: SHAPE_FIT_MAX_ZOOM }
+    );
+  }
+}
+
+function clearShape() {
+  if (shapeSelectLayer) {
+    map.removeLayer(shapeSelectLayer);
+    shapeSelectLayer = null;
+  }
+  selectedShape = null;
+  renderShapeChip();
+}
+
+// The on-map "<name> ✕" chip: shows the current selection, clears it on ✕.
+function renderShapeChip() {
+  const chip = $("shape-chip");
+  if (!chip) return;
+  if (!selectedShape) {
+    chip.hidden = true;
+    chip.innerHTML = "";
+    return;
+  }
+  chip.hidden = false;
+  chip.innerHTML =
+    `<span class="shape-chip-name">${esc(selectedShape.name)}</span>` +
+    `<button type="button" class="shape-chip-x" title="Clear selection" aria-label="Clear selection">✕</button>`;
+  chip.querySelector(".shape-chip-x").onclick = clearShape;
 }
 
 // --- campground filters (Phase 2; client-side over meta) -------------------
@@ -2310,6 +2396,7 @@ function plotTrip() {
 function clearMapForTrip() {
   tripPlotMode = true;
   closeSite(); // also clears nearbyCgLayer + any selected marker
+  clearShape(); // drop any forest/park discovery highlight
   [pinLayer, candidatesLayer, heatLayer, roadsLayer, drawnItems].forEach((l) => {
     if (l && map.hasLayer(l)) map.removeLayer(l);
   });
