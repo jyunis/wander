@@ -303,7 +303,16 @@ function setupMap() {
   addBasemapControl(); // small on-map style picker (synced with the panel select)
   addMeasureControl(); // 📏 distance ruler (independent of the scoring tools)
   setBasemap(DEFAULT_BASEMAP);
-  // Land overlays sit above the basemap but below roads/dots/pins.
+  // Candidate-dot canvas: its OWN pane BELOW the land pane. The canvas spans the
+  // whole viewport and captures pointer events across it, so if it sat above the
+  // land overlays (Leaflet's default overlayPane, z400) it would swallow every
+  // tap meant for a forest/park polygon once a run had been scored — and stay
+  // there until reload. Below land (z230 < 250), forest polygons hit-test on top
+  // again; the numbered result pins live in the marker pane (z600) so their
+  // breakdowns are unaffected.
+  map.createPane("candidates");
+  map.getPane("candidates").style.zIndex = 230;
+  // Land overlays sit above the basemap + candidate dots, below roads/pins.
   map.createPane("land");
   map.getPane("land").style.zIndex = 250;
   // The discovery highlight sits just above the land fills but takes no pointer
@@ -329,8 +338,9 @@ function setupMap() {
   });
 
   drawnItems = new L.FeatureGroup().addTo(map);
-  // Canvas renderer so thousands of candidate dots stay smooth.
-  canvasRenderer = L.canvas({ padding: 0.5 });
+  // Canvas renderer so thousands of candidate dots stay smooth. In the
+  // "candidates" pane (below land) so the canvas can't swallow forest taps.
+  canvasRenderer = L.canvas({ padding: 0.5, pane: "candidates" });
   // roadsLayer holds Cairn's own drivable ways (OSM ∪ MVUM) as vector lines —
   // on by default (the "Roads" checkbox is checked), since satellite imagery
   // shows no forest roads. updateLayerVisibility adds it once a run loads.
@@ -522,11 +532,16 @@ function onMeasureClick(e) {
 function redrawMeasure() {
   measureLayer.clearLayers();
   if (!measurePts.length) return;
-  measureLayer.addLayer(L.polyline(measurePts, { color: "#2bb3ff", weight: 3 }));
+  // interactive:false so the ruler's own line/vertices never swallow a tap meant
+  // to drop the next point.
+  measureLayer.addLayer(
+    L.polyline(measurePts, { color: "#2bb3ff", weight: 3, interactive: false })
+  );
   measurePts.forEach((ll) =>
     measureLayer.addLayer(
       L.circleMarker(ll, {
         radius: 4, color: "#2bb3ff", weight: 2, fillColor: "#fff", fillOpacity: 1,
+        interactive: false,
       })
     )
   );
@@ -920,6 +935,45 @@ async function loadRun(runId) {
   renderMeta(gj.run);
   drawRunExtent(gj.run.bbox);
   renderRunsList(); // highlight the active row
+  renderRunChip(); // on-map "viewing run" indicator + exit affordance
+}
+
+// Leave run-view: pull the scored results + extent off the map and reset state.
+// The exit path the run-chip ✕ uses; also reused when the active run is deleted.
+function clearRun() {
+  activeRunId = null;
+  lastGj = null;
+  pinLayer.clearLayers();
+  candidatesLayer.clearLayers();
+  if (heatLayer) {
+    map.removeLayer(heatLayer);
+    heatLayer = null;
+  }
+  runExtentLayer.clearLayers();
+  nearbyCgLayer.clearLayers();
+  closeSite();
+  $("provenance").innerHTML = "";
+  $("degraded").innerHTML = "";
+  renderRunChip();
+  renderRunsList();
+}
+
+// The on-map chip naming the run whose results are shown, with an ✕ to exit.
+function renderRunChip() {
+  const chip = $("run-chip");
+  if (!chip) return;
+  if (activeRunId == null) {
+    chip.hidden = true;
+    chip.innerHTML = "";
+    return;
+  }
+  const r = runsList.find((x) => x.id === activeRunId);
+  const name = r ? runLabel(r) : "Run #" + activeRunId;
+  chip.hidden = false;
+  chip.innerHTML =
+    `<span class="run-chip-text">📊 ${esc(name)}</span>` +
+    `<button type="button" class="run-chip-x" title="Exit run view" aria-label="Exit run view">✕</button>`;
+  chip.querySelector(".run-chip-x").onclick = clearRun;
 }
 
 // A dashed rectangle showing the run's scored extent. b = [minlon,minlat,maxlon,maxlat].
@@ -940,20 +994,7 @@ async function deleteRun(id) {
   const r = runsList.find((x) => x.id === id);
   if (!confirm(`Delete run "${r ? runLabel(r) : "#" + id}"? This can't be undone.`)) return;
   await fetch(`/runs/${id}`, { method: "DELETE" });
-  if (id === activeRunId) {
-    // The active run's results are on the map — clear them.
-    activeRunId = null;
-    lastGj = null;
-    pinLayer.clearLayers();
-    candidatesLayer.clearLayers();
-    if (heatLayer) {
-      map.removeLayer(heatLayer);
-      heatLayer = null;
-    }
-    runExtentLayer.clearLayers();
-    $("provenance").innerHTML = "";
-    $("degraded").innerHTML = "";
-  }
+  if (id === activeRunId) clearRun(); // the active run's results are on the map
   await loadRuns();
 }
 
@@ -1069,7 +1110,10 @@ function renderCandidates() {
       fillColor: scoreColor(p.total),
       fillOpacity: 0.85,
     });
-    dot.on("click", () => showSite(p, lat, lon));
+    dot.on("click", () => {
+      if (measuring) return; // a tap mid-measure drops a ruler point, not a site
+      showSite(p, lat, lon);
+    });
     candidatesLayer.addLayer(dot);
   });
 
@@ -1253,8 +1297,13 @@ function renderOverlayLayer(layerId, gj) {
           : p.name || overlayDefs.find((d) => d.id === layerId)?.title || layerId;
         if (tip) lyr.bindTooltip(tip, { sticky: true });
         // Tap a forest/park polygon -> highlight the whole named shape + fit.
+        // Skip while measuring so the tap drops a ruler point instead (Leaflet
+        // still bubbles the click to the map handler that adds the point).
         if (SHAPE_LAYERS.has(layerId) && p.name) {
-          lyr.on("click", () => selectShape(layerId, p.name));
+          lyr.on("click", () => {
+            if (measuring) return;
+            selectShape(layerId, p.name);
+          });
         }
       }
     },
@@ -2642,6 +2691,7 @@ function clearMapForTrip() {
   closeSite(); // also clears nearbyCgLayer + any selected marker
   clearShape(); // drop any forest/park discovery highlight
   clearMeasure(); // drop any distance ruler
+  if ($("run-chip")) $("run-chip").hidden = true; // hide (activeRunId kept for restore)
   [pinLayer, candidatesLayer, heatLayer, roadsLayer, drawnItems].forEach((l) => {
     if (l && map.hasLayer(l)) map.removeLayer(l);
   });
@@ -2666,6 +2716,7 @@ function exitTripPlot() {
   if (drawnItems && !map.hasLayer(drawnItems)) map.addLayer(drawnItems);
   updateLayerVisibility(); // restore checked result layers (pins/dots/heat/roads)
   refreshActiveOverlays(); // re-fetch any active land overlays
+  renderRunChip(); // restore the "viewing run" chip if a run is still active
 }
 
 function exportTrip(fmt) {

@@ -595,17 +595,18 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 #map-chips { position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
   z-index: 1300; display: flex; flex-direction: column; align-items: center; gap: 8px;
   pointer-events: none; }
-.shape-chip, .measure-chip { pointer-events: auto; display: flex; align-items: center;
+.shape-chip, .measure-chip, .run-chip { pointer-events: auto; display: flex; align-items: center;
   gap: 8px; max-width: min(94vw, 470px); padding: 6px 8px 6px 12px; background: var(--panel);
   color: var(--ink); border: 1px solid var(--accent); border-radius: 18px;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45); font-size: 13px; }
 .measure-chip { border-color: #2bb3ff; }
-.measure-chip-text { font-weight: 600; white-space: nowrap; }
+.measure-chip-text, .run-chip-text { font-weight: 600; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
 .measure-chip-done { flex: none; padding: 5px 10px; font-size: 12px; font-weight: 600;
   background: #2bb3ff; color: #0b1f2a; border: 1px solid #2bb3ff; border-radius: 13px;
   cursor: pointer; white-space: nowrap; }
 .measure-chip-done:hover { filter: brightness(1.08); }
-.shape-chip[hidden], .measure-chip[hidden] { display: none; }
+.shape-chip[hidden], .measure-chip[hidden], .run-chip[hidden] { display: none; }
 .shape-chip-name { font-weight: 600; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; }
 .shape-chip-score { flex: none; padding: 5px 10px; font-size: 12px; font-weight: 600;
@@ -614,10 +615,10 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .shape-chip-score:hover { filter: brightness(1.08); }
 .shape-chip-score:disabled { cursor: not-allowed; opacity: 0.5; }
 .shape-chip-score.over-cap { background: #313942; color: var(--muted); border-color: var(--line); }
-.shape-chip-x, .measure-chip-x { flex: none; width: 22px; height: 22px; display: flex;
+.shape-chip-x, .measure-chip-x, .run-chip-x { flex: none; width: 22px; height: 22px; display: flex;
   align-items: center; justify-content: center; background: #313942; color: var(--muted);
   border: none; border-radius: 50%; cursor: pointer; font-size: 13px; line-height: 1; }
-.shape-chip-x:hover, .measure-chip-x:hover { color: var(--ink); border: 1px solid var(--accent); }
+.shape-chip-x:hover, .measure-chip-x:hover, .run-chip-x:hover { color: var(--ink); border: 1px solid var(--accent); }
 
 /* On-map measure (📏) tool button — mirrors the basemap control's footprint
    so it stacks cleanly under the zoom + basemap controls (top-right). */
