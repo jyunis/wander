@@ -23,6 +23,7 @@
 -- v=8: trip planner — trips + trip_members (a dated grouping of saved places).
 -- v=9: collections — multi-membership tag groups for organizing saved places
 --      (collections + place_collections join). User data, never scoring.
+-- v=10: runs.place — reverse-geocoded bbox-center label for the run list.
 
 CREATE TABLE IF NOT EXISTS schema_version (
     version     INTEGER PRIMARY KEY,
@@ -57,7 +58,8 @@ CREATE TABLE IF NOT EXISTS runs (
     capped                  INTEGER NOT NULL DEFAULT 0,   -- bool: MAX_CANDIDATES hit (TLC-4)
     degraded_features_json  TEXT,                 -- run-level degraded list (TLC-6)
     created_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    done_at                 TEXT
+    done_at                 TEXT,
+    place                   TEXT                  -- reverse-geocoded bbox-center label (v10)
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_created ON runs (created_at DESC);

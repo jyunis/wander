@@ -37,6 +37,9 @@ def client(tmp_path, monkeypatch):
             overpass=FakeOverpass(synthetic_elements()),
             terrain_factory=fake_terrain_factory(slope_deg=3.0),
         )
+        # A fake geocoder so /score's best-effort place labeling never hits the
+        # network (geocode tests swap in their own / None as needed).
+        app.state.geocoder = _FakeGeocoder([])
         yield c
     config_module._settings = None
 
@@ -73,6 +76,7 @@ def test_score_sync_then_fetch_and_geojson(client):
     assert run["status"] == "done"
     assert run["candidate_count"] > 0
     assert 1 <= run["distinct_count"] <= run["candidate_count"]
+    assert run["place"] == "Test Locality"  # best-effort reverse-geocode label
     assert "physical suitability only" in run["disclaimer"].lower()
     run_id = run["id"]
 
@@ -87,6 +91,16 @@ def test_score_sync_then_fetch_and_geojson(client):
     assert len(gj["features"]) > 0
     props = gj["features"][0]["properties"]
     assert props["contributions"] and "total" in props
+
+
+def test_delete_run_cascades(client):
+    run_id = client.post("/score", json={"bbox": TEST_BBOX}).json()["id"]
+    assert client.get(f"/runs/{run_id}").status_code == 200
+    r = client.delete(f"/runs/{run_id}")
+    assert r.status_code == 200 and r.json()["deleted"] is True
+    # gone (candidates/scores cascade with it) -> 404, and re-deleting is a no-op
+    assert client.get(f"/runs/{run_id}").status_code == 404
+    assert client.delete(f"/runs/{run_id}").json()["deleted"] is False
 
 
 def test_run_roads_geojson(client):
@@ -139,13 +153,20 @@ def test_roads_viewport_bad_bbox_422(client):
 
 
 class _FakeGeocoder:
-    def __init__(self, results):
+    def __init__(self, results, place="Test Locality"):
         self._r = results
+        self._place = place
         self.last = None
 
     async def search(self, q, viewbox=None):
         self.last = (q, viewbox)
         return self._r
+
+    async def reverse(self, lat, lon):
+        return self._place
+
+    async def reverse_label(self, lat, lon):
+        return self._place
 
 
 def test_geocode_returns_results(client):

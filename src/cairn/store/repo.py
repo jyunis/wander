@@ -33,7 +33,7 @@ from cairn.store.types import Bbox, Run
 
 _M_PER_DEG = 111320.0
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 # Sentinel for partial updates: distinguishes "field omitted" from "set to NULL".
@@ -110,6 +110,13 @@ _MIGRATIONS: dict[int, list[str]] = {
         "CREATE INDEX IF NOT EXISTS idx_place_collections_saved "
         "ON place_collections (saved_id)",
         "INSERT INTO schema_version (version) VALUES (9)",
+    ],
+    9: [
+        # Run management: a human place label (reverse-geocoded bbox center),
+        # set best-effort at run creation so the run list reads "near X" instead
+        # of an id. Nullable; display-only.
+        "ALTER TABLE runs ADD COLUMN place TEXT",
+        "INSERT INTO schema_version (version) VALUES (10)",
     ],
 }
 
@@ -346,7 +353,7 @@ class Store:
             "SELECT id, min_lon, min_lat, max_lon, max_lat, weights_json, "
             "scoring_config_version, provenance_json, status, failure_reason, "
             "candidate_count, capped, degraded_features_json, created_at, done_at, "
-            "distinct_count "
+            "distinct_count, place "
             "FROM runs WHERE id = ?",
             (run_id,),
         )
@@ -367,7 +374,15 @@ class Store:
             created_at=row[13],
             done_at=row[14],
             distinct_count=row[15],
+            place=row[16],
         )
+
+    async def set_run_place(self, run_id: int, place: str) -> None:
+        """Set a run's display place label (reverse-geocoded). Best-effort."""
+        await self.db.execute(
+            "UPDATE runs SET place = ? WHERE id = ?", (place, run_id)
+        )
+        await self.db.commit()
 
     async def list_runs(self, limit: int = 50) -> list[Run]:
         cur = await self.db.execute(
@@ -375,6 +390,12 @@ class Store:
         )
         ids = [r[0] for r in await cur.fetchall()]
         return [await self.get_run(i) for i in ids]
+
+    async def delete_run(self, run_id: int) -> bool:
+        """Delete a run; FK cascade drops its candidates / features / scores."""
+        cur = await self.db.execute("DELETE FROM runs WHERE id=?", (run_id,))
+        await self.db.commit()
+        return cur.rowcount > 0
 
     # --- Saved places (favorites — user data, never scoring) ----------------
 

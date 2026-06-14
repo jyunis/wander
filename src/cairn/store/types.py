@@ -59,3 +59,4 @@ class Run:
     degraded_features: list[str] = field(default_factory=list)
     created_at: str | None = None
     done_at: str | None = None
+    place: str | None = None  # reverse-geocoded bbox-center label (display-only)

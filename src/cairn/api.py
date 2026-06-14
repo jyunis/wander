@@ -260,8 +260,26 @@ def _run_summary(run) -> dict:
         "provenance": run.provenance,
         "created_at": run.created_at,
         "done_at": run.done_at,
+        "place": run.place,
         "disclaimer": DISCLAIMER,
     }
+
+
+async def _label_run(request: Request, run_id: int, bbox: Bbox) -> None:
+    """Best-effort: reverse-geocode the bbox center to a place label and persist
+    it on the run (so the run list reads "near X"). Never raises — a geocode
+    failure must not fail a score (display-only, TLC-3)."""
+    geocoder = request.app.state.geocoder
+    if geocoder is None:
+        return
+    clat = (bbox.min_lat + bbox.max_lat) / 2
+    clon = (bbox.min_lon + bbox.max_lon) / 2
+    try:
+        place = await geocoder.reverse_label(clat, clon)
+    except Exception:  # noqa: BLE001 - best-effort; never fail a score over a label
+        return
+    if place:
+        await request.app.state.store.set_run_place(run_id, place)
 
 
 # --- endpoints -------------------------------------------------------------
@@ -271,6 +289,7 @@ def _run_summary(run) -> dict:
 async def score(req: ScoreRequest, request: Request) -> JSONResponse:
     settings = request.app.state.settings
     service: RunService = request.app.state.service
+    store: Store = request.app.state.store
     bbox = Bbox(*req.bbox)
     weights = req.weights or settings.ui_config()["default_weights"]
 
@@ -282,11 +301,11 @@ async def score(req: ScoreRequest, request: Request) -> JSONResponse:
 
     if go_async:
         run_id = await service.start_async(bbox, weights)
-        run = await request.app.state.store.get_run(run_id)
-        return JSONResponse(status_code=202, content=_run_summary(run))
-
-    run = await service.score_bbox(bbox, weights)
-    return JSONResponse(status_code=200, content=_run_summary(run))
+    else:
+        run_id = (await service.score_bbox(bbox, weights)).id
+    await _label_run(request, run_id, bbox)  # best-effort place label
+    run = await store.get_run(run_id)
+    return JSONResponse(status_code=202 if go_async else 200, content=_run_summary(run))
 
 
 @app.get("/runs")
@@ -301,6 +320,13 @@ async def get_run(run_id: int, request: Request) -> dict:
     store: Store = request.app.state.store
     run = await store.get_run(run_id)  # raises RunNotFound -> 404
     return _run_summary(run)
+
+
+@app.delete("/runs/{run_id}")
+async def delete_run(run_id: int, request: Request) -> dict:
+    """Delete a run and its candidates/features/scores (FK cascade)."""
+    store: Store = request.app.state.store
+    return {"deleted": await store.delete_run(run_id)}
 
 
 @app.get("/runs/{run_id}/geojson")

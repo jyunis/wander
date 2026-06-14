@@ -5,6 +5,7 @@ let CONFIG = null;
 let map, drawnItems, heatLayer, pinLayer, candidatesLayer, roadsLayer, canvasRenderer, gotoMarker;
 let nearbyCgLayer; // ephemeral markers: the campgrounds near the open scored site
 let tripLayer; // markers for the currently plotted trip's members
+let runExtentLayer; // dashed rectangle showing the loaded run's scored bbox
 let savedLayer; // saved-place markers shown on the Saved tab (collection-colored)
 let tripPlotMode = false; // "Plot on map" is showing ONLY trip stops (results/overlays hidden)
 let selectedMarker = null; // marker for the currently-selected (saved) place
@@ -170,9 +171,7 @@ async function init() {
   });
   $("drop-pin").onclick = toggleDropPin;
   $("score-btn").onclick = runScore;
-  $("run-history").onchange = (e) => {
-    if (e.target.value) loadRun(parseInt(e.target.value, 10));
-  };
+  // (run selection is now a clickable list — see renderRunsList)
   ["layer-pins", "layer-dots", "layer-heat", "layer-roads", "layer-saved"].forEach((id) => {
     $(id).onchange = updateLayerVisibility;
   });
@@ -321,6 +320,7 @@ function setupMap() {
   nearbyCgLayer = new L.LayerGroup().addTo(map);
   tripLayer = new L.LayerGroup().addTo(map);
   savedLayer = new L.LayerGroup().addTo(map);
+  runExtentLayer = new L.LayerGroup().addTo(map);
 
   map.on(L.Draw.Event.CREATED, (e) => {
     drawnItems.clearLayers();
@@ -629,27 +629,120 @@ async function runScore() {
   }
 }
 
+let runsList = []; // GET /runs — recent run summaries, newest first
+
 async function loadRuns() {
-  const data = await (await fetch("/runs?limit=25")).json();
-  const sel = $("run-history");
-  sel.innerHTML = '<option value="">— recent runs —</option>';
-  data.runs.forEach((r) => {
-    const opt = document.createElement("option");
-    opt.value = r.id;
-    const when = (r.created_at || "").replace("T", " ").slice(0, 16);
-    opt.textContent = `#${r.id} · ${r.status} · ${r.candidate_count} · ${when}`;
-    if (r.id === activeRunId) opt.selected = true;
-    sel.appendChild(opt);
+  try {
+    runsList = (await (await fetch("/runs?limit=25")).json()).runs || [];
+  } catch {
+    runsList = [];
+  }
+  renderRunsList();
+}
+
+// "just now / 2h ago / 3d ago / Jun 3" — created_at is UTC ISO without a zone.
+function relativeDate(iso) {
+  if (!iso) return "";
+  const t = Date.parse(/[Z+]/.test(iso) ? iso : iso + "Z");
+  if (isNaN(t)) return "";
+  const s = (Date.now() - t) / 1000;
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  if (s < 7 * 86400) return `${Math.floor(s / 86400)}d ago`;
+  return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// A run's display label: its place name when set, else its bbox-center coords.
+function runLabel(r) {
+  const b = r.bbox; // [min_lon, min_lat, max_lon, max_lat]
+  if (r.place) return r.place;
+  return `${((b[1] + b[3]) / 2).toFixed(3)}, ${((b[0] + b[2]) / 2).toFixed(3)}`;
+}
+
+function runAreaKm2(r) {
+  const b = r.bbox;
+  return areaKm2({ min_lon: b[0], min_lat: b[1], max_lon: b[2], max_lat: b[3] });
+}
+
+function renderRunsList() {
+  const host = $("run-list");
+  if (!host) return;
+  $("runs-empty").hidden = runsList.length > 0;
+  host.innerHTML = runsList
+    .map((r) => {
+      const sites = r.distinct_count != null ? r.distinct_count : 0;
+      const area = Math.round(runAreaKm2(r)).toLocaleString();
+      const meta =
+        `${sites} site${sites === 1 ? "" : "s"} · ${area} km² · ${relativeDate(r.created_at)}`;
+      const pill =
+        r.status !== "done"
+          ? ` <span class="run-pill run-${esc(r.status)}">${esc(r.status)}</span>`
+          : "";
+      return (
+        `<div class="run-row${r.id === activeRunId ? " active" : ""}" data-id="${r.id}">` +
+        `<div class="run-row-main"><div class="run-row-name">${esc(runLabel(r))}${pill}</div>` +
+        `<div class="run-row-sub">${meta}</div></div>` +
+        `<button class="run-del" title="Delete run">×</button></div>`
+      );
+    })
+    .join("");
+  host.querySelectorAll(".run-row").forEach((row) => {
+    const id = parseInt(row.dataset.id, 10);
+    row.querySelector(".run-row-main").onclick = () => {
+      if (isMobile()) setNav(false); // mobile: close the drawer so the map shows
+      loadRun(id);
+    };
+    row.querySelector(".run-del").onclick = (e) => {
+      e.stopPropagation();
+      deleteRun(id);
+    };
   });
 }
 
 async function loadRun(runId) {
   exitTripPlot(); // loading a run leaves the trip-plot view
   activeRunId = runId;
-  $("run-history").value = String(runId);
   const gj = await (await fetch(`/runs/${runId}/geojson`)).json();
   renderResults(gj); // fitBounds here fires moveend -> scheduleRoads() fetches the area
   renderMeta(gj.run);
+  drawRunExtent(gj.run.bbox);
+  renderRunsList(); // highlight the active row
+}
+
+// A dashed rectangle showing the run's scored extent. b = [minlon,minlat,maxlon,maxlat].
+function drawRunExtent(b) {
+  if (!runExtentLayer) return;
+  runExtentLayer.clearLayers();
+  if (!b) return;
+  L.rectangle([[b[1], b[0]], [b[3], b[2]]], {
+    color: "#5b9c5a",
+    weight: 1.5,
+    dashArray: "6 4",
+    fill: false,
+    interactive: false,
+  }).addTo(runExtentLayer);
+}
+
+async function deleteRun(id) {
+  const r = runsList.find((x) => x.id === id);
+  if (!confirm(`Delete run "${r ? runLabel(r) : "#" + id}"? This can't be undone.`)) return;
+  await fetch(`/runs/${id}`, { method: "DELETE" });
+  if (id === activeRunId) {
+    // The active run's results are on the map — clear them.
+    activeRunId = null;
+    lastGj = null;
+    pinLayer.clearLayers();
+    candidatesLayer.clearLayers();
+    if (heatLayer) {
+      map.removeLayer(heatLayer);
+      heatLayer = null;
+    }
+    runExtentLayer.clearLayers();
+    $("provenance").innerHTML = "";
+    $("degraded").innerHTML = "";
+  }
+  await loadRuns();
 }
 
 // Cairn's own road network (OSM ∪ MVUM forest spurs) as vector lines — far

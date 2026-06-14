@@ -69,10 +69,9 @@ class GeocodeClient:
             self._cache.popitem(last=False)
         return results
 
-    async def reverse(self, lat: float, lon: float) -> str | None:
-        """Reverse-geocode to a concise place name (the smallest meaningful
-        locality), or None. The weak-in-the-backcountry fallback for site
-        naming — used only when our own OSM extract has nothing nearby."""
+    async def _reverse(self, lat: float, lon: float) -> dict:
+        """The raw Nominatim reverse-geocode response (has `address` +
+        `display_name`)."""
         url = self._s.geocode_url.rsplit("/", 1)[0] + "/reverse"
         params = {"lat": str(lat), "lon": str(lon), "format": "jsonv2", "zoom": "14"}
         try:
@@ -82,9 +81,15 @@ class GeocodeClient:
         if resp.status_code != 200:
             raise GeocodeBadResponse(f"nominatim reverse returned {resp.status_code}")
         try:
-            d = resp.json()
+            return resp.json()
         except ValueError as exc:
             raise GeocodeBadResponse(f"nominatim reverse non-JSON: {exc}") from exc
+
+    async def reverse(self, lat: float, lon: float) -> str | None:
+        """Reverse-geocode to a concise place name (the smallest meaningful
+        locality), or None. The weak-in-the-backcountry fallback for site
+        naming — used only when our own OSM extract has nothing nearby."""
+        d = await self._reverse(lat, lon)
         addr = d.get("address") or {}
         for k in ("hamlet", "village", "town", "city", "locality", "suburb",
                   "municipality", "county"):
@@ -92,6 +97,31 @@ class GeocodeClient:
                 return str(addr[k])
         dn = d.get("display_name") or ""
         return dn.split(",")[0].strip() or None
+
+    async def reverse_label(self, lat: float, lon: float) -> str | None:
+        """A run-list label: "Locality, County, ST" from the reverse geocode
+        (whichever of locality / county / state are present). State is the
+        2-letter subdivision code (ISO3166-2-lvl4 'US-MN' -> 'MN')."""
+        d = await self._reverse(lat, lon)
+        addr = d.get("address") or {}
+        locality = next(
+            (str(addr[k]) for k in
+             ("hamlet", "village", "town", "city", "municipality", "locality", "suburb")
+             if addr.get(k)),
+            None,
+        )
+        county = addr.get("county")
+        iso = addr.get("ISO3166-2-lvl4") or ""
+        state = iso.split("-")[-1] if "-" in iso else (addr.get("state") or None)
+        seen, parts = set(), []
+        for p in (locality, county, state):
+            if p and p not in seen:
+                seen.add(p)
+                parts.append(str(p))
+        if parts:
+            return ", ".join(parts)
+        dn = d.get("display_name") or ""
+        return dn.strip() or None
 
     @staticmethod
     def _normalize(r: dict) -> dict | None:
