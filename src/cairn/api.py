@@ -157,6 +157,13 @@ async def _revalidate_static(request: Request, call_next):
 # --- request models --------------------------------------------------------
 
 
+class ClipSpec(BaseModel):
+    """Score-within-boundary: clip candidates to this forest/park polygon."""
+
+    layer: str
+    name: str
+
+
 class ScoreRequest(BaseModel):
     bbox: list[float] = Field(
         ..., min_length=4, max_length=4, description="[min_lon, min_lat, max_lon, max_lat]"
@@ -166,6 +173,10 @@ class ScoreRequest(BaseModel):
         default=None,
         alias="async",
         description="Force background execution; default decides by bbox area.",
+    )
+    clip: ClipSpec | None = Field(
+        default=None,
+        description="Optional boundary clip — score only candidates inside this land shape.",
     )
 
     model_config = {"populate_by_name": True}
@@ -294,6 +305,16 @@ async def score(req: ScoreRequest, request: Request) -> JSONResponse:
     bbox = Bbox(*req.bbox)
     weights = req.weights or settings.ui_config()["default_weights"]
 
+    # Score-within-boundary: resolve the EXACT clip polygon here (the handler has
+    # app.state.overlays) so RunService takes a plain geometry, never an
+    # OverlayStore dependency — scoring stays decoupled from overlays.db (TLC-3).
+    clip_polygon: bytes | None = None
+    if req.clip is not None:
+        overlays: OverlayStore = request.app.state.overlays
+        clip_polygon = await overlays.get_clip_geometry(req.clip.layer, req.clip.name, bbox)
+        if clip_polygon is None:
+            raise ValidationError(f"unknown clip shape: {req.clip.layer}/{req.clip.name}")
+
     # Decide sync vs async (TLC-4). Validation happens inside the service and
     # raises ValidationError -> 422 before any run row is created.
     go_async = req.run_async
@@ -301,10 +322,16 @@ async def score(req: ScoreRequest, request: Request) -> JSONResponse:
         go_async = bbox.normalized().area_km2() > settings.sync_area_threshold_km2
 
     if go_async:
-        run_id = await service.start_async(bbox, weights)
+        run_id = await service.start_async(bbox, weights, clip_polygon=clip_polygon)
     else:
-        run_id = (await service.score_bbox(bbox, weights)).id
-    await _label_run(request, run_id, bbox)  # best-effort place label
+        run_id = (await service.score_bbox(bbox, weights, clip_polygon=clip_polygon)).id
+    # Label the run: a within-boundary run reads best as the shape itself
+    # ("Superior National Forest"), not a reverse-geocoded town near the view
+    # center — so use the clip name directly and skip the geocode for those.
+    if req.clip is not None:
+        await store.set_run_place(run_id, req.clip.name)
+    else:
+        await _label_run(request, run_id, bbox)  # best-effort place label
     run = await store.get_run(run_id)
     return JSONResponse(status_code=202 if go_async else 200, content=_run_summary(run))
 

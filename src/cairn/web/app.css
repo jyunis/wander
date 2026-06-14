@@ -591,12 +591,18 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
    floating top-center over the map (clear of the top-left menu FAB). */
 .shape-chip { position: fixed; top: 14px; left: 50%; z-index: 1300;
   transform: translateX(-50%); display: flex; align-items: center; gap: 8px;
-  max-width: min(80vw, 360px); padding: 6px 8px 6px 12px; background: var(--panel);
+  max-width: min(94vw, 470px); padding: 6px 8px 6px 12px; background: var(--panel);
   color: var(--ink); border: 1px solid var(--accent); border-radius: 18px;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45); font-size: 13px; }
 .shape-chip[hidden] { display: none; }
 .shape-chip-name { font-weight: 600; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; }
+.shape-chip-score { flex: none; padding: 5px 10px; font-size: 12px; font-weight: 600;
+  background: var(--accent); color: #fff; border: 1px solid var(--accent);
+  border-radius: 13px; cursor: pointer; white-space: nowrap; }
+.shape-chip-score:hover { filter: brightness(1.08); }
+.shape-chip-score:disabled { cursor: not-allowed; opacity: 0.5; }
+.shape-chip-score.over-cap { background: #313942; color: var(--muted); border-color: var(--line); }
 .shape-chip-x { flex: none; width: 22px; height: 22px; display: flex;
   align-items: center; justify-content: center; background: #313942; color: var(--muted);
   border: none; border-radius: 50%; cursor: pointer; font-size: 13px; line-height: 1; }

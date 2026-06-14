@@ -212,6 +212,42 @@ class OverlayStore:
             "disclaimer": DISCLAIMER,
         }
 
+    async def get_clip_geometry(self, layer: str, name: str, bbox: Bbox) -> bytes | None:
+        """The EXACT (unsimplified) boundary polygon for `(layer, name)`,
+        intersected with `bbox`, as WKB (SRID 4326) — the search-region clip for
+        score-within-boundary.
+
+        UNIONs the 1-2 rows for the name, then clips to the score `bbox`: every
+        scored candidate lies inside that bbox, so intersecting the polygon with
+        it never changes which candidates fall inside, but it bounds the polygon
+        to the area actually being scored (a national forest's full geometry is
+        otherwise huge to test point-by-point). The edges stay EXACT — this is
+        the precise polygon, NOT the display-simplified one from `get_shape` — so
+        spots right at the boundary aren't wrongly dropped.
+
+        Returns None only if no shape by that name exists (the API maps that to
+        422). This is a search-region parameter exactly like the bbox, applied in
+        the service over candidate points — never a scoring input (TLC-3).
+        """
+        if self._db is None:
+            return None
+        b = bbox.normalized()
+        frame = (b.min_lon, b.min_lat, b.max_lon, b.max_lat)
+        cur = await self._db.execute(
+            "SELECT ST_AsBinary(u), "
+            "  ST_AsBinary(ST_Intersection(u, BuildMbr(?, ?, ?, ?, 4326))) "
+            "FROM (SELECT ST_Union(geom) AS u FROM overlay_features WHERE layer=? AND name=?)",
+            (*frame, layer, name),
+        )
+        row = await cur.fetchone()
+        if row is None or row[0] is None:
+            return None  # name not found
+        # A view disjoint from the shape yields a NULL/empty intersection on some
+        # SpatiaLite builds — fall back to the full union (still correct: no
+        # candidate in the bbox is inside a non-overlapping shape).
+        clip = row[1] if row[1] is not None else row[0]
+        return bytes(clip)
+
     async def nearest_campgrounds(
         self, lat: float, lon: float, limit: int = 5, max_km: float = 80.0
     ) -> list[dict]:

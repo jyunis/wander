@@ -976,6 +976,31 @@ class Store:
             for row in await cur.fetchall()
         ]
 
+    async def points_within_polygon(
+        self, points: list[tuple[float, float]], polygon_wkb: bytes
+    ) -> list[bool]:
+        """For each (lon, lat) in `points`, whether it lies inside `polygon_wkb`
+        (WKB, SRID 4326). One SpatiaLite pass over the batch (json_each); the
+        returned list aligns with `points` by index.
+
+        This is the score-within-boundary clip: a search-region filter on
+        candidate points, exactly like the bbox — applied in the service, never a
+        scoring input (TLC-3). The polygon is parsed once (uncorrelated scalar
+        subquery) and reused for every point test.
+        """
+        if not points:
+            return []
+        arr = json.dumps([[lon, lat] for lon, lat in points])
+        cur = await self.db.execute(
+            "SELECT j.key FROM json_each(?) AS j "
+            "WHERE ST_Within("
+            "  MakePoint(json_extract(j.value, '$[0]'), json_extract(j.value, '$[1]'), 4326), "
+            "  (SELECT GeomFromWKB(?, 4326)))",
+            (arr, polygon_wkb),
+        )
+        inside = {row[0] for row in await cur.fetchall()}
+        return [i in inside for i in range(len(points))]
+
     async def nearest_distance_m(
         self, lon: float, lat: float, classes: tuple[str, ...], max_radius_m: float
     ) -> float | None:

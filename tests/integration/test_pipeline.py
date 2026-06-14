@@ -117,6 +117,44 @@ async def test_candidates_clipped_to_bbox(store, settings):
         assert b.min_lat <= lat <= b.max_lat
 
 
+async def _wkb_polygon(store, wkt: str) -> bytes:
+    cur = await store.db.execute("SELECT ST_AsBinary(GeomFromText(?, 4326))", (wkt,))
+    return bytes((await cur.fetchone())[0])
+
+
+async def test_points_within_polygon(store):
+    wkb = await _wkb_polygon(store, "POLYGON((0 0,2 0,2 2,0 2,0 0))")
+    # inside, outside, inside
+    mask = await store.points_within_polygon([(1.0, 1.0), (3.0, 3.0), (0.5, 0.5)], wkb)
+    assert mask == [True, False, True]
+    assert await store.points_within_polygon([], wkb) == []
+
+
+async def test_clip_filters_candidates_to_boundary(store, settings):
+    # The synthetic track runs lon 0.002..0.018 at lat 0.010. Clip to the eastern
+    # half (lon >= 0.010): only candidates inside the polygon survive, scoring is
+    # unchanged for those, and the run still completes.
+    wkb = await _wkb_polygon(
+        store, "POLYGON((0.010 0.008,0.020 0.008,0.020 0.012,0.010 0.012,0.010 0.008))"
+    )
+    svc = RunService(
+        store,
+        settings,
+        overpass=FakeOverpass(synthetic_elements()),
+        terrain_factory=fake_terrain_factory(slope_deg=3.0),
+    )
+    run = await svc.score_bbox(TEST_BBOX, DEFAULT_WEIGHTS, clip_polygon=wkb)
+    assert run.status == "done"
+    assert run.candidate_count > 0
+    gj = await store.get_run_geojson(run.id)
+    for feat in gj["features"]:
+        lon, _lat = feat["geometry"]["coordinates"]
+        assert lon >= 0.010 - 1e-9, f"candidate at lon {lon} leaked outside the clip"
+    # The unclipped run over the same area scores strictly more points.
+    full = await _run(store, settings, synthetic_elements(), DEFAULT_WEIGHTS)
+    assert run.candidate_count < full.candidate_count
+
+
 async def test_distinct_site_selection(store, settings):
     run = await _run(store, settings, synthetic_elements(), DEFAULT_WEIGHTS)
     assert run.status == "done"

@@ -313,6 +313,7 @@ function setupMap() {
   map.getPane("shapeHighlight").style.pointerEvents = "none";
   map.on("moveend", refreshActiveOverlays);
   map.on("moveend", scheduleRoads); // viewport roads overlay follows the map
+  map.on("moveend", updateShapeScoreBtn); // re-evaluate the boundary-score cap gate
   // Keep info windows from opening hidden behind the bottom sheet.
   map.on("popupopen", (e) => {
     _popupOpen = true;
@@ -603,26 +604,36 @@ function setBboxFromBounds(b) {
 // --- scoring flow ----------------------------------------------------------
 async function runScore() {
   if (!bbox) return;
-  if (areaKm2(bbox) > CONFIG.max_bbox_area_km2) {
+  await executeScore(bbox, {});
+}
+
+// Shared score driver for both the drawn-bbox "Score" button and the
+// "Score within boundary" chip button. `opts.clip` ({layer, name}) restricts
+// candidates to a forest/park polygon; `opts.button` is the triggering element
+// to disable while the run is in flight (defaults to the draw Score button).
+async function executeScore(bb, opts = {}) {
+  if (areaKm2(bb) > CONFIG.max_bbox_area_km2) {
     // client-side mirror of TLC-4; the API is still the authority.
     setStatus("Area exceeds the cap — draw a smaller box.", "err");
     return;
   }
-  $("score-btn").disabled = true;
-  setStatus("Scoring…");
+  const btn = opts.button || $("score-btn");
+  if (btn) btn.disabled = true;
+  setStatus(opts.clip ? "Scoring within boundary…" : "Scoring…");
   try {
+    const body = {
+      bbox: [bb.min_lon, bb.min_lat, bb.max_lon, bb.max_lat],
+      weights: readWeights(),
+    };
+    if (opts.clip) body.clip = opts.clip;
     const resp = await fetch("/score", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        bbox: [bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat],
-        weights: readWeights(),
-      }),
+      body: JSON.stringify(body),
     });
     if (resp.status === 422) {
       const err = await resp.json();
       setStatus(err.detail || "Invalid request", "err");
-      $("score-btn").disabled = false;
       return;
     }
     let run = await resp.json();
@@ -643,7 +654,7 @@ async function runScore() {
   } catch (e) {
     setStatus("Error: " + e.message, "err");
   } finally {
-    $("score-btn").disabled = false;
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -1120,7 +1131,9 @@ function clearShape() {
   renderShapeChip();
 }
 
-// The on-map "<name> ✕" chip: shows the current selection, clears it on ✕.
+// The on-map chip: "<name>  [Score within boundary]  ✕" — shows the current
+// selection, scores the current view clipped to it, or clears it.
+let _shapeScoring = false; // a within-boundary run is in flight
 function renderShapeChip() {
   const chip = $("shape-chip");
   if (!chip) return;
@@ -1132,8 +1145,56 @@ function renderShapeChip() {
   chip.hidden = false;
   chip.innerHTML =
     `<span class="shape-chip-name">${esc(selectedShape.name)}</span>` +
+    `<button type="button" class="shape-chip-score btn">Score within boundary</button>` +
     `<button type="button" class="shape-chip-x" title="Clear selection" aria-label="Clear selection">✕</button>`;
   chip.querySelector(".shape-chip-x").onclick = clearShape;
+  chip.querySelector(".shape-chip-score").onclick = scoreWithinBoundary;
+  updateShapeScoreBtn();
+}
+
+// Cap-gate the within-boundary button exactly like the draw flow: the SEARCH
+// area is the current view (bbox-capped as usual); only the polygon clip is new.
+// A forest bigger than the cap stays scoreable once you zoom to a section.
+function updateShapeScoreBtn() {
+  const btn = document.querySelector(".shape-chip-score");
+  if (!btn || !CONFIG) return;
+  const b = map.getBounds();
+  const a = areaKm2({
+    min_lon: b.getWest(),
+    min_lat: b.getSouth(),
+    max_lon: b.getEast(),
+    max_lat: b.getNorth(),
+  });
+  const ok = a <= CONFIG.max_bbox_area_km2;
+  btn.textContent = _shapeScoring ? "Scoring…" : "Score within boundary";
+  btn.disabled = _shapeScoring || !ok;
+  btn.classList.toggle("over-cap", !ok);
+  btn.title = ok
+    ? "Score the current view, clipped to this boundary"
+    : `View is ${a.toFixed(0)} km² — over the ${CONFIG.max_bbox_area_km2} km² cap. Zoom to a section.`;
+}
+
+async function scoreWithinBoundary() {
+  if (!selectedShape || _shapeScoring) return;
+  const b = map.getBounds();
+  const view = {
+    min_lon: b.getWest(),
+    min_lat: b.getSouth(),
+    max_lon: b.getEast(),
+    max_lat: b.getNorth(),
+  };
+  if (areaKm2(view) > CONFIG.max_bbox_area_km2) return; // cap-gated (button disabled)
+  _shapeScoring = true;
+  updateShapeScoreBtn();
+  try {
+    await executeScore(view, {
+      clip: { layer: selectedShape.layer, name: selectedShape.name },
+      button: document.querySelector(".shape-chip-score"),
+    });
+  } finally {
+    _shapeScoring = false;
+    updateShapeScoreBtn();
+  }
 }
 
 // --- campground filters (Phase 2; client-side over meta) -------------------

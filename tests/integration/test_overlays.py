@@ -169,6 +169,47 @@ def test_api_shape_endpoint(tmp_path, monkeypatch):
     config_module._settings = None
 
 
+async def test_get_clip_geometry(shape_settings):
+    s = await OverlayStore.open(shape_settings)
+    # An existing shape -> non-empty WKB (SRID 4326), clipped to the bbox.
+    wkb = await s.get_clip_geometry("national_forest", "Superior", Bbox(0, 0, 3, 3))
+    assert isinstance(wkb, (bytes, bytearray)) and len(wkb) > 0
+    # Unioned across rows works for clipping too.
+    assert await s.get_clip_geometry("state_forest", "Split SF", Bbox(10, 10, 12, 11)) is not None
+    # Missing name -> None (the API maps that to a 422 unknown-clip error).
+    assert await s.get_clip_geometry("national_forest", "Nope", Bbox(0, 0, 3, 3)) is None
+    await s.close()
+
+
+async def test_get_clip_geometry_inert_without_db(tmp_path):
+    s = await OverlayStore.open(
+        Settings(_env_file=None, data_dir=tmp_path, overlays_db_path=tmp_path / "nope.db")
+    )
+    assert await s.get_clip_geometry("national_forest", "Superior", Bbox(0, 0, 3, 3)) is None
+    await s.close()
+
+
+def test_api_score_unknown_clip_is_422(tmp_path, monkeypatch):
+    # A clip referencing a shape the overlays store can't resolve fails fast with
+    # 422 — BEFORE any scoring/fetch (here the store is inert, so every name is
+    # unknown). Proves the clip is wired into /score and validated up front.
+    monkeypatch.setenv("CAIRN_DATA_DIR", str(tmp_path))
+    config_module._settings = None
+    from cairn.api import app
+
+    with TestClient(app) as c:
+        r = c.post(
+            "/score",
+            json={
+                "bbox": [0.0, 0.0, 0.01, 0.01],
+                "clip": {"layer": "national_forest", "name": "Nope"},
+            },
+        )
+        assert r.status_code == 422
+        assert "clip" in r.json()["detail"].lower()
+    config_module._settings = None
+
+
 def test_api_shape_endpoint_404_when_inert(tmp_path, monkeypatch):
     # No overlays.db -> store inert -> shape lookups 404 (not 500).
     monkeypatch.setenv("CAIRN_DATA_DIR", str(tmp_path))

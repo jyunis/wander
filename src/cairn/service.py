@@ -71,17 +71,25 @@ class RunService:
         self._mvum = mvum  # USFS forest roads; None => OSM-only
         self._structures = structures  # USA Structures buildings; None => OSM-only
 
-    async def score_bbox(self, bbox: Bbox, weights: dict[str, float]) -> Run:
+    async def score_bbox(
+        self, bbox: Bbox, weights: dict[str, float], clip_polygon: bytes | None = None
+    ) -> Run:
         """Execute UoW-1 synchronously. Returns the finished (done|failed) Run.
 
-        Validation (TLC-4) raises BEFORE any run row or fetch."""
+        Validation (TLC-4) raises BEFORE any run row or fetch. `clip_polygon`
+        (WKB, SRID 4326), when given, restricts the SEARCH REGION to candidates
+        inside that boundary — like the bbox, never a scoring input (TLC-3)."""
         b = validate_request(bbox, weights, self._s)
         params = await self._store.scoring_config_params(SCORING_CONFIG_VERSION)
         run_id = await self._store.create_run(b, weights, SCORING_CONFIG_VERSION)
-        await self._execute(run_id, b, weights, params, self._s.max_wallclock_seconds)
+        await self._execute(
+            run_id, b, weights, params, self._s.max_wallclock_seconds, clip_polygon
+        )
         return await self._store.get_run(run_id)
 
-    async def start_async(self, bbox: Bbox, weights: dict[str, float]) -> int:
+    async def start_async(
+        self, bbox: Bbox, weights: dict[str, float], clip_polygon: bytes | None = None
+    ) -> int:
         """Validate, create the run row, and schedule execution in the
         background (TLC-4 async path). Returns the run_id immediately; the
         client polls GET /runs/{id}. Validation still raises synchronously."""
@@ -89,13 +97,15 @@ class RunService:
         params = await self._store.scoring_config_params(SCORING_CONFIG_VERSION)
         run_id = await self._store.create_run(b, weights, SCORING_CONFIG_VERSION)
         asyncio.create_task(
-            self._execute(run_id, b, weights, params, self._s.max_wallclock_async_seconds)
+            self._execute(
+                run_id, b, weights, params, self._s.max_wallclock_async_seconds, clip_polygon
+            )
         )
         return run_id
 
     async def _execute(
         self, run_id: int, b: Bbox, weights: dict[str, float], params: dict,
-        wallclock_s: float,
+        wallclock_s: float, clip_polygon: bytes | None = None,
     ) -> None:
         """Run steps 2-8 of UoW-1, persisting status transitions. Never raises
         out (TLC-10): any failure is recorded on the run row. `wallclock_s` is
@@ -171,6 +181,20 @@ class RunService:
             candidates = _inject_termini(
                 candidates, termini, self._s.candidate_grid_m, self._s.max_candidates
             )
+            # Score-within-boundary: clip the search region to the selected
+            # forest/park polygon (a search-region filter like the bbox, applied
+            # here in the service over candidate points — the engine never sees
+            # it, TLC-3). Uses the EXACT polygon so edge spots aren't dropped.
+            if clip_polygon is not None:
+                inside = await self._store.points_within_polygon(
+                    [(c.lon, c.lat) for c in candidates], clip_polygon
+                )
+                kept = [c for c, keep in zip(candidates, inside) if keep]
+                log.info(
+                    "run %d: boundary clip %d -> %d candidates",
+                    run_id, len(candidates), len(kept),
+                )
+                candidates = kept
             id_candidates = await self._store.insert_candidates(run_id, candidates, capped)
             log.info(
                 "run %d: %d ways -> %d candidates (%d termini, capped=%s)",
