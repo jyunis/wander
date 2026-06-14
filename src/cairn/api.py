@@ -178,6 +178,10 @@ class ScoreRequest(BaseModel):
         default=None,
         description="Optional boundary clip — score only candidates inside this land shape.",
     )
+    public_only: bool = Field(
+        default=False,
+        description="Restrict candidates to public-ownership land (drops private inholdings).",
+    )
 
     model_config = {"populate_by_name": True}
 
@@ -309,15 +313,27 @@ async def score(req: ScoreRequest, request: Request) -> JSONResponse:
     bbox = Bbox(*req.bbox)
     weights = req.weights or settings.ui_config()["default_weights"]
 
-    # Score-within-boundary: resolve the EXACT clip polygon here (the handler has
-    # app.state.overlays) so RunService takes a plain geometry, never an
-    # OverlayStore dependency — scoring stays decoupled from overlays.db (TLC-3).
-    clip_polygon: bytes | None = None
+    # Search-region clips (score-within-boundary forest/park + public-land-only).
+    # Resolved HERE (the handler has app.state.overlays) so RunService takes plain
+    # geometries, never an OverlayStore dependency — scoring stays decoupled from
+    # overlays.db (TLC-3). Multiple clips AND together in the service.
+    overlays: OverlayStore = request.app.state.overlays
+    clip_polygons: list[bytes] = []
     if req.clip is not None:
-        overlays: OverlayStore = request.app.state.overlays
-        clip_polygon = await overlays.get_clip_geometry(req.clip.layer, req.clip.name, bbox)
-        if clip_polygon is None:
+        g = await overlays.get_clip_geometry(req.clip.layer, req.clip.name, bbox)
+        if g is None:
             raise ValidationError(f"unknown clip shape: {req.clip.layer}/{req.clip.name}")
+        clip_polygons.append(g)
+    if req.public_only:
+        g = await overlays.get_public_land_geometry(bbox)
+        if g is None:
+            # No ownership parcels here — opt-in coverage means we can't tell
+            # private from no-data, so refuse rather than silently filter all out.
+            raise ValidationError(
+                "no public-land ownership data for this area — can't filter to public land"
+            )
+        clip_polygons.append(g)
+    clips = clip_polygons or None
 
     # Decide sync vs async (TLC-4). Validation happens inside the service and
     # raises ValidationError -> 422 before any run row is created.
@@ -326,9 +342,9 @@ async def score(req: ScoreRequest, request: Request) -> JSONResponse:
         go_async = bbox.normalized().area_km2() > settings.sync_area_threshold_km2
 
     if go_async:
-        run_id = await service.start_async(bbox, weights, clip_polygon=clip_polygon)
+        run_id = await service.start_async(bbox, weights, clip_polygons=clips)
     else:
-        run_id = (await service.score_bbox(bbox, weights, clip_polygon=clip_polygon)).id
+        run_id = (await service.score_bbox(bbox, weights, clip_polygons=clips)).id
     # Label the run: a within-boundary run reads best as the shape itself
     # ("Superior National Forest"), not a reverse-geocoded town near the view
     # center — so use the clip name directly and skip the geocode for those.

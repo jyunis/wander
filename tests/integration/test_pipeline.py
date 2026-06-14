@@ -143,7 +143,7 @@ async def test_clip_filters_candidates_to_boundary(store, settings):
         overpass=FakeOverpass(synthetic_elements()),
         terrain_factory=fake_terrain_factory(slope_deg=3.0),
     )
-    run = await svc.score_bbox(TEST_BBOX, DEFAULT_WEIGHTS, clip_polygon=wkb)
+    run = await svc.score_bbox(TEST_BBOX, DEFAULT_WEIGHTS, clip_polygons=[wkb])
     assert run.status == "done"
     assert run.candidate_count > 0
     gj = await store.get_run_geojson(run.id)
@@ -153,6 +153,29 @@ async def test_clip_filters_candidates_to_boundary(store, settings):
     # The unclipped run over the same area scores strictly more points.
     full = await _run(store, settings, synthetic_elements(), DEFAULT_WEIGHTS)
     assert run.candidate_count < full.candidate_count
+
+
+async def test_multiple_clips_intersect(store, settings):
+    # Two clips AND together (e.g. a forest boundary AND public land): a candidate
+    # must lie inside BOTH. Clip A = lon >= 0.010, clip B = lon >= 0.014, so only
+    # lon >= 0.014 survives.
+    a = await _wkb_polygon(
+        store, "POLYGON((0.010 0.008,0.020 0.008,0.020 0.012,0.010 0.012,0.010 0.008))"
+    )
+    b = await _wkb_polygon(
+        store, "POLYGON((0.014 0.008,0.020 0.008,0.020 0.012,0.014 0.012,0.014 0.008))"
+    )
+    svc = RunService(
+        store, settings,
+        overpass=FakeOverpass(synthetic_elements()),
+        terrain_factory=fake_terrain_factory(slope_deg=3.0),
+    )
+    run = await svc.score_bbox(TEST_BBOX, DEFAULT_WEIGHTS, clip_polygons=[a, b])
+    assert run.status == "done" and run.candidate_count > 0
+    gj = await store.get_run_geojson(run.id)
+    for feat in gj["features"]:
+        lon, _lat = feat["geometry"]["coordinates"]
+        assert lon >= 0.014 - 1e-9, f"candidate at lon {lon} escaped the clip intersection"
 
 
 async def test_distinct_site_selection(store, settings):

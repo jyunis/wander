@@ -248,6 +248,35 @@ class OverlayStore:
         clip = row[1] if row[1] is not None else row[0]
         return bytes(clip)
 
+    async def get_public_land_geometry(self, bbox: Bbox) -> bytes | None:
+        """The union of all PUBLIC-ownership parcels (the `ownership` layer:
+        federal/state/county/tax-forfeit/tribal) within `bbox`, intersected with
+        it, as WKB (SRID 4326) — the search-region clip for "score public land
+        only".
+
+        Returns None if NO ownership parcels fall in the bbox. That's the
+        important distinction: the ownership data is opt-in per county, so an
+        empty result means "no coverage here" (the API surfaces that as a 422 so
+        we never silently filter everything out), NOT "all private". Where
+        parcels DO exist, candidates outside them are genuinely private inholdings
+        and get dropped. Search-region only — never a scoring input (TLC-3).
+        """
+        if self._db is None:
+            return None
+        b = bbox.normalized()
+        frame = (b.min_lon, b.min_lat, b.max_lon, b.max_lat)
+        cur = await self._db.execute(
+            "SELECT ST_AsBinary(ST_Intersection(ST_Union(geom), BuildMbr(?, ?, ?, ?, 4326))) "
+            "FROM overlay_features WHERE layer='ownership' AND ROWID IN ("
+            "  SELECT ROWID FROM SpatialIndex WHERE f_table_name='overlay_features' "
+            "  AND f_geometry_column='geom' AND search_frame=BuildMbr(?, ?, ?, ?, 4326))",
+            (*frame, *frame),
+        )
+        row = await cur.fetchone()
+        if row is None or row[0] is None:
+            return None  # no ownership coverage in this bbox
+        return bytes(row[0])
+
     async def nearest_campgrounds(
         self, lat: float, lon: float, limit: int = 5, max_km: float = 80.0
     ) -> list[dict]:

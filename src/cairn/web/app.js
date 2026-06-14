@@ -796,6 +796,7 @@ async function executeScore(bb, opts = {}) {
       weights: readWeights(),
     };
     if (opts.clip) body.clip = opts.clip;
+    if ($("public-only")?.checked) body.public_only = true;
     const resp = await fetch("/score", {
       method: "POST",
       headers: { "content-type": "application/json" },

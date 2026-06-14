@@ -189,6 +189,38 @@ async def test_get_clip_geometry_inert_without_db(tmp_path):
     await s.close()
 
 
+async def test_get_public_land_geometry(overlay_settings):
+    # The fixture has one ownership parcel (Tax Forfeit) over 0..0.01.
+    s = await OverlayStore.open(overlay_settings)
+    wkb = await s.get_public_land_geometry(Bbox(0, 0, 0.01, 0.01))
+    assert isinstance(wkb, (bytes, bytearray)) and len(wkb) > 0
+    # A bbox with no ownership parcels -> None (no coverage), distinct from empty.
+    assert await s.get_public_land_geometry(Bbox(5, 5, 6, 6)) is None
+    await s.close()
+
+
+async def test_get_public_land_geometry_inert_without_db(tmp_path):
+    s = await OverlayStore.open(
+        Settings(_env_file=None, data_dir=tmp_path, overlays_db_path=tmp_path / "nope.db")
+    )
+    assert await s.get_public_land_geometry(Bbox(0, 0, 1, 1)) is None
+    await s.close()
+
+
+def test_api_score_public_only_no_coverage_is_422(tmp_path, monkeypatch):
+    # public_only with no ownership data (inert store) -> 422 up front, never a
+    # silent empty result. Proves the opt-in coverage guard is wired into /score.
+    monkeypatch.setenv("CAIRN_DATA_DIR", str(tmp_path))
+    config_module._settings = None
+    from cairn.api import app
+
+    with TestClient(app) as c:
+        r = c.post("/score", json={"bbox": [0.0, 0.0, 0.01, 0.01], "public_only": True})
+        assert r.status_code == 422
+        assert "public-land" in r.json()["detail"].lower()
+    config_module._settings = None
+
+
 def test_api_score_unknown_clip_is_422(tmp_path, monkeypatch):
     # A clip referencing a shape the overlays store can't resolve fails fast with
     # 422 — BEFORE any scoring/fetch (here the store is inert, so every name is
