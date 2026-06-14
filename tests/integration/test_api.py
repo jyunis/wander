@@ -93,6 +93,22 @@ def test_score_sync_then_fetch_and_geojson(client):
     assert props["contributions"] and "total" in props
 
 
+def test_rename_run(client):
+    run_id = client.post("/score", json={"bbox": TEST_BBOX}).json()["id"]
+    r = client.patch(f"/runs/{run_id}", json={"name": "  Birch Lake spur  "})
+    assert r.status_code == 200
+    assert r.json()["place"] == "Birch Lake spur"  # trimmed
+    # The new label persists on subsequent fetches + the run list.
+    assert client.get(f"/runs/{run_id}").json()["place"] == "Birch Lake spur"
+    assert any(
+        run["id"] == run_id and run["place"] == "Birch Lake spur"
+        for run in client.get("/runs").json()["runs"]
+    )
+    # Blank name -> 422; unknown run -> 404.
+    assert client.patch(f"/runs/{run_id}", json={"name": "   "}).status_code == 422
+    assert client.patch("/runs/999999", json={"name": "x"}).status_code == 404
+
+
 def test_delete_run_cascades(client):
     run_id = client.post("/score", json={"bbox": TEST_BBOX}).json()["id"]
     assert client.get(f"/runs/{run_id}").status_code == 200

@@ -712,6 +712,7 @@ function renderRunsList() {
         `<div class="run-row${r.id === activeRunId ? " active" : ""}" data-id="${r.id}">` +
         `<div class="run-row-main"><div class="run-row-name">${esc(runLabel(r))}${pill}</div>` +
         `<div class="run-row-sub">${meta}</div></div>` +
+        `<button class="run-rename" title="Rename run">✎</button>` +
         `<button class="run-del" title="Delete run">×</button></div>`
       );
     })
@@ -722,11 +723,38 @@ function renderRunsList() {
       if (isMobile()) setNav(false); // mobile: close the drawer so the map shows
       loadRun(id);
     };
+    row.querySelector(".run-rename").onclick = (e) => {
+      e.stopPropagation();
+      renameRun(id);
+    };
     row.querySelector(".run-del").onclick = (e) => {
       e.stopPropagation();
       deleteRun(id);
     };
   });
+}
+
+async function renameRun(id) {
+  const r = runsList.find((x) => x.id === id);
+  const name = prompt("Rename run", r ? runLabel(r) : "");
+  if (name == null) return; // cancelled
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  try {
+    const resp = await fetch(`/runs/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: trimmed }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      setStatus(err.detail || "Rename failed", "err");
+      return;
+    }
+    await loadRuns(); // re-render the list with the new label
+  } catch (e) {
+    setStatus("Error: " + e.message, "err");
+  }
 }
 
 async function loadRun(runId) {

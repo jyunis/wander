@@ -5,7 +5,7 @@ all scoring/geo work to the engine via RunService (no scoring logic here), maps
 typed engine errors to HTTP codes, and returns `failed` runs as status+reason
 (not a 500, TLC-10). Every results response carries the TLC-3 disclaimer.
 
-Endpoints: POST /score, GET /runs, GET /runs/{id}, GET /runs/{id}/geojson,
+Endpoints: POST /score, GET /runs, GET/PATCH/DELETE /runs/{id}, GET /runs/{id}/geojson,
 GET /runs/{id}/roads, GET /roads, GET /overlays, GET /overlays/{layer},
 GET /overlays/{layer}/shape,
 GET /nearby-campgrounds, GET /saved, POST /saved, PATCH/DELETE /saved/{id},
@@ -182,6 +182,10 @@ class ScoreRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class RunUpdateRequest(BaseModel):
+    name: str = Field(..., description="New display label for the run")
+
+
 class SavedRequest(BaseModel):
     kind: str = Field(..., description="'site' or 'campground'")
     name: str | None = None
@@ -348,6 +352,19 @@ async def get_run(run_id: int, request: Request) -> dict:
     store: Store = request.app.state.store
     run = await store.get_run(run_id)  # raises RunNotFound -> 404
     return _run_summary(run)
+
+
+@app.patch("/runs/{run_id}")
+async def rename_run(run_id: int, req: RunUpdateRequest, request: Request) -> dict:
+    """Rename a run — set its display label (the `place` field shown in the run
+    list). 422 if the name is blank, 404 if the run doesn't exist."""
+    store: Store = request.app.state.store
+    name = req.name.strip()
+    if not name:
+        raise ValidationError("name is required")
+    await store.get_run(run_id)  # raises RunNotFound -> 404
+    await store.set_run_place(run_id, name)
+    return _run_summary(await store.get_run(run_id))
 
 
 @app.delete("/runs/{run_id}")

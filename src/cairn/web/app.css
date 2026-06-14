@@ -428,9 +428,11 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
   text-overflow: ellipsis; white-space: nowrap; }
 .run-row-sub { font-size: 10.5px; color: var(--muted); margin-top: 2px;
   font-variant-numeric: tabular-nums; }
-.run-del { flex: none; background: none; border: none; color: var(--muted);
+.run-del, .run-rename { flex: none; background: none; border: none; color: var(--muted);
   cursor: pointer; font-size: 16px; line-height: 1; padding: 0 2px; }
 .run-del:hover { color: #e8786b; }
+.run-rename { font-size: 13px; }
+.run-rename:hover { color: var(--accent); }
 .run-pill { font-size: 9.5px; padding: 1px 6px; border-radius: 9px; margin-left: 5px;
   border: 1px solid var(--line); color: var(--muted); }
 .run-pill.run-failed { color: #e8786b; border-color: #e8786b; }
