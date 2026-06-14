@@ -301,6 +301,7 @@ function setupMap() {
   map = L.map("map", { zoomControl: false }).setView([47.9, -91.86], 11);
   L.control.zoom({ position: "topright" }).addTo(map);
   addBasemapControl(); // small on-map style picker (synced with the panel select)
+  addMeasureControl(); // 📏 distance ruler (independent of the scoring tools)
   setBasemap(DEFAULT_BASEMAP);
   // Land overlays sit above the basemap but below roads/dots/pins.
   map.createPane("land");
@@ -340,6 +341,7 @@ function setupMap() {
   tripLayer = new L.LayerGroup().addTo(map);
   savedLayer = new L.LayerGroup().addTo(map);
   runExtentLayer = new L.LayerGroup().addTo(map);
+  measureLayer = new L.LayerGroup().addTo(map); // the distance ruler (custom)
 
   map.on(L.Draw.Event.CREATED, (e) => {
     drawnItems.clearLayers();
@@ -442,6 +444,7 @@ function cancelDraw() {
   }
 }
 function startDraw() {
+  finishMeasure(); // finish any in-progress ruler (tools are mutually exclusive)
   if (drawHandler) drawHandler.disable();
   drawHandler = new L.Draw.Rectangle(map, { shapeOptions: { color: "#5b9c5a" } });
   drawHandler.enable();
@@ -449,6 +452,157 @@ function startDraw() {
   // no map to draw on and the drawer looks frozen. Leaflet's own draw tooltip
   // guides the drag; the panel reopens automatically once the box is drawn.
   if (isMobile()) setNav(false);
+}
+
+// --- measure tool (distance ruler) -----------------------------------------
+// A standalone ruler, independent of the scoring selection. Tap 📏, then tap the
+// map to drop points; the chip shows the running total. Tap "Done" (or the 📏
+// button, or Enter) to finish, ✕ to clear. A plain tap-to-add handler — NOT
+// Leaflet.draw — so adding many segments works reliably on mobile (Leaflet.draw's
+// only finish gesture is a double-tap, which on touch ends the line after one
+// segment). Great-circle segment distances (map.distance), not road routing.
+let measureLayer = null; // the ruler polyline + vertex dots
+let measuring = false; // actively dropping points
+let measurePts = []; // L.LatLng[] of dropped points
+
+const $MEASURE_BTN = () => document.querySelector(".measure-toggle");
+
+function addMeasureControl() {
+  const ctrl = L.control({ position: "topright" });
+  ctrl.onAdd = () => {
+    const div = L.DomUtil.create("div", "measure-ctrl leaflet-control");
+    div.innerHTML =
+      `<button type="button" class="measure-toggle" title="Measure distance" ` +
+      `aria-label="Measure distance" aria-pressed="false">📏</button>`;
+    L.DomEvent.disableClickPropagation(div);
+    div.querySelector(".measure-toggle").onclick = toggleMeasure;
+    return div;
+  };
+  ctrl.addTo(map);
+}
+
+function setMeasureBtnActive(on) {
+  const btn = $MEASURE_BTN();
+  if (btn) {
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+}
+
+function toggleMeasure() {
+  if (measuring) finishMeasure(); // tapping the active tool finishes
+  else startMeasure();
+}
+
+function startMeasure() {
+  cancelDraw(); // tools are mutually exclusive
+  cancelDropPin();
+  clearMeasure(); // a new measurement replaces any prior one
+  measuring = true;
+  measurePts = [];
+  setMeasureBtnActive(true);
+  if (!measureLayer) measureLayer = new L.LayerGroup().addTo(map);
+  map.getContainer().style.cursor = "crosshair";
+  // Keep double-click from zooming mid-measure. We deliberately do NOT finish on
+  // double-click: on touch, two quick taps read as a double-tap and would end the
+  // line after one segment. Finishing is explicit (Done button / Enter / 📏).
+  map.doubleClickZoom.disable();
+  map.on("click", onMeasureClick);
+  document.addEventListener("keydown", onMeasureKey);
+  if (isMobile()) setNav(false);
+  renderMeasureChip(0, { prompt: true });
+}
+
+function onMeasureClick(e) {
+  measurePts.push(e.latlng);
+  redrawMeasure();
+  renderMeasureChip(totalMeters(measurePts), { live: true });
+}
+
+function redrawMeasure() {
+  measureLayer.clearLayers();
+  if (!measurePts.length) return;
+  measureLayer.addLayer(L.polyline(measurePts, { color: "#2bb3ff", weight: 3 }));
+  measurePts.forEach((ll) =>
+    measureLayer.addLayer(
+      L.circleMarker(ll, {
+        radius: 4, color: "#2bb3ff", weight: 2, fillColor: "#fff", fillOpacity: 1,
+      })
+    )
+  );
+}
+
+function finishMeasure() {
+  if (!measuring) return;
+  stopMeasureInput();
+  if (measurePts.length < 2) {
+    clearMeasure(); // a lone point isn't a measurement
+    return;
+  }
+  renderMeasureChip(totalMeters(measurePts), { final: true });
+}
+
+// Detach the map/keyboard listeners + restore map behavior, keeping any drawn
+// line in place. Shared by finish and clear.
+function stopMeasureInput() {
+  measuring = false;
+  setMeasureBtnActive(false);
+  map.getContainer().style.cursor = "";
+  if (map.doubleClickZoom) map.doubleClickZoom.enable();
+  map.off("click", onMeasureClick);
+  document.removeEventListener("keydown", onMeasureKey);
+}
+
+function onMeasureKey(e) {
+  if (e.key === "Enter") finishMeasure();
+  else if (e.key === "Escape") clearMeasure();
+}
+
+function clearMeasure() {
+  stopMeasureInput();
+  measurePts = [];
+  if (measureLayer) measureLayer.clearLayers();
+  hideMeasureChip();
+}
+
+function totalMeters(latlngs) {
+  let m = 0;
+  for (let i = 1; i < latlngs.length; i++) m += map.distance(latlngs[i - 1], latlngs[i]);
+  return m;
+}
+
+// Whole miles + feet (never a fractional mile); just feet under a mile.
+function formatDistance(meters) {
+  const totalFt = Math.round(meters * 3.28084);
+  if (totalFt < 5280) return `${totalFt} ft`;
+  const miles = Math.floor(totalFt / 5280);
+  const ft = totalFt - miles * 5280;
+  return ft ? `${miles} mi ${ft} ft` : `${miles} mi`;
+}
+
+// States: prompt (no points yet), live (dropping points — show Done), final
+// (finished). The ✕ clears in every state.
+function renderMeasureChip(meters, { prompt = false, live = false, final = false } = {}) {
+  const chip = $("measure-chip");
+  if (!chip) return;
+  chip.hidden = false;
+  const label = prompt ? "Tap the map to measure" : `📏 ${formatDistance(meters)}`;
+  chip.innerHTML =
+    `<span class="measure-chip-text">${label}</span>` +
+    (live ? `<button type="button" class="measure-chip-done">Done</button>` : "") +
+    `<button type="button" class="measure-chip-x" title="Clear measurement" ` +
+    `aria-label="Clear measurement">✕</button>`;
+  const done = chip.querySelector(".measure-chip-done");
+  if (done) done.onclick = finishMeasure;
+  chip.querySelector(".measure-chip-x").onclick = clearMeasure;
+}
+
+function hideMeasureChip() {
+  const chip = $("measure-chip");
+  if (chip) {
+    chip.hidden = true;
+    chip.innerHTML = "";
+  }
 }
 
 // Parse "lat, lon" forgivingly — grabs the first two numbers (commas, spaces,
@@ -534,6 +688,7 @@ function dropGotoMarker(lat, lon, label, zoom) {
 let pinPlacing = false;
 function toggleDropPin() {
   if (pinPlacing) return cancelDropPin();
+  finishMeasure(); // finish any in-progress ruler (tools are mutually exclusive)
   pinPlacing = true;
   $("drop-pin").classList.add("active");
   map.getContainer().style.cursor = "crosshair";
@@ -2486,6 +2641,7 @@ function clearMapForTrip() {
   tripPlotMode = true;
   closeSite(); // also clears nearbyCgLayer + any selected marker
   clearShape(); // drop any forest/park discovery highlight
+  clearMeasure(); // drop any distance ruler
   [pinLayer, candidatesLayer, heatLayer, roadsLayer, drawnItems].forEach((l) => {
     if (l && map.hasLayer(l)) map.removeLayer(l);
   });

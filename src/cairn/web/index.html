@@ -184,8 +184,11 @@
 
     <main id="map"></main>
 
-    <!-- Forest/park discovery: the selected shape's name + a clear (✕) button -->
-    <div id="shape-chip" class="shape-chip" hidden></div>
+    <!-- On-map chips stack top-center: forest/park selection + measure readout -->
+    <div id="map-chips">
+      <div id="shape-chip" class="shape-chip" hidden></div>
+      <div id="measure-chip" class="measure-chip" hidden></div>
+    </div>
 
     <!-- Bottom sheet: selected-site detail (persistent; mobile-friendly) -->
     <section id="sheet" class="sheet hidden" aria-label="Selected site">
