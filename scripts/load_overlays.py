@@ -544,14 +544,19 @@ PADUS_PARK_DES = {"SP": "State Park", "SREC": "State Recreation Area"}
 
 
 def load_padus(con, code, only=None) -> int:
-    """PAD-US for one state (`code` = State_Nm, e.g. 'SD'). Feeds two layers from
-    one query: `ownership` (public fee land, categorized; private/tribal/unknown
-    dropped) and `state_park` (State Park / State Rec Area designations, incl.
-    Custer SP, named by Unit_Nm). Paged by OBJECTID; best-effort (an unreachable
-    service appends nothing). The caller clears each layer once first."""
+    """PAD-US for one state (`code` = State_Nm, e.g. 'SD'). Feeds three layers
+    from one query:
+      - `ownership`: public fee land, categorized (private/tribal/unknown dropped),
+      - `state_park`: State Park / State Rec Area designations (incl. Custer SP),
+      - `national_park`: NPS-managed fee land (Wind Cave/Badlands NP, Jewel Cave
+        NM, Mt Rushmore, …) — a display-only CONTEXT layer (camping there is
+        designated-only; the federal parcels are already in `ownership`).
+    Named by Unit_Nm. Paged by OBJECTID; best-effort. The caller clears each
+    layer once first."""
     want_own = not only or "ownership" in only
     want_park = not only or "state_park" in only
-    if not (want_own or want_park):
+    want_nps = not only or "national_park" in only
+    if not (want_own or want_park or want_nps):
         return 0
     own_in = "Own_Type IN ('FED','STAT','LOC','NGO')"
     park_in = "Des_Tp IN ('SP','SREC')"
@@ -559,11 +564,12 @@ def load_padus(con, code, only=None) -> int:
     print(f"[padus] querying PAD-US for {code} …", flush=True)
     own_rows: list = []
     park_rows: list = []
+    nps_rows: list = []
     last = 0
     while True:
         params = urllib.parse.urlencode({
             "where": f"({base_where}) AND OBJECTID>{last}",
-            "outFields": "Own_Type,Des_Tp,Unit_Nm,OBJECTID",
+            "outFields": "Own_Type,Mang_Name,Des_Tp,Unit_Nm,OBJECTID",
             "orderByFields": "OBJECTID",
             "resultRecordCount": 1000,
             "returnGeometry": "true",
@@ -590,19 +596,26 @@ def load_padus(con, code, only=None) -> int:
                 continue
             wkt = shape(geom).wkt
             name = props.get("unit_nm")
-            own, des = props.get("own_type"), props.get("des_tp")
+            own, des, mang = props.get("own_type"), props.get("des_tp"), props.get("mang_name")
             if want_own and own in PADUS_PUBLIC_OWN:
                 own_rows.append((PADUS_PUBLIC_OWN[own], name, wkt, 4326))
             if want_park and des in PADUS_PARK_DES:
                 park_rows.append((None, name, wkt, 4326))
+            if want_nps and own == "FED" and mang == "NPS":
+                nps_rows.append((None, name, wkt, 4326))
         if len(feats) < 1000:
             break
     if own_rows:
         _insert(con, "ownership", own_rows)
     if park_rows:
         _insert(con, "state_park", park_rows)
-    print(f"[padus] {code}: {len(own_rows)} ownership + {len(park_rows)} park", flush=True)
-    return len(own_rows) + len(park_rows)
+    if nps_rows:
+        _insert(con, "national_park", nps_rows)
+    print(
+        f"[padus] {code}: {len(own_rows)} ownership + {len(park_rows)} park "
+        f"+ {len(nps_rows)} nps", flush=True
+    )
+    return len(own_rows) + len(park_rows) + len(nps_rows)
 
 
 def load_arcgis_features(con, layer, base_url, where, name_field) -> int:
@@ -800,8 +813,10 @@ STATES: dict[str, dict] = {
         # state. USFS forests + RIDB campgrounds are national (auto).
         "shp_sources": [],
         "arcgis_sources": [],
-        "padus_state": "SD",  # PAD-US State_Nm -> ownership + state_park layers
-        "campground_loaders": [],  # federal RIDB is national; SD state campgrounds TBD
+        "padus_state": "SD",  # PAD-US State_Nm -> ownership + state_park + national_park
+        # Custer SP loops etc. from OSM (no SD campground GIS), categorized by the
+        # state-park boundary they sit in. Federal sites still come from RIDB.
+        "campground_loaders": [osm_state_park_campgrounds("US-SD")],
     },
 }
 
@@ -841,7 +856,7 @@ def main() -> None:
     padus_states = [s for s in states if STATES[s].get("padus_state")]
     clear_layers = list(dict.fromkeys(src[0] for src in [*shp, *arc]))
     if padus_states:
-        for lyr in ("ownership", "state_park"):
+        for lyr in ("ownership", "state_park", "national_park"):
             if (not only or lyr in only) and lyr not in clear_layers:
                 clear_layers.append(lyr)
     for layer in clear_layers:

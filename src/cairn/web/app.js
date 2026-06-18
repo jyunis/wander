@@ -93,6 +93,7 @@ const OWNERSHIP_COLORS = {
 const OWNERSHIP_FALLBACK = "#8a8a8a";
 const BOUNDARY_COLORS = {
   national_forest: "#1f7a1f",
+  national_park: "#7b4ea3",
   state_forest: "#6b8e23",
   state_park: "#b5651d",
 };
@@ -1500,6 +1501,10 @@ function campgroundLink(p) {
   // Wisconsin state-park/forest sites (OSM-sourced) reserve via GoingToCamp.
   if ((p.meta || {}).state === "WI") {
     return { href: "https://wisconsin.goingtocamp.com/", label: "Reserve · GoingToCamp" };
+  }
+  // South Dakota state-park sites (OSM-sourced) reserve via SD GFP.
+  if ((p.meta || {}).state === "SD") {
+    return { href: "https://gfp.sd.gov/reservations/", label: "Reserve · SD GFP" };
   }
   const isForest = p.category === "State Forest" || /state forest/i.test(p.name || "");
   return isForest

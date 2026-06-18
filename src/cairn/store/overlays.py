@@ -24,10 +24,13 @@ LAYER_TITLES: dict[str, str] = {
     "campground": "Campgrounds",
     "ownership": "Public land ownership",
     "national_forest": "National Forest",
+    "national_park": "National Park Service",
     "state_forest": "State Forest",
     "state_park": "State Parks",
 }
-LAYER_ORDER = ["campground", "national_forest", "state_forest", "state_park", "ownership"]
+LAYER_ORDER = [
+    "campground", "national_forest", "national_park", "state_forest", "state_park", "ownership"
+]
 
 # Point layers live in `overlay_points` (markers); everything else is a polygon
 # layer in `overlay_features`.
