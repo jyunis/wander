@@ -1211,8 +1211,15 @@ def _roads_features(ways: list, tags_by_id: dict[int, dict]) -> list[dict]:
                     "osm_id": way.osm_id,
                     "highway": tags.get("highway"),
                     "name": tags.get("name") or tags.get("ref"),
+                    "ref": tags.get("ref"),
                     "forest_road": is_forest,
                     "rough": road_is_rough(tags),
+                    # MVUM access class + season (e.g. "Roads open to all
+                    # Vehicles, Seasonal") + surface — display-only context for
+                    # the roads popup so the user knows which road to confirm on
+                    # the MVUM. Never scored (TLC-3).
+                    "mvum_access": tags.get("mvum_access"),
+                    "surface": tags.get("surface"),
                 },
             }
         )

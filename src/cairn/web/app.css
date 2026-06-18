@@ -140,8 +140,12 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .roads-legend { gap: 5px; }
 .rd-swatch { width: 16px; height: 0; border-top: 3px solid; border-radius: 2px; }
 .rd-swatch.rd-forest { border-color: #ff7a00; }
+.rd-swatch.rd-special { border-color: #9b59b6; }
 .rd-swatch.rd-other  { border-color: #ffd23d; }
 .roads-legend span:not(.rd-swatch) { margin-right: 8px; }
+.road-pop { font-size: 12px; line-height: 1.45; }
+.road-pop-note { margin-top: 6px; color: var(--muted); font-size: 11px;
+  border-top: 1px solid var(--line); padding-top: 5px; }
 
 #land-section { margin-top: 6px; }
 .land-sub { font-size: 11px; font-weight: 400; color: var(--muted); }

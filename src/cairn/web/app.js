@@ -1033,23 +1033,71 @@ async function loadRoadsForView() {
   _roadsBounds = padded;
 }
 
+// Parse an MVUM access string ("Roads open to all Vehicles, Seasonal") into a
+// readable class + season + a "special designation" flag (worth a closer look).
+function mvumInfo(access) {
+  if (!access) return null;
+  const season = /seasonal/i.test(access)
+    ? "Seasonal"
+    : /yearlong/i.test(access)
+      ? "Yearlong"
+      : null;
+  let klass = access;
+  let special = false;
+  if (/all vehicles/i.test(access)) klass = "Open to all vehicles";
+  else if (/highway legal/i.test(access)) klass = "Highway-legal vehicles only";
+  else if (/special/i.test(access)) {
+    klass = "Special designation";
+    special = true;
+  }
+  return { klass, season, special };
+}
+
 function renderRoads(gj) {
   roadsLayer.clearLayers();
   (gj.features || []).forEach((f) => {
     const p = f.properties || {};
     const forest = p.forest_road;
+    const mv = mvumInfo(p.mvum_access);
+    // Color: special-designation MVUM roads stand out (purple); other forest/
+    // MVUM roads orange; non-MVUM drivable yellow. Rough → dashed (unchanged).
+    const color = mv && mv.special ? "#9b59b6" : forest ? "#ff7a00" : "#ffd23d";
     const line = L.geoJSON(f, {
       style: {
-        color: forest ? "#ff7a00" : "#ffd23d",
+        color,
         weight: forest ? 3 : 2,
         opacity: 0.9,
         dashArray: p.rough ? "5 4" : null,
         lineCap: "round",
       },
     });
-    if (p.name) line.bindTooltip(String(p.name), { sticky: true });
+    const label = p.ref ? `FR ${p.ref}` : p.name || "Road";
+    line.bindTooltip(label + (mv && mv.season ? ` · ${mv.season}` : ""), { sticky: true });
+    line.bindPopup(roadPopup(p, mv, label), { maxWidth: 260 });
     roadsLayer.addLayer(line);
   });
+}
+
+function roadPopup(p, mv, label) {
+  const rows = [];
+  if (p.name && p.ref && p.name !== label) rows.push(esc(p.name));
+  if (mv) {
+    rows.push(esc(mv.klass) + (mv.season ? ` · <b>${esc(mv.season)}</b>` : ""));
+  }
+  if (p.surface) rows.push("surface: " + esc(p.surface));
+  if (p.rough) rows.push("⚠ rough / high-clearance");
+  // The MVUM tells you a road is open to DRIVING; dispersed-camping designation
+  // (corridor + dates) lives only on the MVUM/Avenza — nudge the user there.
+  const note = mv
+    ? `<div class="road-pop-note">Open to <i>driving</i> as shown. Confirm ` +
+      `<b>dispersed camping</b> (corridor + dates) on the MVUM / Avenza.</div>`
+    : "";
+  return (
+    `<div class="road-pop"><b>${esc(label)}</b>` +
+    (rows.length ? "<br>" + rows.join("<br>") : "") +
+    note +
+    "</div>"
+  );
 }
 
 function renderMeta(run) {
