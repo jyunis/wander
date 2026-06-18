@@ -715,6 +715,16 @@ STATES: dict[str, dict] = {
         # boundary they sit in. Federal campgrounds still come from RIDB.
         "campground_loaders": [osm_state_park_campgrounds("US-WI")],
     },
+    "SD": {
+        "name": "South Dakota",
+        "bbox": (-104.1, 42.4, -96.4, 46.0),  # whole state; covers the Black Hills + grasslands
+        # Phase 1: national feeds only (USFS Black Hills NF via the envelope, RIDB
+        # federal campgrounds via the state code). Ownership (BLM SMA) + Custer
+        # State Park / state parks land up in Phase 2.
+        "shp_sources": [],
+        "arcgis_sources": [],
+        "campground_loaders": [],  # federal RIDB is national; SD state campgrounds TBD
+    },
 }
 
 
