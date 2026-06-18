@@ -528,6 +528,83 @@ def load_usfs(con, bbox) -> int:
     return len(rows)
 
 
+# PAD-US (USGS Protected Areas DB) — Esri-hosted v3.0 mirror (the USGS service is
+# flaky). Full-resolution + queryable, unlike BLM's national SMA (cached/
+# generalized only). One source feeds two layers per state.
+PADUS_URL = (
+    "https://services.arcgis.com/v01gqwM5QqNysAAi/arcgis/rest/services/"
+    "Manager_Name/FeatureServer/0/query"
+)
+# PAD-US Own_Type code -> our ownership category. PUBLIC fee only: PVT (private),
+# UNK (unknown), DESG (a designation overlapping fee, not ownership) and TRIB
+# (tribal — NOT open-access, must not read as public) are deliberately excluded
+# so the public-land filter stays honest.
+PADUS_PUBLIC_OWN = {"FED": "Federal", "STAT": "State", "LOC": "County", "NGO": "NGO"}
+PADUS_PARK_DES = {"SP": "State Park", "SREC": "State Recreation Area"}
+
+
+def load_padus(con, code, only=None) -> int:
+    """PAD-US for one state (`code` = State_Nm, e.g. 'SD'). Feeds two layers from
+    one query: `ownership` (public fee land, categorized; private/tribal/unknown
+    dropped) and `state_park` (State Park / State Rec Area designations, incl.
+    Custer SP, named by Unit_Nm). Paged by OBJECTID; best-effort (an unreachable
+    service appends nothing). The caller clears each layer once first."""
+    want_own = not only or "ownership" in only
+    want_park = not only or "state_park" in only
+    if not (want_own or want_park):
+        return 0
+    own_in = "Own_Type IN ('FED','STAT','LOC','NGO')"
+    park_in = "Des_Tp IN ('SP','SREC')"
+    base_where = f"State_Nm='{code}' AND ({own_in} OR {park_in})"
+    print(f"[padus] querying PAD-US for {code} …", flush=True)
+    own_rows: list = []
+    park_rows: list = []
+    last = 0
+    while True:
+        params = urllib.parse.urlencode({
+            "where": f"({base_where}) AND OBJECTID>{last}",
+            "outFields": "Own_Type,Des_Tp,Unit_Nm,OBJECTID",
+            "orderByFields": "OBJECTID",
+            "resultRecordCount": 1000,
+            "returnGeometry": "true",
+            "outSR": 4326,
+            "f": "geojson",
+        })
+        try:
+            req = urllib.request.Request(f"{PADUS_URL}?{params}", headers=UA)
+            with urllib.request.urlopen(req, timeout=120) as r:
+                fc = json.load(r)
+        except Exception as exc:  # best-effort: skip if the service is unreachable
+            print(f"[padus] SKIPPED ({code}: {exc})", flush=True)
+            return 0
+        feats = fc.get("features", [])
+        if not feats:
+            break
+        for feat in feats:
+            geom = feat.get("geometry")
+            props = {k.lower(): v for k, v in (feat.get("properties") or {}).items()}
+            oid = props.get("objectid")
+            if oid is not None:
+                last = max(last, int(oid))
+            if not geom or not geom.get("coordinates"):
+                continue
+            wkt = shape(geom).wkt
+            name = props.get("unit_nm")
+            own, des = props.get("own_type"), props.get("des_tp")
+            if want_own and own in PADUS_PUBLIC_OWN:
+                own_rows.append((PADUS_PUBLIC_OWN[own], name, wkt, 4326))
+            if want_park and des in PADUS_PARK_DES:
+                park_rows.append((None, name, wkt, 4326))
+        if len(feats) < 1000:
+            break
+    if own_rows:
+        _insert(con, "ownership", own_rows)
+    if park_rows:
+        _insert(con, "state_park", park_rows)
+    print(f"[padus] {code}: {len(own_rows)} ownership + {len(park_rows)} park", flush=True)
+    return len(own_rows) + len(park_rows)
+
+
 def load_arcgis_features(con, layer, base_url, where, name_field) -> int:
     """Append polygon features from an ArcGIS REST layer (f=geojson) into
     `layer`. Pages by OBJECTID (works on MapServer + FeatureServer alike, and is
@@ -718,11 +795,12 @@ STATES: dict[str, dict] = {
     "SD": {
         "name": "South Dakota",
         "bbox": (-104.1, 42.4, -96.4, 46.0),  # whole state; covers the Black Hills + grasslands
-        # Phase 1: national feeds only (USFS Black Hills NF via the envelope, RIDB
-        # federal campgrounds via the state code). Ownership (BLM SMA) + Custer
-        # State Park / state parks land up in Phase 2.
+        # No state SHP/ArcGIS product like MN's; ownership + state parks (incl.
+        # Custer SP) come from PAD-US (national), which also covers any future
+        # state. USFS forests + RIDB campgrounds are national (auto).
         "shp_sources": [],
         "arcgis_sources": [],
+        "padus_state": "SD",  # PAD-US State_Nm -> ownership + state_park layers
         "campground_loaders": [],  # federal RIDB is national; SD state campgrounds TBD
     },
 }
@@ -758,12 +836,23 @@ def main() -> None:
         for src in STATES[st]["arcgis_sources"]
         if not only or src[0] in only
     ]
-    for layer in dict.fromkeys(src[0] for src in [*shp, *arc]):
+    # PAD-US states feed ownership + state_park too — clear those even when no
+    # SHP/ArcGIS source does, so a PAD-US-only state's layers rebuild cleanly.
+    padus_states = [s for s in states if STATES[s].get("padus_state")]
+    clear_layers = list(dict.fromkeys(src[0] for src in [*shp, *arc]))
+    if padus_states:
+        for lyr in ("ownership", "state_park"):
+            if (not only or lyr in only) and lyr not in clear_layers:
+                clear_layers.append(lyr)
+    for layer in clear_layers:
         clear_layer(con, layer)
     for src in shp:
         total += load_shp(con, *src)
     for src in arc:
         total += load_arcgis_features(con, *src)
+    # PAD-US (national) — ownership + state parks for states that opt in.
+    for s in padus_states:
+        total += load_padus(con, STATES[s]["padus_state"], only)
 
     # National forests — one USFS query over the union of state envelopes
     # (a single query avoids returning a cross-border forest twice).
