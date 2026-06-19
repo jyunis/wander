@@ -143,6 +143,9 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .rd-swatch.rd-special { border-color: #9b59b6; }
 .rd-swatch.rd-other  { border-color: #ffd23d; }
 .roads-legend span:not(.rd-swatch) { margin-right: 8px; }
+.mvum-layers { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 6px; }
+.mvum-opacity { color: var(--muted); font-size: 11px; gap: 6px; }
+.mvum-opacity input[type=range] { flex: 1; accent-color: var(--accent); }
 .road-pop { font-size: 12px; line-height: 1.45; }
 .road-pop-note { margin-top: 6px; color: var(--muted); font-size: 11px;
   border-top: 1px solid var(--line); padding-top: 5px; }

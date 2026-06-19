@@ -7,6 +7,7 @@ disclaimer; an absent DB is inert (the app runs without overlays).
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 import pytest
@@ -218,6 +219,39 @@ def test_api_score_public_only_no_coverage_is_422(tmp_path, monkeypatch):
         r = c.post("/score", json={"bbox": [0.0, 0.0, 0.01, 0.01], "public_only": True})
         assert r.status_code == 422
         assert "public-land" in r.json()["detail"].lower()
+    config_module._settings = None
+
+
+def test_api_mvum_overlays(tmp_path, monkeypatch):
+    mdir = tmp_path / "mvum"
+    mdir.mkdir()
+    (mdir / "x.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 32)
+    (mdir / "manifest.json").write_text(
+        json.dumps([{"key": "x", "name": "X RD", "image": "x.png",
+                     "bounds": [1.0, 2.0, 3.0, 4.0]}])
+    )
+    monkeypatch.setenv("CAIRN_DATA_DIR", str(tmp_path))
+    config_module._settings = None
+    from cairn.api import app
+
+    with TestClient(app) as c:
+        ov = c.get("/mvum").json()["overlays"]
+        assert len(ov) == 1 and ov[0]["key"] == "x"
+        assert ov[0]["url"] == "/mvum/x.png" and ov[0]["bounds"] == [1.0, 2.0, 3.0, 4.0]
+        img = c.get("/mvum/x.png")
+        assert img.status_code == 200 and img.headers["content-type"] == "image/png"
+        assert c.get("/mvum/nope.png").status_code == 404  # missing
+        assert c.get("/mvum/bad-key.png").status_code == 404  # bad key (guarded)
+    config_module._settings = None
+
+
+def test_api_mvum_empty_without_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("CAIRN_DATA_DIR", str(tmp_path))
+    config_module._settings = None
+    from cairn.api import app
+
+    with TestClient(app) as c:
+        assert c.get("/mvum").json()["overlays"] == []
     config_module._settings = None
 
 

@@ -110,6 +110,9 @@ const OWNERSHIP_MIN_ZOOM = 11;
 const ROADS_MIN_ZOOM = 11;
 
 let overlayDefs = []; // from GET /overlays
+let mvumOverlays = []; // from GET /mvum: [{key, name, bounds:[s,w,n,e], url}]
+const mvumLayers = {}; // key -> L.imageOverlay
+let mvumOpacity = 0.75;
 const overlayLayers = {}; // id -> L.GeoJSON
 const overlayActive = new Set();
 const overlayTruncated = new Set(); // layers whose last fetch hit the cap
@@ -174,6 +177,7 @@ async function init() {
   setupMap();
   await loadRuns();
   await initLandOverlays();
+  await initMvum();
   scheduleRoads(); // roads default on — load them for the opening view
 
   $("draw-bbox").onclick = startDraw;
@@ -316,6 +320,10 @@ function setupMap() {
   // Land overlays sit above the basemap + candidate dots, below roads/pins.
   map.createPane("land");
   map.getPane("land").style.zIndex = 250;
+  // MVUM raster overlay sits just above the land fills (so its symbols read)
+  // but below the highlight/roads/pins; opacity is user-controlled.
+  map.createPane("mvum");
+  map.getPane("mvum").style.zIndex = 255;
   // The discovery highlight sits just above the land fills but takes no pointer
   // events, so tapping a highlighted shape still selects whatever land polygon
   // is underneath (lets you jump straight to an adjacent forest/park).
@@ -1254,6 +1262,81 @@ function buildLandToggles() {
     host.appendChild(label);
     label.querySelector("input").onchange = (e) => toggleOverlay(def.id, e.target.checked);
   });
+}
+
+// --- MVUM raster overlays (display-only district map sheets) ---------------
+// Region-gated: the toggle only shows when the map view is over a district that
+// has an MVUM raster (and zoomed in enough to read it) — out of sight in MN etc.
+const MVUM_MIN_ZOOM = 9;
+let _mvumShownKeys = null; // signature of the currently-listed overlays
+
+async function initMvum() {
+  let data;
+  try {
+    data = await (await fetch("/mvum")).json();
+  } catch {
+    return;
+  }
+  mvumOverlays = data.overlays || [];
+  if (!mvumOverlays.length) return;
+  map.on("moveend", updateMvumPanel);
+  updateMvumPanel();
+}
+
+function updateMvumPanel() {
+  const host = $("mvum-layers");
+  if (!host || !mvumOverlays.length) return;
+  const view = map.getBounds();
+  const inView =
+    map.getZoom() >= MVUM_MIN_ZOOM
+      ? mvumOverlays.filter((o) =>
+          L.latLngBounds([o.bounds[0], o.bounds[1]], [o.bounds[2], o.bounds[3]]).intersects(view)
+        )
+      : [];
+  const sig = inView.map((o) => o.key).join(",");
+  if (sig === _mvumShownKeys) return; // visible set unchanged — leave the DOM be
+  _mvumShownKeys = sig;
+  if (!inView.length) {
+    host.hidden = true;
+    host.innerHTML = "";
+    return;
+  }
+  host.hidden = false;
+  host.innerHTML =
+    inView
+      .map(
+        (o) =>
+          `<label><input type="checkbox" data-mvum="${esc(o.key)}"` +
+          `${mvumLayers[o.key] ? " checked" : ""}> 🗺 ${esc(o.name)}</label>`
+      )
+      .join("") +
+    `<label class="mvum-opacity">opacity ` +
+    `<input type="range" id="mvum-opacity" min="0.2" max="1" step="0.05" value="${mvumOpacity}"></label>`;
+  host.querySelectorAll("input[data-mvum]").forEach((cb) => {
+    cb.onchange = (e) => toggleMvum(e.target.dataset.mvum, e.target.checked);
+  });
+  $("mvum-opacity").oninput = (e) => {
+    mvumOpacity = parseFloat(e.target.value);
+    Object.values(mvumLayers).forEach((l) => l.setOpacity(mvumOpacity));
+  };
+}
+
+function toggleMvum(key, on) {
+  if (!on) {
+    if (mvumLayers[key]) {
+      map.removeLayer(mvumLayers[key]);
+      delete mvumLayers[key];
+    }
+    return;
+  }
+  const o = mvumOverlays.find((x) => x.key === key);
+  if (!o || mvumLayers[key]) return;
+  const [s, w, n, e] = o.bounds;
+  mvumLayers[key] = L.imageOverlay(o.url, [[s, w], [n, e]], {
+    opacity: mvumOpacity,
+    pane: "mvum",
+    interactive: false,
+  }).addTo(map);
 }
 
 function toggleOverlay(layerId, on) {

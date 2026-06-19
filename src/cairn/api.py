@@ -457,6 +457,37 @@ async def get_overlay_shape(layer: str, request: Request, name: str):
     return shape
 
 
+@app.get("/mvum")
+async def mvum_overlays(request: Request) -> dict:
+    """Available MVUM raster overlays — georeferenced district map sheets draped
+    as a display-only image layer (TLC-3). These are the rendered USFS MVUMs (the
+    dispersed-camping corridors exist only as drawn symbols, not data). Empty if
+    none are loaded (scripts/load_mvum.py)."""
+    mdir = Path(request.app.state.settings.data_dir) / "mvum"
+    manifest = mdir / "manifest.json"
+    if not manifest.exists():
+        return {"overlays": [], "disclaimer": OVERLAY_DISCLAIMER}
+    items = json.loads(manifest.read_text())
+    for it in items:
+        it["url"] = f"/mvum/{it['key']}.png"
+    return {"overlays": items, "disclaimer": OVERLAY_DISCLAIMER}
+
+
+@app.get("/mvum/{key}.png")
+async def mvum_image(key: str, request: Request):
+    """Serve a registered MVUM raster PNG (display-only)."""
+    if not re.fullmatch(r"[a-z0-9_]+", key):
+        return JSONResponse(status_code=404, content={"error": "NotFound"})
+    p = Path(request.app.state.settings.data_dir) / "mvum" / f"{key}.png"
+    if not p.exists():
+        return JSONResponse(status_code=404, content={"error": "NotFound"})
+    return Response(
+        content=p.read_bytes(),
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @app.get("/saved")
 async def list_saved(request: Request) -> dict:
     """The user's saved places (favorites — dispersed sites + campgrounds)."""
