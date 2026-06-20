@@ -101,6 +101,13 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
   border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; font-size: 12.5px; }
 .goto-row input::placeholder { color: var(--muted); }
 .goto-row input.bad { border-color: #e8786b; }
+.goto-results { margin-top: 6px; border: 1px solid var(--line); border-radius: 7px;
+  overflow: hidden; max-height: 240px; overflow-y: auto; background: #313942; }
+.goto-result { display: block; width: 100%; text-align: left; background: none;
+  color: var(--ink); border: none; border-bottom: 1px solid var(--line);
+  padding: 8px 10px; font-size: 12px; line-height: 1.35; cursor: pointer; }
+.goto-result:last-child { border-bottom: none; }
+.goto-result:hover { background: var(--accent); color: var(--accent-ink); }
 .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .preset { font-size: 12px; padding: 4px 9px; border-radius: 12px;
           background: #313942; border: 1px solid var(--line); color: var(--muted); cursor: pointer; }

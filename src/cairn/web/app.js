@@ -186,6 +186,7 @@ async function init() {
   $("goto-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter") gotoCoords();
   });
+  $("goto-input").addEventListener("input", clearGotoResults);
   $("drop-pin").onclick = toggleDropPin;
   $("score-btn").onclick = runScore;
   // (run selection is now a clickable list — see renderRunsList)
@@ -647,6 +648,7 @@ async function gotoCoords() {
   const raw = (input.value || "").trim();
   if (!raw) return;
   input.classList.remove("bad");
+  clearGotoResults();
 
   // Fast path: a pasted "lat, lon" jumps immediately, no network.
   const ll = parseLatLon(raw);
@@ -666,29 +668,68 @@ async function gotoCoords() {
       `/geocode?q=${encodeURIComponent(raw)}&viewbox=${encodeURIComponent(viewbox)}`
     );
     const data = await r.json();
-    const hit = (data.results || [])[0];
-    if (!hit) {
+    const results = data.results || [];
+    if (!results.length) {
       input.classList.add("bad");
       setStatus(`No place found for “${raw}”.`, "err");
       return;
     }
-    if (hit.bbox) {
-      // Fit a forest/city extent rather than a fixed zoom.
-      map.fitBounds([[hit.bbox[1], hit.bbox[0]], [hit.bbox[3], hit.bbox[2]]], {
-        padding: [20, 20],
-        maxZoom: 15,
-      });
-    } else {
-      map.setView([hit.lat, hit.lon], 13);
-    }
-    dropGotoMarker(hit.lat, hit.lon, hit.display_name || raw, null);
     setStatus("");
+    if (results.length === 1) {
+      gotoHit(results[0]); // unambiguous — jump straight through
+    } else {
+      renderGotoResults(results); // ambiguous — let the user pick the right one
+    }
   } catch {
     input.classList.add("bad");
     setStatus("Geocoding failed — check the connection.", "err");
   } finally {
     input.classList.remove("loading");
   }
+}
+
+// Jump the map to one geocode hit: fit its extent if it has a bbox, else a
+// fixed zoom. Drops the cyan goto marker labeled with the full place name.
+function gotoHit(hit) {
+  if (hit.bbox) {
+    // Fit a forest/city extent rather than a fixed zoom.
+    map.fitBounds([[hit.bbox[1], hit.bbox[0]], [hit.bbox[3], hit.bbox[2]]], {
+      padding: [20, 20],
+      maxZoom: 15,
+    });
+  } else {
+    map.setView([hit.lat, hit.lon], 13);
+  }
+  dropGotoMarker(hit.lat, hit.lon, hit.display_name || "", null);
+  if (isMobile()) setNav(false); // reveal the map after picking
+}
+
+// Render the candidate list under the search box so an ambiguous query
+// ("Needles Highway" — SD vs CA) can be disambiguated by its full label.
+function renderGotoResults(results) {
+  const host = $("goto-results");
+  host.innerHTML = "";
+  for (const hit of results) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "goto-result";
+    item.textContent =
+      hit.display_name || `${hit.lat.toFixed(4)}, ${hit.lon.toFixed(4)}`;
+    item.title = item.textContent;
+    item.onclick = () => {
+      clearGotoResults();
+      gotoHit(hit);
+    };
+    host.appendChild(item);
+  }
+  host.hidden = false;
+}
+
+function clearGotoResults() {
+  const host = $("goto-results");
+  if (!host) return;
+  host.innerHTML = "";
+  host.hidden = true;
 }
 
 function dropGotoMarker(lat, lon, label, zoom) {
