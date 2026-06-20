@@ -303,7 +303,7 @@ function isMobile() {
 
 function setupMap() {
   // Zoom on the right so the floating menu button can live top-left.
-  map = L.map("map", { zoomControl: false }).setView([47.9, -91.86], 11);
+  map = L.map("map", { zoomControl: false }).setView([46.3, -94.3], 7);
   L.control.zoom({ position: "topright" }).addTo(map);
   addBasemapControl(); // small on-map style picker (synced with the panel select)
   addMeasureControl(); // 📏 distance ruler (independent of the scoring tools)
