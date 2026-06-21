@@ -441,7 +441,10 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .run-row { display: flex; align-items: center; gap: 6px; padding: 8px 10px;
   border-radius: 7px; background: rgba(255, 255, 255, 0.035); border: 1px solid var(--line); }
 .run-row:hover { border-color: var(--accent); background: rgba(255, 255, 255, 0.06); }
-.run-row.active { border-color: var(--accent); background: rgba(91, 156, 90, 0.10); }
+.run-row.active { border-color: var(--accent); background: rgba(91, 156, 90, 0.18);
+  border-left: 3px solid var(--accent); padding-left: 8px;
+  box-shadow: 0 0 0 1px var(--accent) inset; }
+.run-row.active .run-row-name { color: var(--accent); }
 .run-row-main { flex: 1; overflow: hidden; cursor: pointer; }
 .run-row-name { font-size: 12.5px; font-weight: 600; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }

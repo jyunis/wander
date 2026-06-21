@@ -929,9 +929,12 @@ function renderRunsList() {
         r.status !== "done"
           ? ` <span class="run-pill run-${esc(r.status)}">${esc(r.status)}</span>`
           : "";
+      const shown = r.id === activeRunId;
+      const tip = shown ? "Tap to hide this run" : "Tap to show this run on the map";
       return (
-        `<div class="run-row${r.id === activeRunId ? " active" : ""}" data-id="${r.id}">` +
-        `<div class="run-row-main"><div class="run-row-name">${esc(runLabel(r))}${pill}</div>` +
+        `<div class="run-row${shown ? " active" : ""}" data-id="${r.id}">` +
+        `<div class="run-row-main" title="${tip}">` +
+        `<div class="run-row-name">${esc(runLabel(r))}${pill}</div>` +
         `<div class="run-row-sub">${meta}</div></div>` +
         `<button class="run-rename" title="Rename run">✎</button>` +
         `<button class="run-del" title="Delete run">×</button></div>`
@@ -941,6 +944,10 @@ function renderRunsList() {
   host.querySelectorAll(".run-row").forEach((row) => {
     const id = parseInt(row.dataset.id, 10);
     row.querySelector(".run-row-main").onclick = () => {
+      if (id === activeRunId) {
+        clearRun(); // re-tapping the shown run hides its results
+        return;
+      }
       if (isMobile()) setNav(false); // mobile: close the drawer so the map shows
       loadRun(id);
     };
