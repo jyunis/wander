@@ -22,6 +22,7 @@ from cairn.store.types import Bbox
 # Display titles + a stable render order for the UI Land panel.
 LAYER_TITLES: dict[str, str] = {
     "campground": "Campgrounds",
+    "dispersed": "Dispersed sites",
     "ownership": "Public land ownership",
     "national_forest": "National Forest",
     "national_park": "National Park Service",
@@ -29,12 +30,13 @@ LAYER_TITLES: dict[str, str] = {
     "state_park": "State Parks",
 }
 LAYER_ORDER = [
-    "campground", "national_forest", "national_park", "state_forest", "state_park", "ownership"
+    "campground", "dispersed", "national_forest", "national_park",
+    "state_forest", "state_park", "ownership",
 ]
 
 # Point layers live in `overlay_points` (markers); everything else is a polygon
 # layer in `overlay_features`.
-POINT_LAYERS = {"campground"}
+POINT_LAYERS = {"campground", "dispersed"}
 
 # Simplification tolerance (degrees, ~110 m) for the discovery-highlight outline
 # served by `get_shape`. Coarse on purpose: even a national forest's full

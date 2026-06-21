@@ -170,6 +170,16 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
           0 1px 3px rgba(0,0,0,.5); cursor: pointer; }
 .cg-pop { min-width: 150px; }
 .cg-cat { color: #888; font-size: 11px; }
+/* Dispersed-site marker: square-ish "fire ring" pin, distinct from the round
+   campground tent; hike-in sites are dimmed so drive-in reads as primary. */
+.disp-pin { width: 20px; height: 20px; line-height: 20px; text-align: center; font-size: 12px;
+            border-radius: 5px; background: var(--disp, #c2410c); box-shadow: 0 0 0 2px #fff,
+            0 1px 3px rgba(0,0,0,.5); cursor: pointer; }
+.disp-pin.hike { opacity: 0.6; filter: grayscale(0.3); }
+.disp-badge { display: inline-block; background: #fde7d6; color: #7c2d12; border-radius: 4px;
+              padding: 1px 7px; font-size: 11px; font-weight: 600; }
+.disp-badge.hike { background: #e8eef0; color: #334155; }
+.disp-note { font-size: 11px; color: #555; margin-top: 6px; line-height: 1.35; }
 .cg-badges { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 6px; }
 .cg-badges span { background: #eef1ee; color: #2a2f35; border-radius: 4px; padding: 1px 6px;
                   font-size: 11px; white-space: nowrap; }

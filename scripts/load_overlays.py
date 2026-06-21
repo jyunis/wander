@@ -38,8 +38,15 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-import shapefile  # pyshp
-from shapely.geometry import shape
+# Only the SHP/ArcGIS polygon loaders need these; the OSM (campground/dispersed)
+# path and the pure tag filters don't. Guarded so the module imports for tests
+# even where pyshp/shapely aren't installed (run loaders with `--with pyshp shapely`).
+try:
+    import shapefile  # pyshp
+    from shapely.geometry import shape
+except ModuleNotFoundError:  # pragma: no cover
+    shapefile = None
+    shape = None
 
 DB = os.environ.get("OVERLAYS_DB", "/data/overlays.db")
 UA = {"User-Agent": "cairn-overlays-loader (+http://cairn.home.arpa)"}
@@ -755,6 +762,151 @@ def osm_state_park_campgrounds(iso: str):
     return _load
 
 
+DISPERSED_LAYER = "dispersed"
+
+# OSM camp_site values that mean a developed or sub-pitch site, not a dispersed
+# one. (camp_site=basic / informal / backcountry are the positive keepers.)
+_DEVELOPED_CAMP_SITE = {"standard", "serviced", "deluxe", "pitch"}
+# Names that betray a developed/commercial site even when OSM omits operator/fee
+# (sparse rural tagging is why the strict filter can't rely on those alone).
+_DEVELOPED_NAME_RE = re.compile(
+    r"camp\s?ground|\bcg\b|koa|\bresort\b|\brv\b|\bcottages?\b|\bcabins?\b|"
+    r"\branch\b|\blodge\b|\bretreat\b|\bglamping\b|\bmotel\b|\bhotel\b",
+    re.I,
+)
+# Tags that mark a run-as-a-business site (a real dispersed spot is near-bare).
+_COMMERCIAL_TAGS = (
+    "website", "contact:website", "phone", "contact:phone",
+    "addr:housenumber", "brand", "operator",
+)
+
+
+def _is_dispersed(tags: dict) -> bool:
+    """STRICT 'primitive dispersed' filter over OSM tourism=camp_site tags.
+    camp_site=basic / backcountry / informal are kept outright. Otherwise a site
+    is kept ONLY if it's a near-bare, non-commercial camp_site node — anything
+    with a fee/operator/reservation, a business tag (website/phone/address), an
+    individual pitch, private access, or a developed/commercial name is dropped
+    (those belong to the `campground` layer, not here)."""
+    if str(tags.get("access", "")).lower() in ("private", "no", "permit"):
+        return False
+    cs = str(tags.get("camp_site", "")).lower()
+    if cs in _DEVELOPED_CAMP_SITE:
+        return False
+    # Positive primitive signals — keep regardless of (rare) other tags.
+    if cs == "basic" or _truthy(tags.get("backcountry")) or _truthy(tags.get("informal")):
+        return True
+    # Otherwise keep only bare, non-commercial nodes.
+    if tags.get("operator") or _truthy(tags.get("fee")):
+        return False
+    if str(tags.get("reservation", "")).lower() in ("yes", "required"):
+        return False
+    if any(tags.get(t) for t in _COMMERCIAL_TAGS):
+        return False
+    if _DEVELOPED_NAME_RE.search(tags.get("name") or ""):
+        return False
+    return True
+
+
+# A real dispersed spot sits a stone's throw from where you'd park — and OSM
+# campgrounds are often re-tagged camp_site nodes, so anything this close to a
+# known campground is almost certainly that campground, not a separate site.
+DISPERSED_CAMPGROUND_DEDUP_M = 250.0
+
+
+def _in_forest(con, lon: float, lat: float):
+    """The national_forest / state_forest boundary containing a point -> its name,
+    or None. Dispersed camping is fundamentally an NF/state-forest thing, so this
+    is the gate that strips private land + town noise OSM tags can't catch. Needs
+    those boundary layers loaded first (main() loads them before campgrounds)."""
+    return con.execute(
+        "SELECT name FROM overlay_features "
+        "WHERE layer IN ('national_forest','state_forest') AND ROWID IN ("
+        "  SELECT ROWID FROM SpatialIndex WHERE f_table_name='overlay_features' "
+        "  AND f_geometry_column='geom' AND search_frame=MakePoint(?, ?, 4326)) "
+        "AND ST_Contains(geom, MakePoint(?, ?, 4326)) LIMIT 1",
+        (lon, lat, lon, lat),
+    ).fetchone()
+
+
+def _near_campground(con, lon: float, lat: float) -> bool:
+    """True if a known campground point is within DISPERSED_CAMPGROUND_DEDUP_M —
+    used to drop OSM camp_site nodes that are really developed campgrounds we
+    already carry in the `campground` layer."""
+    rdeg = DISPERSED_CAMPGROUND_DEDUP_M / 111_000.0
+    row = con.execute(
+        "SELECT MIN(ST_Distance(MakePoint(?, ?, 4326), geom, 1)) "
+        "FROM overlay_points WHERE layer='campground' AND ROWID IN ("
+        "  SELECT ROWID FROM SpatialIndex WHERE f_table_name='overlay_points' "
+        "  AND f_geometry_column='geom' AND search_frame=BuildCircleMbr(?, ?, ?, 4326))",
+        (lon, lat, lon, lat, rdeg),
+    ).fetchone()
+    return row is not None and row[0] is not None and row[0] <= DISPERSED_CAMPGROUND_DEDUP_M
+
+
+def load_dispersed(con, states) -> int:
+    """The `dispersed` point layer: established primitive/dispersed campsites from
+    OSM (tourism=camp_site), per the strict filter in `_is_dispersed`. National —
+    one Overpass query per state area, so any configured state is covered.
+
+    Two extra gates cut the OSM noise (private/town sites + dup campgrounds):
+    kept only if (1) inside a national_forest OR state_forest boundary, and (2)
+    not within DISPERSED_CAMPGROUND_DEDUP_M of a known campground. backcountry=yes
+    is KEPT but flagged meta.access='hike-in' (not towable by the teardrop).
+    Display-only (TLC-3), NEVER scored — an existing fire ring is a lower-impact,
+    safer-legal bet, not an assertion that camping is legal."""
+    con.execute("DELETE FROM overlay_points WHERE layer=?", (DISPERSED_LAYER,))
+    con.commit()
+    total = 0
+    for st in states:
+        iso = f"US-{st}"
+        query = (
+            "[out:json][timeout:180];"
+            f'area["ISO3166-2"="{iso}"]->.a;'
+            '(node["tourism"="camp_site"](area.a);way["tourism"="camp_site"](area.a););'
+            "out center tags;"
+        )
+        print(f"[dispersed] OSM {iso} …", flush=True)
+        try:
+            els = _overpass(query).get("elements", [])
+        except Exception as exc:
+            print(f"[dispersed]   OSM {iso} SKIPPED: {exc}", flush=True)
+            continue
+        rows, dropped_land, dropped_cg = [], 0, 0
+        for el in els:
+            tags = el.get("tags") or {}
+            if not _is_dispersed(tags):
+                continue
+            lat = el.get("lat") or (el.get("center") or {}).get("lat")
+            lon = el.get("lon") or (el.get("center") or {}).get("lon")
+            if lat is None or lon is None:
+                continue
+            forest = _in_forest(con, lon, lat)
+            if not forest:
+                dropped_land += 1
+                continue  # only dispersed sites on national/state forest land
+            if _near_campground(con, lon, lat):
+                dropped_cg += 1
+                continue  # a known campground re-tagged as camp_site — not dispersed
+            meta = _compact({
+                "access": "hike-in" if _truthy(tags.get("backcountry")) else "drive-in",
+                "camp_site": str(tags.get("camp_site", "")).lower() or None,
+                "forest": forest[0] or None,
+                "source": "osm",
+            })
+            name = tags.get("name") or "Dispersed site"
+            rows.append(("Dispersed site", name, None, meta, f"POINT({lon} {lat})", 4326))
+        _insert_points(con, DISPERSED_LAYER, rows)
+        print(
+            f"[dispersed]   OSM {iso}: {len(rows)} kept "
+            f"(dropped {dropped_land} off-forest, {dropped_cg} near-campground)",
+            flush=True,
+        )
+        total += len(rows)
+    print(f"[dispersed] total: {total}", flush=True)
+    return total
+
+
 # WI DNR managed-property layer: all DNR-owned properties (parks, forests, rec
 # areas, wildlife areas, …) keyed by PROP_NAME — there's no per-type service, so
 # parks vs forests are selected by name. (data-wi-dnr.opendata.arcgis.com backs
@@ -881,6 +1033,8 @@ def main() -> None:
 
     if not only or CAMPGROUND_LAYER in only:
         total += load_campgrounds(con, states)
+    if not only or DISPERSED_LAYER in only:
+        total += load_dispersed(con, states)
     print("--- overlay_features (polygons) ---", flush=True)
     for lyr, c in con.execute(
         "SELECT layer, COUNT(*) FROM overlay_features GROUP BY layer ORDER BY layer"

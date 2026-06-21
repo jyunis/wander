@@ -103,6 +103,8 @@ const CAMPGROUND_COLORS = {
   "State Park": "#b5651d",
   "State Forest": "#6b8e23",
 };
+// Dispersed-site marker tint (a single category; hike-in is dimmed via CSS).
+const DISPERSED_COLOR = "#c2410c";
 // Below this zoom, ownership parcels are too numerous/tiny to fetch usefully.
 const OWNERSHIP_MIN_ZOOM = 11;
 // Roads are a zoomed-in detail; below this we don't refetch (a wide viewport
@@ -203,6 +205,7 @@ async function init() {
     const el = $(id);
     if (el) el.addEventListener("input", applyCampgroundFilters);
   });
+  if ($("f-disp-hike")) $("f-disp-hike").addEventListener("input", applyDispersedFilter);
   $("sheet-close").onclick = closeSite;
   $("sheet-handle").onclick = () => $("sheet").classList.toggle("collapsed");
   // Sidebar: a left column on desktop (collapsible), an overlay drawer on
@@ -1395,6 +1398,7 @@ function toggleOverlay(layerId, on) {
     delete overlayLayers[layerId];
   }
   if (layerId === "campground" && $("cg-filters")) $("cg-filters").hidden = !on;
+  if (layerId === "dispersed" && $("disp-filters")) $("disp-filters").hidden = !on;
   if (on) fetchOverlay(layerId);
   renderLandLegend();
   updateLandHint();
@@ -1450,12 +1454,29 @@ function renderOverlayLayer(layerId, gj) {
   const isOwn = layerId === "ownership";
   const isPoint =
     (gj.geom_type || overlayDefs.find((d) => d.id === layerId)?.geom_type) === "point";
+  const isDispersed = layerId === "dispersed";
   const gjLayer = L.geoJSON(gj, {
     pane: "land",
-    filter: isPoint ? (feat) => matchesCampground(feat.properties) : undefined,
+    filter: isPoint
+      ? (feat) =>
+          isDispersed
+            ? matchesDispersed(feat.properties)
+            : matchesCampground(feat.properties)
+      : undefined,
     style: isPoint ? undefined : (feat) => overlayStyle(layerId, feat),
     pointToLayer: isPoint
       ? (feat, latlng) => {
+          if (isDispersed) {
+            const hike = ((feat.properties || {}).meta || {}).access === "hike-in";
+            return L.marker(latlng, {
+              icon: L.divIcon({
+                className: "",
+                html: `<div class="disp-pin${hike ? " hike" : ""}" style="--disp:${DISPERSED_COLOR}">🔥</div>`,
+                iconSize: [20, 20],
+                iconAnchor: [10, 10],
+              }),
+            });
+          }
           const c = CAMPGROUND_COLORS[(feat.properties || {}).category] || "#d96c2c";
           return L.marker(latlng, {
             icon: L.divIcon({
@@ -1471,7 +1492,8 @@ function renderOverlayLayer(layerId, gj) {
       const p = feat.properties || {};
       if (isPoint) {
         const [clon, clat] = feat.geometry.coordinates;
-        lyr.bindPopup(() => campgroundCard(p, clat, clon), { maxWidth: 250, className: "cg-popup" });
+        const card = isDispersed ? dispersedCard : campgroundCard;
+        lyr.bindPopup(() => card(p, clat, clon), { maxWidth: 250, className: "cg-popup" });
       } else {
         const tip = isOwn
           ? `${p.category || "—"}${p.name ? " · " + p.name + " Co." : ""}`
@@ -1493,6 +1515,10 @@ function renderOverlayLayer(layerId, gj) {
   if (layerId === "campground") {
     campgroundGj = gj;
     updateCgCount(gj);
+  }
+  if (layerId === "dispersed") {
+    dispersedGj = gj;
+    updateDispCount(gj);
   }
 }
 
@@ -1643,6 +1669,33 @@ function applyCampgroundFilters() {
   }
 }
 
+// --- dispersed-site filter -------------------------------------------------
+// The layer is overwhelmingly paddle/hike-in backcountry (BWCA). Default to
+// drive-in only so the ~80 teardrop-reachable sites aren't buried; the
+// "show hike-in" checkbox brings the backcountry ones back.
+let dispersedGj = null;
+
+function matchesDispersed(props) {
+  const cb = $("f-disp-hike");
+  if (!cb || cb.checked) return true; // panel not built yet, or hike-in shown
+  return (props.meta || {}).access !== "hike-in";
+}
+
+function applyDispersedFilter() {
+  if (overlayActive.has("dispersed") && dispersedGj) {
+    renderOverlayLayer("dispersed", dispersedGj);
+  }
+}
+
+function updateDispCount(gj) {
+  const el = $("disp-filt-count");
+  if (!el) return;
+  const feats = gj.features || [];
+  const shown = feats.filter((f) => matchesDispersed(f.properties)).length;
+  const hidden = feats.length - shown;
+  el.textContent = hidden > 0 ? `${shown} shown · ${hidden} hike-in hidden` : `${shown} shown`;
+}
+
 function updateCgCount(gj) {
   const el = $("cg-filt-count");
   if (!el) return;
@@ -1735,6 +1788,29 @@ function campgroundCard(p, lat, lon) {
     `<div class="cg-actions">` +
     (href ? `<a class="cg-link" href="${esc(href)}" target="_blank" rel="noopener">${label} ↗</a>` : "") +
     tripBtn +
+    `</div></div>`
+  );
+}
+
+// Popup for an established dispersed/primitive site (display-only). An existing
+// site usually means a fire ring is already there — lower-impact and a safer
+// legal bet — but it still doesn't establish legality (TLC-3), so the reminder
+// stays. Lean by design; ★ save / trip-add come in M2.
+function dispersedCard(p, lat, lon) {
+  const m = p.meta || {};
+  const hike = m.access === "hike-in";
+  const badge = hike
+    ? `<span class="disp-badge hike">🥾 hike-in</span>`
+    : `<span class="disp-badge">🚗 drive-in</span>`;
+  const maps = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
+  return (
+    `<div class="cg-pop disp-pop">` +
+    `<b>🔥 ${esc(p.name) || "Dispersed site"}</b>` +
+    `<div class="cg-cat">${badge}</div>` +
+    `<div class="disp-note">Established dispersed site — likely an existing fire ring, ` +
+    `lower-impact. Still verify camping is allowed here with the managing agency.</div>` +
+    `<div class="cg-actions">` +
+    `<a class="cg-link" href="${maps}" target="_blank" rel="noopener">Open in Google Maps ↗</a>` +
     `</div></div>`
   );
 }
