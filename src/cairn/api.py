@@ -191,7 +191,7 @@ class RunUpdateRequest(BaseModel):
 
 
 class SavedRequest(BaseModel):
-    kind: str = Field(..., description="'site' or 'campground'")
+    kind: str = Field(..., description="'site', 'campground', or 'dispersed'")
     name: str | None = None
     lat: float
     lon: float
@@ -503,8 +503,8 @@ def _check_rating(rating: float | None) -> None:
 @app.post("/saved")
 async def add_saved(req: SavedRequest, request: Request) -> JSONResponse:
     store: Store = request.app.state.store
-    if req.kind not in ("site", "campground"):
-        raise ValidationError("kind must be 'site' or 'campground'")
+    if req.kind not in ("site", "campground", "dispersed"):
+        raise ValidationError("kind must be 'site', 'campground', or 'dispersed'")
     _check_rating(req.rating)
     row = await store.add_saved(
         req.kind, req.name, req.lat, req.lon, req.payload, req.note, req.rating

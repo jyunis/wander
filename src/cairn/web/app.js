@@ -1802,15 +1802,22 @@ function dispersedCard(p, lat, lon) {
   const badge = hike
     ? `<span class="disp-badge hike">🥾 hike-in</span>`
     : `<span class="disp-badge">🚗 drive-in</span>`;
+  const forest = m.forest ? ` <span class="disp-forest">${esc(m.forest)}</span>` : "";
   const maps = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
+  const payload = { category: p.category, name: p.name, meta: p.meta };
+  const star =
+    lat != null && lon != null ? starButton("dispersed", lat, lon, p.name, payload) : "";
+  const tripBtn =
+    lat != null && lon != null ? tripAddButton("dispersed", lat, lon, p.name, payload) : "";
   return (
-    `<div class="cg-pop disp-pop">` +
+    `<div class="cg-pop disp-pop">${star}` +
     `<b>🔥 ${esc(p.name) || "Dispersed site"}</b>` +
-    `<div class="cg-cat">${badge}</div>` +
+    `<div class="cg-cat">${badge}${forest}</div>` +
     `<div class="disp-note">Established dispersed site — likely an existing fire ring, ` +
     `lower-impact. Still verify camping is allowed here with the managing agency.</div>` +
     `<div class="cg-actions">` +
     `<a class="cg-link" href="${maps}" target="_blank" rel="noopener">Open in Google Maps ↗</a>` +
+    tripBtn +
     `</div></div>`
   );
 }
@@ -1838,6 +1845,7 @@ function renderLandLegend() {
   };
   if (overlayActive.has("ownership")) addKeys(OWNERSHIP_COLORS, false);
   if (overlayActive.has("campground")) addKeys(CAMPGROUND_COLORS, true);
+  if (overlayActive.has("dispersed")) addKeys({ "Dispersed site 🔥": DISPERSED_COLOR }, true);
 }
 
 function updateLandHint() {
@@ -2299,11 +2307,14 @@ function renderSavedList() {
   const shown = savedPlaces.filter(placePassesFilter);
   host.innerHTML = shown
     .map((s) => {
-      // Three kinds share the list: a campground, a Cairn-scored dispersed
-      // site (payload carries a total), and a manually dropped pin (no score).
+      // Kinds share the list: a campground, an established dispersed site (OSM
+      // reference), a Cairn-scored site (payload carries a total), and a
+      // manually dropped pin (no score).
       const scored = s.kind === "site" && s.payload && s.payload.total != null;
-      const icon = s.kind === "campground" ? "🏕" : scored ? "⛺" : "📍";
-      const label = s.name || (scored ? "Scored site" : "Dropped pin");
+      const icon =
+        s.kind === "campground" ? "🏕" : s.kind === "dispersed" ? "🔥" : scored ? "⛺" : "📍";
+      const label =
+        s.name || (s.kind === "dispersed" ? "Dispersed site" : scored ? "Scored site" : "Dropped pin");
       const coords = `${(+s.lat).toFixed(4)}, ${(+s.lon).toFixed(4)}`;
       const score = scored
         ? ` · <span class="saved-score">score ${s.payload.total.toFixed(2)}</span>`
@@ -2370,6 +2381,23 @@ function reopenSaved(s) {
         iconAnchor: [11, 11],
       }),
     }).bindPopup(() => campgroundCard(payload, s.lat, s.lon), {
+      maxWidth: 250,
+      className: "cg-popup",
+    });
+    selectedMarker.on("popupclose", clearSelectedMarker);
+    selectedMarker.addTo(map).openPopup();
+  } else if (s.kind === "dispersed") {
+    closeSite();
+    const payload = s.payload || { name: s.name };
+    const hike = (payload.meta || {}).access === "hike-in";
+    selectedMarker = L.marker([s.lat, s.lon], {
+      icon: L.divIcon({
+        className: "",
+        html: `<div class="disp-pin cg-near${hike ? " hike" : ""}" style="--disp:${DISPERSED_COLOR}">🔥</div>`,
+        iconSize: [22, 22],
+        iconAnchor: [11, 11],
+      }),
+    }).bindPopup(() => dispersedCard(payload, s.lat, s.lon), {
       maxWidth: 250,
       className: "cg-popup",
     });
@@ -2717,14 +2745,26 @@ function renderTripDetail() {
 function memberIcon(m) {
   const scored = m.kind === "site" && m.payload && m.payload.total != null;
   return {
-    icon: m.kind === "campground" ? "🏕" : scored ? "⛺" : "📍",
-    label: m.name || (m.kind === "campground" ? "Campground" : scored ? "Scored site" : "Dropped pin"),
+    icon:
+      m.kind === "campground" ? "🏕" : m.kind === "dispersed" ? "🔥" : scored ? "⛺" : "📍",
+    label:
+      m.name ||
+      (m.kind === "campground"
+        ? "Campground"
+        : m.kind === "dispersed"
+          ? "Dispersed site"
+          : scored
+            ? "Scored site"
+            : "Dropped pin"),
   };
 }
 
 // What a member IS (kind) — independent of its role (first choice vs backup).
 function kindWord(kind) {
-  return kind === "campground" ? "campground" : kind === "site" ? "dispersed site" : "dropped pin";
+  if (kind === "campground") return "campground";
+  if (kind === "dispersed") return "dispersed site";
+  if (kind === "site") return "scored site";
+  return "dropped pin";
 }
 
 function tripMemberRow(m) {
@@ -3303,7 +3343,13 @@ function renderCollPickerBody(pick, place) {
       );
     })
     .join("");
-  const title = place.name || (place.kind === "campground" ? "Campground" : "Place");
+  const title =
+    place.name ||
+    (place.kind === "campground"
+      ? "Campground"
+      : place.kind === "dispersed"
+        ? "Dispersed site"
+        : "Place");
   pick.innerHTML =
     `<div class="coll-pick-head"><span class="coll-pick-title">${esc(title)}</span>` +
     `<button class="coll-pick-close" title="Done">×</button></div>` +

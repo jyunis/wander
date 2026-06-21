@@ -251,6 +251,20 @@ def test_saved_bad_kind_is_422(client):
     assert r.status_code == 422
 
 
+def test_saved_dispersed_kind_ok(client):
+    # Dispersed overlay sites are saveable like campgrounds (★ from the popup).
+    r = client.post(
+        "/saved",
+        json={"kind": "dispersed", "name": "Fire ring spur", "lat": 47.4, "lon": -94.1,
+              "payload": {"meta": {"access": "drive-in", "forest": "Chippewa National Forest"}}},
+    )
+    assert r.status_code == 201
+    row = r.json()
+    assert row["kind"] == "dispersed"
+    saved = client.get("/saved").json()["saved"]
+    assert any(s["id"] == row["id"] and s["kind"] == "dispersed" for s in saved)
+
+
 def test_saved_patch_renames(client):
     sid = client.post(
         "/saved", json={"kind": "site", "name": "old", "lat": 1.0, "lon": 2.0}
@@ -264,7 +278,8 @@ def test_saved_patch_renames(client):
 def test_saved_rating_and_partial_update(client):
     # Save with a star rating.
     r = client.post(
-        "/saved", json={"kind": "site", "name": "Glove Lake", "lat": 47.79, "lon": -94.1, "rating": 4}
+        "/saved",
+        json={"kind": "site", "name": "Glove Lake", "lat": 47.79, "lon": -94.1, "rating": 4},
     )
     assert r.status_code == 201 and r.json()["rating"] == 4
     sid = r.json()["id"]

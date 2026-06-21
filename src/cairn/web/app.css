@@ -180,6 +180,7 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
               padding: 1px 7px; font-size: 11px; font-weight: 600; }
 .disp-badge.hike { background: #e8eef0; color: #334155; }
 .disp-note { font-size: 11px; color: #555; margin-top: 6px; line-height: 1.35; }
+.disp-forest { color: #6b8e23; font-size: 11px; margin-left: 4px; }
 .cg-badges { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 6px; }
 .cg-badges span { background: #eef1ee; color: #2a2f35; border-radius: 4px; padding: 1px 6px;
                   font-size: 11px; white-space: nowrap; }
