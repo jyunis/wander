@@ -1154,7 +1154,7 @@ function renderRoads(gj) {
     roadsLayer.addLayer(
       L.geoJSON(f, {
         interactive: false,
-        style: { color, weight: w, opacity: 0.9, dashArray: p.rough ? "5 4" : null, lineCap: "round" },
+        style: { color, weight: w, opacity: 0.7, dashArray: p.rough ? "5 4" : null, lineCap: "round" },
       })
     );
     const hit = L.geoJSON(f, {
