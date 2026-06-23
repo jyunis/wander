@@ -107,9 +107,11 @@ const CAMPGROUND_COLORS = {
 const DISPERSED_COLOR = "#c2410c";
 // Below this zoom, ownership parcels are too numerous/tiny to fetch usefully.
 const OWNERSHIP_MIN_ZOOM = 11;
-// Roads are a zoomed-in detail; below this we don't refetch (a wide viewport
-// would pull the whole region). Keeps general browsing cheap.
-const ROADS_MIN_ZOOM = 11;
+// Roads are a close-zoom detail: below this they're hidden entirely (a wide
+// viewport would pull the whole region — keeps browsing cheap). The same
+// threshold gates forest-shape discovery taps: at/above it you're working with
+// roads, so a missed road tap shouldn't yank the map out to the whole forest.
+const ROADS_MIN_ZOOM = 13;
 
 let overlayDefs = []; // from GET /overlays
 let mvumOverlays = []; // from GET /mvum: [{key, name, bounds:[s,w,n,e], url}]
@@ -1074,7 +1076,12 @@ function scheduleRoads() {
 
 async function loadRoadsForView() {
   if (!$("layer-roads").checked) return; // layer off — nothing to fetch
-  if (map.getZoom() < ROADS_MIN_ZOOM) return; // too far out — keep what's drawn
+  if (map.getZoom() < ROADS_MIN_ZOOM) {
+    // Close-zoom detail only — clear what's drawn so roads don't linger zoomed out.
+    roadsLayer.clearLayers();
+    _roadsBounds = null;
+    return;
+  }
   const view = map.getBounds();
   // Already have this area (we fetch a padded box, so small pans don't refetch).
   // Re-fetch if the layer was cleared out from under us (e.g. trip-plot view).
@@ -1502,9 +1509,13 @@ function renderOverlayLayer(layerId, gj) {
         // Tap a forest/park polygon -> highlight the whole named shape + fit.
         // Skip while measuring so the tap drops a ruler point instead (Leaflet
         // still bubbles the click to the map handler that adds the point).
+        // Skip when zoomed in (roads visible): forest-shape discovery is a
+        // zoomed-out action, and a missed road tap shouldn't yank the view out
+        // to the whole forest.
         if (SHAPE_LAYERS.has(layerId) && p.name) {
           lyr.on("click", () => {
             if (measuring) return;
+            if (map.getZoom() >= ROADS_MIN_ZOOM) return;
             selectShape(layerId, p.name);
           });
         }
