@@ -1155,6 +1155,9 @@ function renderRoads(gj) {
     });
     hit.bindTooltip(label + (mv && mv.season ? ` · ${mv.season}` : ""), { sticky: true });
     hit.bindPopup(roadPopup(p, mv, label), { maxWidth: 260 });
+    // Tooltip is the desktop hover-preview; on tap the popup opens, so close the
+    // tooltip to avoid showing both at once.
+    hit.on("popupopen", () => hit.closeTooltip());
     roadsLayer.addLayer(hit);
   });
 }
