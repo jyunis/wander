@@ -58,18 +58,18 @@ const BASEMAPS = [
   {
     id: "satellite",
     name: "Satellite (labeled)",
-    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    // MapTiler "hybrid" (satellite + roads/labels in ONE tile) served through
+    // our own nginx tile cache (wander.home.arpa/tiles/...), which injects the API
+    // key server-side and caches to disk. One request instead of the old 3-layer
+    // Esri stack; first load is CDN-fast, revisits are local. See deploy/cairn.conf.
+    url: "/tiles/satellite/{z}/{x}/{y}",
     options: {
-      maxNativeZoom: 19,
-      maxZoom: 19,
-      attribution: "Imagery © Esri — Esri, Maxar, Earthstar Geographics, and the GIS community",
+      maxNativeZoom: 20,
+      maxZoom: 20,
+      attribution:
+        '© <a href="https://www.maptiler.com/copyright/">MapTiler</a> © ' +
+        '<a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     },
-    // Transparent reference overlays stacked on the imagery: roads +
-    // place/water labels (the standard Esri imagery hybrid).
-    labels: [
-      "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}",
-      "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
-    ],
   },
   {
     id: "streets",
