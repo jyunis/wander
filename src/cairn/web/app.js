@@ -1139,19 +1139,23 @@ function renderRoads(gj) {
     // Color: special-designation MVUM roads stand out (purple); other forest/
     // MVUM roads orange; non-MVUM drivable yellow. Rough → dashed (unchanged).
     const color = mv && mv.special ? "#9b59b6" : forest ? "#ff7a00" : "#ffd23d";
-    const line = L.geoJSON(f, {
-      style: {
-        color,
-        weight: roadWeight(forest),
-        opacity: 0.9,
-        dashArray: p.rough ? "5 4" : null,
-        lineCap: "round",
-      },
-    });
+    const w = roadWeight(forest);
     const label = p.ref ? `FR ${p.ref}` : p.name || "Road";
-    line.bindTooltip(label + (mv && mv.season ? ` · ${mv.season}` : ""), { sticky: true });
-    line.bindPopup(roadPopup(p, mv, label), { maxWidth: 260 });
-    roadsLayer.addLayer(line);
+    // Visible line — non-interactive; the fat transparent hit line below catches
+    // taps, so even a thin yellow road is easy to tap for its name/MVUM popover
+    // (the hybrid basemap's baked-in labels can't be lifted above the overlay).
+    roadsLayer.addLayer(
+      L.geoJSON(f, {
+        interactive: false,
+        style: { color, weight: w, opacity: 0.9, dashArray: p.rough ? "5 4" : null, lineCap: "round" },
+      })
+    );
+    const hit = L.geoJSON(f, {
+      style: { color: "#000", weight: w + 14, opacity: 0, lineCap: "round" },
+    });
+    hit.bindTooltip(label + (mv && mv.season ? ` · ${mv.season}` : ""), { sticky: true });
+    hit.bindPopup(roadPopup(p, mv, label), { maxWidth: 260 });
+    roadsLayer.addLayer(hit);
   });
 }
 
