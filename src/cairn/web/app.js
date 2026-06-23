@@ -58,18 +58,25 @@ const BASEMAPS = [
   {
     id: "satellite",
     name: "Satellite (labeled)",
-    // MapTiler "hybrid" (satellite + roads/labels in ONE tile) served through
-    // our own nginx tile cache (wander.home.arpa/tiles/...), which injects the API
-    // key server-side and caches to disk. One request instead of the old 3-layer
-    // Esri stack; first load is CDN-fast, revisits are local. See deploy/cairn.conf.
+    // MapTiler "satellite" (pure imagery, no labels) served through our own nginx
+    // tile cache (wander.home.arpa/tiles/...), which injects the API key server-side
+    // and caches the imagery to disk — CDN-fast first load, local on revisit.
     url: "/tiles/satellite/{z}/{x}/{y}",
     options: {
       maxNativeZoom: 20,
       maxZoom: 20,
       attribution:
         '© <a href="https://www.maptiler.com/copyright/">MapTiler</a> © ' +
-        '<a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        '<a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors · ' +
+        "labels © Esri",
     },
+    // Labels (place + WATER + roads) come from Esri's transparent reference
+    // overlays, drawn on top of the imagery. Direct from Esri, display-only / not
+    // cached (MapTiler's "satellite" doesn't name lakes; "hybrid" barely did).
+    labels: [
+      "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+      "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}",
+    ],
   },
   {
     id: "streets",
