@@ -338,6 +338,7 @@ function setupMap() {
   map.getPane("shapeHighlight").style.pointerEvents = "none";
   map.on("moveend", refreshActiveOverlays);
   map.on("moveend", scheduleRoads); // viewport roads overlay follows the map
+  map.on("zoomend", restyleRoadsForZoom); // scale road weight to the new zoom
   map.on("moveend", updateShapeScoreBtn); // re-evaluate the boundary-score cap gate
   // Keep info windows from opening hidden behind the bottom sheet.
   map.on("popupopen", (e) => {
@@ -1119,7 +1120,17 @@ function mvumInfo(access) {
   return { klass, season, special };
 }
 
+// Visible line weight scales with zoom so the overlay tracks the widening
+// satellite road instead of looking thinner the closer you get (was fixed 2-3px).
+function roadWeight(forest) {
+  const base = Math.min(3 + (map.getZoom() - ROADS_MIN_ZOOM) * 1.3, 10);
+  return forest ? base + 1 : base;
+}
+
+let _roadsGj = null; // last rendered FeatureCollection (re-styled on zoom)
+
 function renderRoads(gj) {
+  _roadsGj = gj;
   roadsLayer.clearLayers();
   (gj.features || []).forEach((f) => {
     const p = f.properties || {};
@@ -1131,7 +1142,7 @@ function renderRoads(gj) {
     const line = L.geoJSON(f, {
       style: {
         color,
-        weight: forest ? 3 : 2,
+        weight: roadWeight(forest),
         opacity: 0.9,
         dashArray: p.rough ? "5 4" : null,
         lineCap: "round",
@@ -1142,6 +1153,14 @@ function renderRoads(gj) {
     line.bindPopup(roadPopup(p, mv, label), { maxWidth: 260 });
     roadsLayer.addLayer(line);
   });
+}
+
+// Re-style road weights when zoom changes within the cached area (where
+// loadRoadsForView skips a refetch, so renderRoads wouldn't otherwise re-run).
+function restyleRoadsForZoom() {
+  if (_roadsGj && $("layer-roads").checked && map.getZoom() >= ROADS_MIN_ZOOM) {
+    renderRoads(_roadsGj);
+  }
 }
 
 function roadPopup(p, mv, label) {
