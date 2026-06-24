@@ -858,7 +858,7 @@ async function runScore() {
   await executeScore(bbox, { button: $("score-btn") });
 }
 
-// "🎯 Score this view" — lives in the forest chip. Scores the current view
+// "Score this view" — lives in the forest chip. Scores the current view
 // (the centered cap rectangle when zoomed out past the cap), clipped to the
 // active forest. The chip only exists when a shape is selected, so there's
 // always a forest to clip to here.
@@ -1976,7 +1976,7 @@ function renderShapeChip() {
   chip.hidden = false;
   chip.innerHTML =
     `<span class="shape-chip-name">${esc(selectedShape.name)}</span>` +
-    `<button type="button" class="shape-chip-score btn">🎯 Score this view</button>` +
+    `<button type="button" class="shape-chip-score btn">Score this view</button>` +
     `<button type="button" class="shape-chip-x" title="Clear selection" aria-label="Clear selection">✕</button>`;
   chip.querySelector(".shape-chip-x").onclick = clearShape;
   chip.querySelector(".shape-chip-score").onclick = scoreThisView;
@@ -1989,7 +1989,7 @@ function renderShapeChip() {
 function updateShapeScoreBtn() {
   const btn = document.querySelector(".shape-chip-score");
   if (!btn) return;
-  btn.textContent = _shapeScoring ? "Scoring…" : "🎯 Score this view";
+  btn.textContent = _shapeScoring ? "Scoring…" : "Score this view";
   btn.disabled = _shapeScoring;
 }
 
