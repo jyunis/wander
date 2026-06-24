@@ -38,6 +38,10 @@ LAYER_ORDER = [
 # layer in `overlay_features`.
 POINT_LAYERS = {"campground", "dispersed"}
 
+# The dispersed-friendly zones the Explore tab browses (state parks excluded —
+# developed/reserved camping, a different mode). See doc #34.
+FOREST_LAYERS = ("national_forest", "state_forest")
+
 # Simplification tolerance (degrees, ~110 m) for the discovery-highlight outline
 # served by `get_shape`. Coarse on purpose: even a national forest's full
 # MultiPolygon stays a sane payload, since the highlight only needs the shape's
@@ -317,3 +321,62 @@ class OverlayStore:
                 }
             )
         return out
+
+    async def list_forests(self) -> list[dict]:
+        """Every browsable forest (national + state) as `{layer, name, area_km2,
+        bbox:[w,s,e,n]}`, name-sorted. A forest can span 1-2 rows; area is the
+        ellipsoidal sum and bbox the min/max of the parts' extents (no ST_Union
+        needed — parts are disjoint). Display-only context (TLC-20)."""
+        if self._db is None:
+            return []
+        ph = ",".join("?" * len(FOREST_LAYERS))
+        cur = await self._db.execute(
+            "SELECT layer, name, SUM(ST_Area(geom, 1)) / 1e6 AS area_km2, "
+            "  MIN(MbrMinX(geom)), MIN(MbrMinY(geom)), MAX(MbrMaxX(geom)), MAX(MbrMaxY(geom)) "
+            f"FROM overlay_features WHERE layer IN ({ph}) AND name IS NOT NULL "
+            "GROUP BY layer, name ORDER BY name",
+            FOREST_LAYERS,
+        )
+        return [
+            {
+                "layer": layer,
+                "name": name,
+                "area_km2": round(area or 0.0, 1),
+                "bbox": [w, s, e, n],
+            }
+            for layer, name, area, w, s, e, n in await cur.fetchall()
+        ]
+
+    async def forest_summary(self, layer: str, name: str) -> dict | None:
+        """On-tap counts for one forest: dispersed sites + campgrounds whose
+        points fall inside its boundary (R*Tree-bounded point-in-polygon), plus
+        its bbox. Display-only (TLC-20); never read by scoring. None if the name
+        doesn't exist (API → 404)."""
+        if self._db is None:
+            return None
+        cur = await self._db.execute(
+            "SELECT ST_AsBinary(u), MbrMinX(u), MbrMinY(u), MbrMaxX(u), MbrMaxY(u) "
+            "FROM (SELECT ST_Union(geom) AS u FROM overlay_features WHERE layer=? AND name=?)",
+            (layer, name),
+        )
+        row = await cur.fetchone()
+        if row is None or row[0] is None:
+            return None
+        wkb, w, s, e, n = row
+        counts = {}
+        for pl in ("dispersed", "campground"):
+            c = await self._db.execute(
+                "SELECT COUNT(*) FROM overlay_points WHERE layer=? AND ROWID IN ("
+                "  SELECT ROWID FROM SpatialIndex WHERE f_table_name='overlay_points' "
+                "  AND f_geometry_column='geom' AND search_frame=BuildMbr(?, ?, ?, ?, 4326)) "
+                "AND ST_Within(geom, GeomFromWKB(?, 4326))",
+                (pl, w, s, e, n, wkb),
+            )
+            counts[pl] = (await c.fetchone())[0]
+        return {
+            "layer": layer,
+            "name": name,
+            "dispersed": counts["dispersed"],
+            "campgrounds": counts["campground"],
+            "bbox": [w, s, e, n],
+        }

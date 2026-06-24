@@ -457,6 +457,50 @@ async def get_overlay_shape(layer: str, request: Request, name: str):
     return shape
 
 
+def _mvum_bounds(settings) -> list[list[float]]:
+    """Bounds [s, w, n, e] of every loaded MVUM raster, or [] if none."""
+    manifest = Path(settings.data_dir) / "mvum" / "manifest.json"
+    if not manifest.exists():
+        return []
+    return [it["bounds"] for it in json.loads(manifest.read_text()) if it.get("bounds")]
+
+
+def _bbox_intersects(a: list[float], b: list[float]) -> bool:
+    """a = forest bbox [w, s, e, n]; b = MVUM bounds [s, w, n, e]."""
+    aw, as_, ae, an = a
+    bs, bw, bn, be = b
+    return not (ae < bw or aw > be or an < bs or as_ > bn)
+
+
+@app.get("/forests")
+async def list_forests(request: Request) -> dict:
+    """Browsable forests (national + state) with area + bbox + has_mvum — the
+    Explore-tab list (doc #34). Display-only context (TLC-20). Empty if no
+    overlays.db."""
+    overlays: OverlayStore = request.app.state.overlays
+    forests = await overlays.list_forests()
+    mb = _mvum_bounds(request.app.state.settings)
+    for f in forests:
+        f["has_mvum"] = any(_bbox_intersects(f["bbox"], m) for m in mb)
+    return {"forests": forests}
+
+
+@app.get("/forests/summary")
+async def forest_summary(request: Request, layer: str, name: str):
+    """On-tap counts for one forest (dispersed + campgrounds inside, has_mvum).
+    Display-only (TLC-20). 404 if the name doesn't exist."""
+    overlays: OverlayStore = request.app.state.overlays
+    summary = await overlays.forest_summary(layer, name)
+    if summary is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": "ForestNotFound", "detail": f"no {layer} named {name!r}"},
+        )
+    mb = _mvum_bounds(request.app.state.settings)
+    summary["has_mvum"] = any(_bbox_intersects(summary["bbox"], m) for m in mb)
+    return summary
+
+
 @app.get("/mvum")
 async def mvum_overlays(request: Request) -> dict:
     """Available MVUM raster overlays — georeferenced district map sheets draped

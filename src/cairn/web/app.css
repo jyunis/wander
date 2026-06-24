@@ -447,6 +447,26 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
   font-variant-numeric: tabular-nums; }
 .trip-row-count { flex: none; font-size: 11px; color: var(--accent); white-space: nowrap; }
 
+/* Explore — forest-first browse (doc #34). */
+.forest-list, .forest-group { display: flex; flex-direction: column; gap: 6px; }
+.forest-group { margin-bottom: 10px; }
+.forest-row { display: flex; text-align: left; width: 100%; cursor: pointer; color: var(--ink);
+  background: rgba(255, 255, 255, 0.035); border: 1px solid var(--line);
+  border-radius: 7px; padding: 8px 10px; }
+.forest-row:hover { border-color: var(--accent); background: rgba(255, 255, 255, 0.06); }
+.forest-row-main { flex: 1; overflow: hidden; }
+.forest-row-name { font-size: 12.5px; font-weight: 600; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.forest-row-sub { font-size: 10.5px; color: var(--muted); margin-top: 2px; }
+.forest-mvum { font-size: 9px; font-weight: 700; color: var(--accent); border: 1px solid var(--accent);
+  border-radius: 3px; padding: 0 3px; margin-left: 4px; vertical-align: middle; }
+.forest-head { margin: 6px 0 10px; }
+.forest-summary { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.fs-cell { flex: 1; min-width: 64px; text-align: center; padding: 8px;
+  background: rgba(255, 255, 255, 0.04); border: 1px solid var(--line); border-radius: 7px; }
+.fs-n { font-size: 18px; font-weight: 700; color: var(--ink); }
+.fs-l { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
 /* Run browser — a clickable list of scoring runs (replaces the old select). */
 .run-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
 .run-row { display: flex; align-items: center; gap: 6px; padding: 8px 10px;
@@ -697,6 +717,10 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
   left: calc(10px + env(safe-area-inset-left, 0px)); }
 .nav-close { top: calc(12px + env(safe-area-inset-top, 0px)); }
 #map-chips { top: calc(14px + env(safe-area-inset-top, 0px)); }
+/* Centered chips must clear the top-left hamburger and the top-right zoom
+   control — cap the width so a long forest name truncates instead of sliding
+   under the ☰ button. */
+.shape-chip, .measure-chip, .run-chip { max-width: calc(100vw - 116px); }
 #panel header { padding-top: calc(14px + env(safe-area-inset-top, 0px)); }
 #panel { padding-bottom: env(safe-area-inset-bottom, 0px); }
 .sheet { bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }

@@ -189,6 +189,7 @@ async function init() {
   await loadRuns();
   await initLandOverlays();
   await initMvum();
+  await loadForests(); // Explore tab (front door)
   scheduleRoads(); // roads default on — load them for the opening view
 
   $("draw-bbox").onclick = startDraw;
@@ -1355,6 +1356,195 @@ function buildLandToggles() {
   });
 }
 
+// --- Explore: forest-first browse (doc #34, M1) ----------------------------
+let forestsAll = []; // GET /forests: [{layer, name, area_km2, bbox, has_mvum}]
+let forestActive = null; // {layer, name} currently entered (Explore detail view)
+
+const FOREST_RECENT_KEY = "wander.forest.recent";
+const FOREST_PINNED_KEY = "wander.forest.pinned";
+const FOREST_RECENT_MAX = 6;
+
+const _forestKey = (f) => `${f.layer}/${f.name}`;
+function _loadMarks(key) {
+  try {
+    return JSON.parse(localStorage.getItem(key) || "[]");
+  } catch {
+    return [];
+  }
+}
+function _saveMarks(key, arr) {
+  try {
+    localStorage.setItem(key, JSON.stringify(arr));
+  } catch {
+    /* private mode — pins just won't persist */
+  }
+}
+const forestPinned = () => _loadMarks(FOREST_PINNED_KEY);
+const isForestPinned = (f) => forestPinned().includes(_forestKey(f));
+function toggleForestPin(f) {
+  const k = _forestKey(f);
+  const pins = forestPinned();
+  _saveMarks(FOREST_PINNED_KEY, pins.includes(k) ? pins.filter((x) => x !== k) : [k, ...pins]);
+}
+function pushForestRecent(f) {
+  const k = _forestKey(f);
+  const r = _loadMarks(FOREST_RECENT_KEY).filter((x) => x !== k);
+  r.unshift(k);
+  _saveMarks(FOREST_RECENT_KEY, r.slice(0, FOREST_RECENT_MAX));
+}
+
+async function loadForests() {
+  try {
+    forestsAll = (await (await fetch("/forests")).json()).forests || [];
+  } catch {
+    forestsAll = [];
+  }
+  wireExplore();
+  renderForestList();
+}
+
+let _exploreWired = false;
+function wireExplore() {
+  if (_exploreWired || !$("forest-search")) return;
+  _exploreWired = true;
+  $("forest-search").addEventListener("input", renderForestList);
+  $("forest-back").onclick = exitForestDetail;
+  $("forest-pin").onclick = () => {
+    if (!forestActive) return;
+    toggleForestPin(forestActive);
+    renderForestDetail();
+  };
+  $("forest-zoom").onclick = () => {
+    if (forestActive) selectShape(forestActive.layer, forestActive.name);
+  };
+}
+
+// Nearby sort key: squared distance from map center to the forest bbox center
+// (lon scaled by cos(lat) so it's roughly metric).
+function _forestDist(f) {
+  if (!map) return 0;
+  const c = map.getCenter();
+  const fx = (f.bbox[0] + f.bbox[2]) / 2;
+  const fy = (f.bbox[1] + f.bbox[3]) / 2;
+  const dx = (fx - c.lng) * Math.cos((c.lat * Math.PI) / 180);
+  const dy = fy - c.lat;
+  return dx * dx + dy * dy;
+}
+
+function forestRowHtml(f, pinned) {
+  const layerLabel = f.layer === "national_forest" ? "National Forest" : "State Forest";
+  const area = Math.round(f.area_km2).toLocaleString();
+  return (
+    `<button class="forest-row" data-key="${esc(_forestKey(f))}">` +
+    `<div class="forest-row-main"><div class="forest-row-name">${pinned ? "📌 " : ""}${esc(f.name)}` +
+    `${f.has_mvum ? ' <span class="forest-mvum">MVUM</span>' : ""}</div>` +
+    `<div class="forest-row-sub">${layerLabel} · ${area} km²</div></div></button>`
+  );
+}
+
+function renderForestList() {
+  const listEl = $("forest-list");
+  if (!listEl) return;
+  $("forest-list-view").hidden = !!forestActive;
+  $("forest-detail").hidden = !forestActive;
+  if (forestActive) return; // detail view is showing instead
+  $("forest-empty").hidden = forestsAll.length > 0;
+  const q = ($("forest-search").value || "").trim().toLowerCase();
+  const byKey = new Map(forestsAll.map((f) => [_forestKey(f), f]));
+
+  // Recent + pinned group — only when not searching.
+  const recentEl = $("forest-recent");
+  if (!q) {
+    const seen = new Set();
+    const featured = [];
+    for (const k of [...forestPinned(), ..._loadMarks(FOREST_RECENT_KEY)]) {
+      if (seen.has(k) || !byKey.has(k)) continue;
+      seen.add(k);
+      featured.push(byKey.get(k));
+    }
+    recentEl.innerHTML = featured.length
+      ? "<h2>Recent &amp; pinned</h2>" +
+        featured.map((f) => forestRowHtml(f, isForestPinned(f))).join("")
+      : "";
+    recentEl.hidden = !featured.length;
+  } else {
+    recentEl.hidden = true;
+    recentEl.innerHTML = "";
+  }
+
+  // Full list — search-filtered, nearby-sorted.
+  let list = forestsAll.slice();
+  if (q) list = list.filter((f) => f.name.toLowerCase().includes(q));
+  list.sort((a, b) => _forestDist(a) - _forestDist(b));
+  $("forest-count").textContent = `(${list.length})`;
+  listEl.innerHTML = list.map((f) => forestRowHtml(f, isForestPinned(f))).join("");
+
+  document.querySelectorAll("#explore-section .forest-row").forEach((row) => {
+    row.onclick = () => {
+      const f = byKey.get(row.dataset.key);
+      if (f) enterForest(f);
+    };
+  });
+}
+
+async function enterForest(f) {
+  forestActive = { layer: f.layer, name: f.name };
+  pushForestRecent(f);
+  if (isMobile()) setNav(false); // reveal the map
+  selectShape(f.layer, f.name); // fit-zoom + highlight + active-context shape chip
+  enableBrowseLayers();
+  renderForestList(); // swap list -> detail
+  await renderForestDetail();
+}
+
+function exitForestDetail() {
+  forestActive = null;
+  renderForestList();
+}
+
+// Browsing a forest turns on the dispersed-sites lens (the dispersed-camping
+// reason you're here); other layers stay user-controlled.
+function enableBrowseLayers() {
+  const cb = $("ov-dispersed");
+  if (cb && !cb.checked) {
+    cb.checked = true;
+    toggleOverlay("dispersed", true);
+  }
+}
+
+async function renderForestDetail() {
+  if (!forestActive) return;
+  const f = forestsAll.find((x) => _forestKey(x) === _forestKey(forestActive)) || forestActive;
+  const layerLabel = f.layer === "national_forest" ? "National Forest" : "State Forest";
+  const areaTxt = f.area_km2 ? " · " + Math.round(f.area_km2).toLocaleString() + " km²" : "";
+  $("forest-detail-head").innerHTML =
+    `<div class="forest-row-name">🌲 ${esc(f.name)}</div>` +
+    `<div class="forest-row-sub">${layerLabel}${areaTxt}</div>`;
+  $("forest-pin").textContent = isForestPinned(f) ? "📌 Pinned" : "📌 Pin";
+  const sum = $("forest-summary");
+  sum.innerHTML = `<div class="hint">Loading…</div>`;
+  let s;
+  try {
+    s = await (
+      await fetch(
+        `/forests/summary?layer=${encodeURIComponent(f.layer)}&name=${encodeURIComponent(f.name)}`
+      )
+    ).json();
+  } catch {
+    s = null;
+  }
+  if (!s || s.error) {
+    sum.innerHTML = "";
+    return;
+  }
+  const cell = (n, label) =>
+    `<div class="fs-cell"><div class="fs-n">${n}</div><div class="fs-l">${label}</div></div>`;
+  sum.innerHTML =
+    cell(s.dispersed, "dispersed") +
+    cell(s.campgrounds, "campgrounds") +
+    (s.has_mvum ? cell("✓", "MVUM") : "");
+}
+
 // --- MVUM raster overlays (display-only district map sheets) ---------------
 // Region-gated: the toggle only shows when the map view is over a district that
 // has an MVUM raster (and zoomed in enough to read it) — out of sight in MN etc.
@@ -1612,6 +1802,9 @@ function clearShape() {
   }
   selectedShape = null;
   renderShapeChip();
+  // The active forest IS the selected shape — exiting the chip exits the forest
+  // (TLC-16: one-tap exit), returning Explore to its list.
+  if (typeof forestActive !== "undefined" && forestActive) exitForestDetail();
 }
 
 // The on-map chip: "<name>  [Score within boundary]  ✕" — shows the current
@@ -2596,12 +2789,14 @@ function setupTabs() {
       document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
       tab.classList.add("active");
       const which = tab.dataset.tab;
+      $("explore-section").hidden = which !== "explore";
       $("score-section").hidden = which !== "score";
       $("trips-section").hidden = which !== "trips";
       $("saved-section-tab").hidden = which !== "saved";
       if (which === "trips") loadTrips();
       else exitTripPlot(); // back to Score/Saved: restore the normal map
       if (which === "saved") openSavedTab();
+      if (which === "explore") renderForestList();
     };
   });
   buildCollSwatches();

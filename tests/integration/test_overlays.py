@@ -97,6 +97,26 @@ def _build_shape_db(path: str) -> None:
         "('state_forest','State Forest','Split SF', "
         "CastToMulti(GeomFromText('POLYGON((11.5 10,12 10,12 11,11.5 11,11.5 10))',4326)))"
     )
+    # Points for forest_summary: 2 dispersed + 1 campground inside Superior part1
+    # (the 0..1 square), 1 dispersed far outside any forest.
+    con.execute(
+        "CREATE TABLE overlay_points ("
+        "fid INTEGER PRIMARY KEY AUTOINCREMENT, layer TEXT, category TEXT, name TEXT, "
+        "url TEXT, meta TEXT)"
+    )
+    con.execute("SELECT AddGeometryColumn('overlay_points','geom',4326,'POINT','XY')")
+    con.execute("SELECT CreateSpatialIndex('overlay_points','geom')")
+    for layer, lon, lat in [
+        ("dispersed", 0.5, 0.5),
+        ("dispersed", 0.6, 0.6),
+        ("campground", 0.4, 0.4),
+        ("dispersed", 20.0, 20.0),  # outside every forest
+    ]:
+        con.execute(
+            "INSERT INTO overlay_points(layer, category, name, geom) "
+            f"VALUES (?, 'x', 'x', GeomFromText('POINT({lon} {lat})', 4326))",
+            (layer,),
+        )
     con.commit()
     con.close()
 
@@ -138,6 +158,73 @@ async def test_get_shape_missing_returns_none(shape_settings):
     assert await s.get_shape("national_forest", "Nope") is None
     assert await s.get_shape("state_park", "Superior") is None  # wrong layer
     await s.close()
+
+
+# --- FC-16: forest browse (Explore tab) -----------------------------------
+async def test_list_forests_nf_and_sf_with_area_and_bbox(shape_settings):
+    s = await OverlayStore.open(shape_settings)
+    forests = await s.list_forests()
+    names = {(f["layer"], f["name"]) for f in forests}
+    assert ("national_forest", "Superior") in names
+    assert ("state_forest", "Split SF") in names
+    # No non-forest layers leak in (no state_park / ownership).
+    assert all(f["layer"] in ("national_forest", "state_forest") for f in forests)
+    sup = next(f for f in forests if f["name"] == "Superior")
+    assert sup["area_km2"] > 0
+    # bbox spans both disjoint parts (0,0)-(3,3).
+    assert sup["bbox"][0] == pytest.approx(0.0) and sup["bbox"][2] == pytest.approx(3.0)
+    # Split SF unions its two rows -> bbox spans lon 10..12.
+    split = next(f for f in forests if f["name"] == "Split SF")
+    assert split["bbox"][0] == pytest.approx(10.0) and split["bbox"][2] == pytest.approx(12.0)
+    await s.close()
+
+
+async def test_forest_summary_counts_points_inside(shape_settings):
+    s = await OverlayStore.open(shape_settings)
+    summ = await s.forest_summary("national_forest", "Superior")
+    assert summ is not None
+    # 2 dispersed + 1 campground inside; the far (20,20) dispersed is excluded.
+    assert summ["dispersed"] == 2
+    assert summ["campgrounds"] == 1
+    # Split SF contains no points.
+    split = await s.forest_summary("state_forest", "Split SF")
+    assert split["dispersed"] == 0 and split["campgrounds"] == 0
+    await s.close()
+
+
+async def test_forest_summary_missing_returns_none(shape_settings):
+    s = await OverlayStore.open(shape_settings)
+    assert await s.forest_summary("national_forest", "Nope") is None
+    await s.close()
+
+
+def test_forests_api_list_and_summary(tmp_path, monkeypatch):
+    db = tmp_path / "overlays.db"
+    _build_shape_db(str(db))
+    monkeypatch.setenv("CAIRN_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CAIRN_OVERLAYS_DB_PATH", str(db))
+    config_module._settings = None
+    from cairn.api import app
+
+    with TestClient(app) as client:
+        forests = client.get("/forests").json()["forests"]
+        assert {f["name"] for f in forests} == {"Superior", "Split SF"}
+        assert all("has_mvum" in f for f in forests)  # no MVUM loaded -> all False
+        assert all(f["has_mvum"] is False for f in forests)
+        r = client.get(
+            "/forests/summary", params={"layer": "national_forest", "name": "Superior"}
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["dispersed"] == 2 and body["campgrounds"] == 1
+        # Unknown forest -> 404.
+        assert (
+            client.get(
+                "/forests/summary", params={"layer": "national_forest", "name": "Nope"}
+            ).status_code
+            == 404
+        )
+    config_module._settings = None
 
 
 async def test_get_shape_inert_without_db(tmp_path):
