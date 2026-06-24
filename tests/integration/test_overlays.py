@@ -297,13 +297,14 @@ async def test_get_public_land_geometry_inert_without_db(tmp_path):
 
 def test_api_score_public_only_no_coverage_is_422(tmp_path, monkeypatch):
     # public_only with no ownership data (inert store) -> 422 up front, never a
-    # silent empty result. Proves the opt-in coverage guard is wired into /score.
+    # silent empty result. Proves the opt-in coverage guard is wired into
+    # /score/view (shared _resolve_clips) and validated before any work.
     monkeypatch.setenv("CAIRN_DATA_DIR", str(tmp_path))
     config_module._settings = None
     from cairn.api import app
 
     with TestClient(app) as c:
-        r = c.post("/score", json={"bbox": [0.0, 0.0, 0.01, 0.01], "public_only": True})
+        r = c.post("/score/view", json={"bbox": [0.0, 0.0, 0.01, 0.01], "public_only": True})
         assert r.status_code == 422
         assert "public-land" in r.json()["detail"].lower()
     config_module._settings = None
@@ -345,14 +346,14 @@ def test_api_mvum_empty_without_dir(tmp_path, monkeypatch):
 def test_api_score_unknown_clip_is_422(tmp_path, monkeypatch):
     # A clip referencing a shape the overlays store can't resolve fails fast with
     # 422 — BEFORE any scoring/fetch (here the store is inert, so every name is
-    # unknown). Proves the clip is wired into /score and validated up front.
+    # unknown). Proves the clip is wired into /score/view and validated up front.
     monkeypatch.setenv("CAIRN_DATA_DIR", str(tmp_path))
     config_module._settings = None
     from cairn.api import app
 
     with TestClient(app) as c:
         r = c.post(
-            "/score",
+            "/score/view",
             json={
                 "bbox": [0.0, 0.0, 0.01, 0.01],
                 "clip": {"layer": "national_forest", "name": "Nope"},

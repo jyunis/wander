@@ -39,7 +39,10 @@ CREATE TABLE IF NOT EXISTS scoring_config (
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
--- --- Runs: one row per score_bbox invocation. Immutable once done (TLC-9).
+-- --- Runs: one row per engine invocation. The UI scores ephemerally via a
+-- scratch run that is deleted on completion (TLC-15; the persisted-run backend
+-- was retired in doc #34 #4), so in practice this table stays empty between
+-- view-scores. Immutable while it exists (TLC-9).
 CREATE TABLE IF NOT EXISTS runs (
     id                      INTEGER PRIMARY KEY AUTOINCREMENT,
     -- normalized bbox (WGS84 degrees)
@@ -183,3 +186,14 @@ CREATE TABLE IF NOT EXISTS place_collections (
 );
 
 CREATE INDEX IF NOT EXISTS idx_place_collections_saved ON place_collections (saved_id);
+
+-- Explore-tab forest pins + recents, persisted server-side so they follow the
+-- user across devices (doc #34 #3; replaces the old localStorage). `kind` is
+-- 'pinned' or 'recent'; `position` is the display order within that kind
+-- (0 = front). `forest_key` is "<layer>/<name>". UI prefs only, never scored.
+CREATE TABLE IF NOT EXISTS forest_marks (
+    kind        TEXT NOT NULL,                     -- 'pinned' | 'recent'
+    forest_key  TEXT NOT NULL,                     -- "<layer>/<name>"
+    position    INTEGER NOT NULL,                  -- display order within kind
+    PRIMARY KEY (kind, forest_key)
+);

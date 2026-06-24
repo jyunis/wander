@@ -169,11 +169,6 @@ class ScoreRequest(BaseModel):
         ..., min_length=4, max_length=4, description="[min_lon, min_lat, max_lon, max_lat]"
     )
     weights: dict[str, float] | None = None
-    run_async: bool | None = Field(
-        default=None,
-        alias="async",
-        description="Force background execution; default decides by bbox area.",
-    )
     clip: ClipSpec | None = Field(
         default=None,
         description="Optional boundary clip — score only candidates inside this land shape.",
@@ -182,12 +177,6 @@ class ScoreRequest(BaseModel):
         default=False,
         description="Restrict candidates to public-ownership land (drops private inholdings).",
     )
-
-    model_config = {"populate_by_name": True}
-
-
-class RunUpdateRequest(BaseModel):
-    name: str = Field(..., description="New display label for the run")
 
 
 class SavedRequest(BaseModel):
@@ -248,6 +237,11 @@ class BulkPlacesRequest(BaseModel):
     saved_ids: list[int] = Field(default_factory=list)
 
 
+class ForestMarksRequest(BaseModel):
+    pinned: list[str] = Field(default_factory=list)
+    recent: list[str] = Field(default_factory=list)
+
+
 # --- error handling --------------------------------------------------------
 
 
@@ -263,43 +257,6 @@ async def _notfound_handler(request: Request, exc: RunNotFound) -> JSONResponse:
 
 
 # --- helpers ---------------------------------------------------------------
-
-
-def _run_summary(run) -> dict:
-    return {
-        "id": run.id,
-        "status": run.status,
-        "bbox": [run.bbox.min_lon, run.bbox.min_lat, run.bbox.max_lon, run.bbox.max_lat],
-        "weights": run.weights,
-        "scoring_config_version": run.scoring_config_version,
-        "candidate_count": run.candidate_count,
-        "distinct_count": run.distinct_count,
-        "capped": run.capped,
-        "degraded_features": run.degraded_features,
-        "failure_reason": run.failure_reason,
-        "provenance": run.provenance,
-        "created_at": run.created_at,
-        "done_at": run.done_at,
-        "place": run.place,
-        "disclaimer": DISCLAIMER,
-    }
-
-
-async def _label_run(request: Request, run_id: int, bbox: Bbox) -> None:
-    """Best-effort: reverse-geocode the bbox center to a place label and persist
-    it on the run (so the run list reads "near X"). Never raises — a geocode
-    failure must not fail a score (display-only, TLC-3)."""
-    geocoder = request.app.state.geocoder
-    if geocoder is None:
-        return
-    clat = (bbox.min_lat + bbox.max_lat) / 2
-    clon = (bbox.min_lon + bbox.max_lon) / 2
-    try:
-        place = await geocoder.reverse_label(clat, clon)
-    except Exception:  # noqa: BLE001 - best-effort; never fail a score over a label
-        return
-    if place:
-        await request.app.state.store.set_run_place(run_id, place)
 
 
 # --- endpoints -------------------------------------------------------------
@@ -339,84 +296,6 @@ async def score_view(req: ScoreRequest, request: Request) -> dict:
     weights = req.weights or settings.ui_config()["default_weights"]
     clips = await _resolve_clips(req, bbox, request.app.state.overlays)
     return await service.score_view(bbox, weights, clip_polygons=clips)
-
-
-@app.post("/score")
-async def score(req: ScoreRequest, request: Request) -> JSONResponse:
-    settings = request.app.state.settings
-    service: RunService = request.app.state.service
-    store: Store = request.app.state.store
-    bbox = Bbox(*req.bbox)
-    weights = req.weights or settings.ui_config()["default_weights"]
-    clips = await _resolve_clips(req, bbox, request.app.state.overlays)
-
-    # Decide sync vs async (TLC-4). Validation happens inside the service and
-    # raises ValidationError -> 422 before any run row is created.
-    go_async = req.run_async
-    if go_async is None:
-        go_async = bbox.normalized().area_km2() > settings.sync_area_threshold_km2
-
-    if go_async:
-        run_id = await service.start_async(bbox, weights, clip_polygons=clips)
-    else:
-        run_id = (await service.score_bbox(bbox, weights, clip_polygons=clips)).id
-    # Label the run: a within-boundary run reads best as the shape itself
-    # ("Superior National Forest"), not a reverse-geocoded town near the view
-    # center — so use the clip name directly and skip the geocode for those.
-    if req.clip is not None:
-        await store.set_run_place(run_id, req.clip.name)
-    else:
-        await _label_run(request, run_id, bbox)  # best-effort place label
-    run = await store.get_run(run_id)
-    return JSONResponse(status_code=202 if go_async else 200, content=_run_summary(run))
-
-
-@app.get("/runs")
-async def list_runs(request: Request, limit: int = 50) -> dict:
-    store: Store = request.app.state.store
-    runs = await store.list_runs(limit=limit)
-    return {"runs": [_run_summary(r) for r in runs], "disclaimer": DISCLAIMER}
-
-
-@app.get("/runs/{run_id}")
-async def get_run(run_id: int, request: Request) -> dict:
-    store: Store = request.app.state.store
-    run = await store.get_run(run_id)  # raises RunNotFound -> 404
-    return _run_summary(run)
-
-
-@app.patch("/runs/{run_id}")
-async def rename_run(run_id: int, req: RunUpdateRequest, request: Request) -> dict:
-    """Rename a run — set its display label (the `place` field shown in the run
-    list). 422 if the name is blank, 404 if the run doesn't exist."""
-    store: Store = request.app.state.store
-    name = req.name.strip()
-    if not name:
-        raise ValidationError("name is required")
-    await store.get_run(run_id)  # raises RunNotFound -> 404
-    await store.set_run_place(run_id, name)
-    return _run_summary(await store.get_run(run_id))
-
-
-@app.delete("/runs/{run_id}")
-async def delete_run(run_id: int, request: Request) -> dict:
-    """Delete a run and its candidates/features/scores (FK cascade)."""
-    store: Store = request.app.state.store
-    return {"deleted": await store.delete_run(run_id)}
-
-
-@app.get("/runs/{run_id}/geojson")
-async def get_run_geojson(run_id: int, request: Request, top_n: int | None = None) -> dict:
-    store: Store = request.app.state.store
-    await store.get_run(run_id)  # 404 if missing
-    return await store.get_run_geojson(run_id, top_n=top_n)
-
-
-@app.get("/runs/{run_id}/roads")
-async def get_run_roads(run_id: int, request: Request) -> dict:
-    store: Store = request.app.state.store
-    await store.get_run(run_id)  # 404 if missing
-    return await store.get_run_roads_geojson(run_id)
 
 
 @app.get("/roads")
@@ -514,6 +393,22 @@ async def forest_summary(request: Request, layer: str, name: str):
     mb = _mvum_bounds(request.app.state.settings)
     summary["has_mvum"] = any(_bbox_intersects(summary["bbox"], m) for m in mb)
     return summary
+
+
+@app.get("/forests/marks")
+async def get_forest_marks(request: Request) -> dict:
+    """The Explore tab's pinned + recent forests (cross-device; doc #34 #3).
+    UI prefs only, never scoring (TLC-3)."""
+    store: Store = request.app.state.store
+    return await store.get_forest_marks()
+
+
+@app.put("/forests/marks")
+async def set_forest_marks(req: ForestMarksRequest, request: Request) -> dict:
+    """Replace the pinned + recent forest lists wholesale (the client owns the
+    ordering/trimming; this just persists it)."""
+    store: Store = request.app.state.store
+    return await store.set_forest_marks(req.pinned, req.recent)
 
 
 @app.get("/mvum")

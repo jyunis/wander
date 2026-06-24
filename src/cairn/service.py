@@ -9,7 +9,6 @@ the TLC-1 purity rule constrains only the engine's scoring/normalization.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 
@@ -34,7 +33,7 @@ from cairn.ingest.mvum import ingest_mvum
 from cairn.ingest.osm import ingest_osm
 from cairn.ingest.usa_structures import ingest_structures
 from cairn.store import Store
-from cairn.store.types import Bbox, Run
+from cairn.store.types import Bbox
 
 log = logging.getLogger("cairn.service")
 
@@ -71,24 +70,6 @@ class RunService:
         self._mvum = mvum  # USFS forest roads; None => OSM-only
         self._structures = structures  # USA Structures buildings; None => OSM-only
 
-    async def score_bbox(
-        self, bbox: Bbox, weights: dict[str, float],
-        clip_polygons: list[bytes] | None = None,
-    ) -> Run:
-        """Execute UoW-1 synchronously. Returns the finished (done|failed) Run.
-
-        Validation (TLC-4) raises BEFORE any run row or fetch. `clip_polygons`
-        (each WKB, SRID 4326), when given, restrict the SEARCH REGION to
-        candidates inside ALL of them (e.g. a forest boundary AND public land) —
-        like the bbox, never a scoring input (TLC-3)."""
-        b = validate_request(bbox, weights, self._s)
-        params = await self._store.scoring_config_params(SCORING_CONFIG_VERSION)
-        run_id = await self._store.create_run(b, weights, SCORING_CONFIG_VERSION)
-        await self._execute(
-            run_id, b, weights, params, self._s.max_wallclock_seconds, clip_polygons
-        )
-        return await self._store.get_run(run_id)
-
     async def score_view(
         self, bbox: Bbox, weights: dict[str, float],
         clip_polygons: list[bytes] | None = None,
@@ -114,23 +95,6 @@ class RunService:
             return await self._store.get_run_geojson(run_id)
         finally:
             await self._store.delete_run(run_id)  # scratch — nothing persists
-
-    async def start_async(
-        self, bbox: Bbox, weights: dict[str, float],
-        clip_polygons: list[bytes] | None = None,
-    ) -> int:
-        """Validate, create the run row, and schedule execution in the
-        background (TLC-4 async path). Returns the run_id immediately; the
-        client polls GET /runs/{id}. Validation still raises synchronously."""
-        b = validate_request(bbox, weights, self._s)
-        params = await self._store.scoring_config_params(SCORING_CONFIG_VERSION)
-        run_id = await self._store.create_run(b, weights, SCORING_CONFIG_VERSION)
-        asyncio.create_task(
-            self._execute(
-                run_id, b, weights, params, self._s.max_wallclock_async_seconds, clip_polygons
-            )
-        )
-        return run_id
 
     async def _execute(
         self, run_id: int, b: Bbox, weights: dict[str, float], params: dict,

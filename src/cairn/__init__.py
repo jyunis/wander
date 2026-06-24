@@ -1,6 +1,6 @@
 """Cairn — a campsite-discovery scorer for a teardrop camper.
 
-`score_bbox(bbox, weights) -> ranked, drive-to-able dispersed-campsite
+`score_view(bbox, weights) -> ranked, drive-to-able dispersed-campsite
 candidates`, via MCDA over OSM (Overpass) + AWS Terrarium elevation tiles.
 
 Cairn scores PHYSICAL SUITABILITY ONLY — it never asserts that a site is

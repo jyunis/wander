@@ -6,14 +6,12 @@ let map, drawnItems, heatLayer, pinLayer, candidatesLayer, roadsLayer, canvasRen
 let nearbyCgLayer; // ephemeral markers: the campgrounds near the open scored site
 let coverageLayer; // session-only fog: faint shading of views already scored (M3)
 let tripLayer; // markers for the currently plotted trip's members
-let runExtentLayer; // dashed rectangle showing the loaded run's scored bbox
 let savedLayer; // saved-place markers shown on the Saved tab (collection-colored)
 let tripPlotMode = false; // "Plot on map" is showing ONLY trip stops (results/overlays hidden)
 let selectedMarker = null; // marker for the currently-selected (saved) place
 let baseLayers = []; // current basemap tile layer(s): imagery + optional labels
 let bbox = null; // {min_lon,min_lat,max_lon,max_lat}
-let activeRunId = null;
-let lastGj = null; // last run's geojson, kept for re-filtering on min-score change
+let lastGj = null; // last score's geojson, kept for re-filtering on min-score change
 let minScore = 0.45; // hide candidates/sites below this absolute total (noise floor)
 
 // Keyless basemap sources. Add more here — the selector is data-driven.
@@ -140,6 +138,8 @@ const SHAPE_FIT_PADDING = 12;
 const SHAPE_FIT_MAX_ZOOM = 13;
 let shapeSelectLayer = null; // L.GeoJSON highlight of the selected forest/park
 let selectedShape = null; // {layer, name} currently highlighted, or null
+let selectedShapeGeom = null; // the selected forest's GeoJSON geometry (for point-in-polygon)
+let forestScopeOn = false; // Saved list/markers scoped to inside the active forest (decision #2)
 
 const FEATURE_LABELS = {
   road_end: "Road end",
@@ -201,7 +201,6 @@ async function init() {
   $("goto-input").addEventListener("input", clearGotoResults);
   $("drop-pin").onclick = toggleDropPin;
   $("score-btn").onclick = runScore;
-  // (run selection is now a clickable list — see renderRunsList)
   ["layer-pins", "layer-dots", "layer-heat", "layer-roads", "layer-saved"].forEach((id) => {
     $(id).onchange = updateLayerVisibility;
   });
@@ -387,7 +386,6 @@ function setupMap() {
   coverageLayer = new L.LayerGroup().addTo(map); // session "where I've scored" fog
   tripLayer = new L.LayerGroup().addTo(map);
   savedLayer = new L.LayerGroup().addTo(map);
-  runExtentLayer = new L.LayerGroup().addTo(map);
   measureLayer = new L.LayerGroup().addTo(map); // the distance ruler (custom)
 
   map.on(L.Draw.Event.CREATED, (e) => {
@@ -1014,183 +1012,6 @@ function updateCapRect() {
   ).addTo(map);
 }
 
-let runsList = []; // GET /runs — recent run summaries, newest first
-
-async function loadRuns() {
-  try {
-    runsList = (await (await fetch("/runs?limit=25")).json()).runs || [];
-  } catch {
-    runsList = [];
-  }
-  renderRunsList();
-}
-
-// "just now / 2h ago / 3d ago / Jun 3" — created_at is UTC ISO without a zone.
-function relativeDate(iso) {
-  if (!iso) return "";
-  const t = Date.parse(/[Z+]/.test(iso) ? iso : iso + "Z");
-  if (isNaN(t)) return "";
-  const s = (Date.now() - t) / 1000;
-  if (s < 60) return "just now";
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  if (s < 7 * 86400) return `${Math.floor(s / 86400)}d ago`;
-  return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
-// A run's display label: its place name when set, else its bbox-center coords.
-function runLabel(r) {
-  const b = r.bbox; // [min_lon, min_lat, max_lon, max_lat]
-  if (r.place) return r.place;
-  return `${((b[1] + b[3]) / 2).toFixed(3)}, ${((b[0] + b[2]) / 2).toFixed(3)}`;
-}
-
-function runAreaKm2(r) {
-  const b = r.bbox;
-  return areaKm2({ min_lon: b[0], min_lat: b[1], max_lon: b[2], max_lat: b[3] });
-}
-
-function renderRunsList() {
-  const host = $("run-list");
-  if (!host) return;
-  $("runs-empty").hidden = runsList.length > 0;
-  host.innerHTML = runsList
-    .map((r) => {
-      const sites = r.distinct_count != null ? r.distinct_count : 0;
-      const area = Math.round(runAreaKm2(r)).toLocaleString();
-      const meta =
-        `${sites} site${sites === 1 ? "" : "s"} · ${area} km² · ${relativeDate(r.created_at)}`;
-      const pill =
-        r.status !== "done"
-          ? ` <span class="run-pill run-${esc(r.status)}">${esc(r.status)}</span>`
-          : "";
-      const shown = r.id === activeRunId;
-      const tip = shown ? "Tap to hide this run" : "Tap to show this run on the map";
-      return (
-        `<div class="run-row${shown ? " active" : ""}" data-id="${r.id}">` +
-        `<div class="run-row-main" title="${tip}">` +
-        `<div class="run-row-name">${esc(runLabel(r))}${pill}</div>` +
-        `<div class="run-row-sub">${meta}</div></div>` +
-        `<button class="run-rename" title="Rename run">✎</button>` +
-        `<button class="run-del" title="Delete run">×</button></div>`
-      );
-    })
-    .join("");
-  host.querySelectorAll(".run-row").forEach((row) => {
-    const id = parseInt(row.dataset.id, 10);
-    row.querySelector(".run-row-main").onclick = () => {
-      if (id === activeRunId) {
-        clearRun(); // re-tapping the shown run hides its results
-        return;
-      }
-      if (isMobile()) setNav(false); // mobile: close the drawer so the map shows
-      loadRun(id);
-    };
-    row.querySelector(".run-rename").onclick = (e) => {
-      e.stopPropagation();
-      renameRun(id);
-    };
-    row.querySelector(".run-del").onclick = (e) => {
-      e.stopPropagation();
-      deleteRun(id);
-    };
-  });
-}
-
-async function renameRun(id) {
-  const r = runsList.find((x) => x.id === id);
-  const name = prompt("Rename run", r ? runLabel(r) : "");
-  if (name == null) return; // cancelled
-  const trimmed = name.trim();
-  if (!trimmed) return;
-  try {
-    const resp = await fetch(`/runs/${id}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: trimmed }),
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      setStatus(err.detail || "Rename failed", "err");
-      return;
-    }
-    await loadRuns(); // re-render the list with the new label
-  } catch (e) {
-    setStatus("Error: " + e.message, "err");
-  }
-}
-
-async function loadRun(runId) {
-  exitTripPlot(); // loading a run leaves the trip-plot view
-  activeRunId = runId;
-  const gj = await (await fetch(`/runs/${runId}/geojson`)).json();
-  renderResults(gj); // fitBounds here fires moveend -> scheduleRoads() fetches the area
-  renderMeta(gj.run);
-  drawRunExtent(gj.run.bbox);
-  renderRunsList(); // highlight the active row
-  renderRunChip(); // on-map "viewing run" indicator + exit affordance
-}
-
-// Leave run-view: pull the scored results + extent off the map and reset state.
-// The exit path the run-chip ✕ uses; also reused when the active run is deleted.
-function clearRun() {
-  activeRunId = null;
-  lastGj = null;
-  pinLayer.clearLayers();
-  candidatesLayer.clearLayers();
-  if (heatLayer) {
-    map.removeLayer(heatLayer);
-    heatLayer = null;
-  }
-  runExtentLayer.clearLayers();
-  nearbyCgLayer.clearLayers();
-  closeSite();
-  $("provenance").innerHTML = "";
-  $("degraded").innerHTML = "";
-  renderRunChip();
-  renderRunsList();
-}
-
-// The on-map chip naming the run whose results are shown, with an ✕ to exit.
-function renderRunChip() {
-  const chip = $("run-chip");
-  if (!chip) return;
-  if (activeRunId == null) {
-    chip.hidden = true;
-    chip.innerHTML = "";
-    return;
-  }
-  const r = runsList.find((x) => x.id === activeRunId);
-  const name = r ? runLabel(r) : "Run #" + activeRunId;
-  chip.hidden = false;
-  chip.innerHTML =
-    `<span class="run-chip-text">📊 ${esc(name)}</span>` +
-    `<button type="button" class="run-chip-x" title="Exit run view" aria-label="Exit run view">✕</button>`;
-  chip.querySelector(".run-chip-x").onclick = clearRun;
-}
-
-// A dashed rectangle showing the run's scored extent. b = [minlon,minlat,maxlon,maxlat].
-function drawRunExtent(b) {
-  if (!runExtentLayer) return;
-  runExtentLayer.clearLayers();
-  if (!b) return;
-  L.rectangle([[b[1], b[0]], [b[3], b[2]]], {
-    color: "#5b9c5a",
-    weight: 1.5,
-    dashArray: "6 4",
-    fill: false,
-    interactive: false,
-  }).addTo(runExtentLayer);
-}
-
-async function deleteRun(id) {
-  const r = runsList.find((x) => x.id === id);
-  if (!confirm(`Delete run "${r ? runLabel(r) : "#" + id}"? This can't be undone.`)) return;
-  await fetch(`/runs/${id}`, { method: "DELETE" });
-  if (id === activeRunId) clearRun(); // the active run's results are on the map
-  await loadRuns();
-}
-
 // Cairn's own road network (OSM ∪ MVUM forest spurs) as vector lines — far
 // better than the satellite basemap's transportation overlay, which is blank in
 // the forest and drops linework above z18. Viewport-driven (GET /roads?bbox=):
@@ -1481,37 +1302,44 @@ function buildLandToggles() {
 let forestsAll = []; // GET /forests: [{layer, name, area_km2, bbox, has_mvum}]
 let forestActive = null; // {layer, name} currently entered (Explore detail view)
 
-const FOREST_RECENT_KEY = "wander.forest.recent";
-const FOREST_PINNED_KEY = "wander.forest.pinned";
 const FOREST_RECENT_MAX = 6;
 
+// Pins + recents now live server-side so they follow the user across devices
+// (doc #34 #3). Held in memory after load; mutations re-render synchronously and
+// persist via a fire-and-forget PUT. Empty if the backend is unreachable.
+let forestMarks = { pinned: [], recent: [] };
+
 const _forestKey = (f) => `${f.layer}/${f.name}`;
-function _loadMarks(key) {
+async function loadForestMarks() {
   try {
-    return JSON.parse(localStorage.getItem(key) || "[]");
+    const m = await (await fetch("/forests/marks")).json();
+    forestMarks = { pinned: m.pinned || [], recent: m.recent || [] };
   } catch {
-    return [];
+    forestMarks = { pinned: [], recent: [] };
   }
 }
-function _saveMarks(key, arr) {
-  try {
-    localStorage.setItem(key, JSON.stringify(arr));
-  } catch {
-    /* private mode — pins just won't persist */
-  }
+function saveForestMarks() {
+  // Fire-and-forget: the UI already reflects forestMarks; persistence is async.
+  fetch("/forests/marks", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(forestMarks),
+  }).catch(() => {});
 }
-const forestPinned = () => _loadMarks(FOREST_PINNED_KEY);
+const forestPinned = () => forestMarks.pinned;
 const isForestPinned = (f) => forestPinned().includes(_forestKey(f));
 function toggleForestPin(f) {
   const k = _forestKey(f);
-  const pins = forestPinned();
-  _saveMarks(FOREST_PINNED_KEY, pins.includes(k) ? pins.filter((x) => x !== k) : [k, ...pins]);
+  const pins = forestMarks.pinned;
+  forestMarks.pinned = pins.includes(k) ? pins.filter((x) => x !== k) : [k, ...pins];
+  saveForestMarks();
 }
 function pushForestRecent(f) {
   const k = _forestKey(f);
-  const r = _loadMarks(FOREST_RECENT_KEY).filter((x) => x !== k);
+  const r = forestMarks.recent.filter((x) => x !== k);
   r.unshift(k);
-  _saveMarks(FOREST_RECENT_KEY, r.slice(0, FOREST_RECENT_MAX));
+  forestMarks.recent = r.slice(0, FOREST_RECENT_MAX);
+  saveForestMarks();
 }
 
 async function loadForests() {
@@ -1520,6 +1348,7 @@ async function loadForests() {
   } catch {
     forestsAll = [];
   }
+  await loadForestMarks(); // hydrate pins + recents before the first render
   wireExplore();
   renderForestList();
 }
@@ -1578,7 +1407,7 @@ function renderForestList() {
   if (!q) {
     const seen = new Set();
     const featured = [];
-    for (const k of [...forestPinned(), ..._loadMarks(FOREST_RECENT_KEY)]) {
+    for (const k of [...forestMarks.pinned, ...forestMarks.recent]) {
       if (seen.has(k) || !byKey.has(k)) continue;
       seen.add(k);
       featured.push(byKey.get(k));
@@ -1620,9 +1449,12 @@ async function enterForest(f) {
 
 function exitForestDetail() {
   forestActive = null;
+  forestScopeOn = false; // un-scope Saved (decision #2)
   clearViewResults(); // leaving the forest clears any transient score (TLC-15)
   clearCoverage(); // and its coverage fog (TLC-19, session-scoped to the forest)
   renderForestList();
+  renderCollFilterBar(); // drop the "Inside <forest>" chip
+  renderSavedList(); // un-scope the list + markers
 }
 
 // Browsing a forest turns on the dispersed-sites lens (the dispersed-camping
@@ -1928,6 +1760,13 @@ async function selectShape(layer, name) {
   });
   shapeSelectLayer = L.layerGroup([mask, outline]).addTo(map);
   selectedShape = { layer, name };
+  selectedShapeGeom = shape.geometry; // for forest-scoped Saved filter (point-in-polygon)
+  // Entering a forest soft-scopes Saved to inside it (decision #2); dismissible.
+  if (typeof forestActive !== "undefined" && forestActive) {
+    forestScopeOn = true;
+    if (typeof renderCollFilterBar === "function") renderCollFilterBar();
+    if (typeof renderSavedList === "function") renderSavedList();
+  }
   renderShapeChip();
   const bb = shape.bbox; // [w, s, e, n] from the full geometry
   if (bb && bb.every((v) => typeof v === "number")) {
@@ -1956,6 +1795,8 @@ function clearShape() {
     shapeSelectLayer = null;
   }
   selectedShape = null;
+  selectedShapeGeom = null;
+  forestScopeOn = false;
   renderShapeChip();
   // The active forest IS the selected shape — exiting the chip exits the forest
   // (TLC-16: one-tap exit), returning Explore to its list.
@@ -2447,7 +2288,42 @@ const activeCollFilters = new Set();
 let selectMode = false;
 const selectedIds = new Set();
 
+// Ray-casting point-in-polygon over a GeoJSON geometry in [lon, lat] order,
+// honoring interior holes (ring[0] outer, the rest holes) and MultiPolygon.
+function _pointInRing(x, y, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0],
+      yi = ring[i][1],
+      xj = ring[j][0],
+      yj = ring[j][1];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+function _pointInRings(x, y, rings) {
+  if (!rings.length || !_pointInRing(x, y, rings[0])) return false;
+  for (let k = 1; k < rings.length; k++) if (_pointInRing(x, y, rings[k])) return false; // in a hole
+  return true;
+}
+function pointInGeom(lat, lon, geom) {
+  if (!geom) return true; // no geometry loaded -> don't hide anything
+  const x = lon,
+    y = lat;
+  if (geom.type === "Polygon") return _pointInRings(x, y, geom.coordinates);
+  if (geom.type === "MultiPolygon")
+    return geom.coordinates.some((poly) => _pointInRings(x, y, poly));
+  return true;
+}
+
+// True when the active-forest scope (decision #2) is on and the place falls
+// outside the forest polygon — i.e. it should be hidden from Saved.
+function outsideForestScope(place) {
+  return forestScopeOn && selectedShapeGeom && !pointInGeom(+place.lat, +place.lon, selectedShapeGeom);
+}
+
 function placePassesFilter(place) {
+  if (outsideForestScope(place)) return false; // forest scope first (decision #2)
   if (!activeCollFilters.size) return true;
   const ids = place.collection_ids || [];
   if (activeCollFilters.has(UNFILED) && ids.length === 0) return true;
@@ -2463,6 +2339,7 @@ function savedLayerColl() {
 }
 
 function savedPassesLayerFilter(place) {
+  if (outsideForestScope(place)) return false; // keep map markers in sync with the list
   const v = savedLayerColl();
   if (v === "all") return true;
   const ids = place.collection_ids || [];
@@ -2514,8 +2391,26 @@ function renderCollFilterBar() {
     `<button class="cf-chip cf-unfiled${activeCollFilters.has(UNFILED) ? " on" : ""}" ` +
     `data-id="${UNFILED}" style="--cf:#8a97a3"><span class="cf-dot"></span>` +
     `Unfiled <span class="cf-n">${unfiledCount}</span></button>`;
-  host.innerHTML = collections.length || unfiledCount ? chips + unfiled : "";
-  host.querySelectorAll(".cf-chip").forEach((b) => {
+  // Forest-scope chip (decision #2): present only while a forest is active; "on"
+  // when Saved is scoped to inside it. Tap toggles the scope; dismissible.
+  let scopeChip = "";
+  if (forestActive) {
+    const inside = savedPlaces.filter((s) => pointInGeom(+s.lat, +s.lon, selectedShapeGeom)).length;
+    scopeChip =
+      `<button class="cf-chip cf-forest${forestScopeOn ? " on" : ""}" data-forest="1" ` +
+      `style="--cf:#3f7d3f" title="Show only saved places inside ${esc(forestActive.name)}">` +
+      `<span class="cf-dot"></span>🌲 In ${esc(forestActive.name)} <span class="cf-n">${inside}</span></button>`;
+  }
+  const body = collections.length || unfiledCount ? chips + unfiled : "";
+  host.innerHTML = scopeChip + body;
+  const scopeEl = host.querySelector(".cf-forest");
+  if (scopeEl)
+    scopeEl.onclick = () => {
+      forestScopeOn = !forestScopeOn;
+      renderCollFilterBar();
+      renderSavedList();
+    };
+  host.querySelectorAll(".cf-chip:not(.cf-forest)").forEach((b) => {
     b.onclick = () =>
       toggleCollFilter(b.dataset.id === UNFILED ? UNFILED : parseInt(b.dataset.id, 10));
   });
@@ -2643,7 +2538,7 @@ async function toggleFav(fav, btn) {
   renderSavedList();
   // FC-18 / TLC-17: capture context at save time. The save already committed
   // (instant, non-blocking); now offer collections — pick/create or ignore.
-  if (newRow && btn) openCollectionPicker(newRow, btn);
+  if (newRow && btn) openCollectionPicker(newRow, btn, { prefillContext: true });
 }
 
 // Colored membership chips for a saved place (looked up against collById).
@@ -3660,7 +3555,14 @@ function _onCollPickerOutside(e) {
   if (_collPicker && !_collPicker.contains(e.target)) closeCollPicker();
 }
 
-async function openCollectionPicker(place, anchorEl) {
+// The active context's collection name (trip wins over forest), or null. Used
+// to pre-fill the New-collection input on a fresh save so grouping a place into
+// "its" forest/trip is one tap — no auto-tagging (UoW-14 context-default).
+function _contextCollName() {
+  return (activeTrip && activeTrip.name) || (forestActive && forestActive.name) || null;
+}
+
+async function openCollectionPicker(place, anchorEl, opts = {}) {
   const same = _collPicker && _collPicker._for === place.id;
   closeCollPicker();
   if (same) return; // a second click toggles it closed
@@ -3669,6 +3571,14 @@ async function openCollectionPicker(place, anchorEl) {
   pick.className = "coll-picker floating";
   pick._for = place.id;
   _collEditing = null; // start unedited
+  // On a fresh save inside a forest/trip, offer to create that collection inline
+  // (only if it doesn't already exist — otherwise it's just a tap in the list).
+  if (opts.prefillContext) {
+    const ctx = _contextCollName();
+    if (ctx && !collections.some((c) => (c.name || "").toLowerCase() === ctx.toLowerCase())) {
+      pick._prefillName = ctx;
+    }
+  }
   document.body.appendChild(pick);
   _collPicker = pick;
   renderCollPickerBody(pick, place);
@@ -3746,6 +3656,11 @@ function renderCollPickerBody(pick, place) {
   wireCollEditor(pick, place);
   const input = pick.querySelector(".coll-pick-input");
   const add = pick.querySelector(".coll-pick-add");
+  // Context pre-fill: apply once, on the initial open, only if untouched.
+  if (pick._prefillName && !input.value) {
+    input.value = pick._prefillName;
+    pick._prefillName = null; // don't re-apply on later re-renders
+  }
   add.onclick = async () => {
     const name = input.value.trim();
     if (!name) {

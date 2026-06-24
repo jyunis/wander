@@ -7,14 +7,13 @@ persisted run + its GeoJSON.
 
 from __future__ import annotations
 
-import asyncio
 import re
 
 import pytest
 
 from cairn.config import DEFAULT_WEIGHTS
 from cairn.errors import BboxTooLarge
-from cairn.service import SCORING_CONFIG_VERSION, RunService
+from cairn.service import SCORING_CONFIG_VERSION, RunService, validate_request
 from cairn.store import Store
 from cairn.store.types import Bbox
 from tests.fakes.pipeline import (
@@ -61,6 +60,19 @@ async def test_score_view_clip_restricts_candidates(store, settings):
     assert len(await store.list_runs()) == 0  # still ephemeral
 
 
+# Persist + execute a run through the live engine primitives (create_run →
+# _execute → get_run) — exactly what the retired score_bbox did internally. The
+# persisted-run *backend* is gone (doc #34 #4), but these primitives remain (the
+# ephemeral /score/view path uses them), so the engine contracts below still test
+# live code; we just need a durable run to inspect.
+async def _persist(svc, store, settings, weights, bbox=TEST_BBOX, clip_polygons=None):
+    b = validate_request(bbox, weights, settings)
+    params = await store.scoring_config_params(SCORING_CONFIG_VERSION)
+    run_id = await store.create_run(b, weights, SCORING_CONFIG_VERSION)
+    await svc._execute(run_id, b, weights, params, settings.max_wallclock_seconds, clip_polygons)
+    return await store.get_run(run_id)
+
+
 async def _run(store: Store, settings, elements, weights):
     svc = RunService(
         store,
@@ -68,7 +80,7 @@ async def _run(store: Store, settings, elements, weights):
         overpass=FakeOverpass(elements),
         terrain_factory=fake_terrain_factory(slope_deg=3.0),
     )
-    return await svc.score_bbox(TEST_BBOX, weights)
+    return await _persist(svc, store, settings, weights)
 
 
 async def test_full_run_succeeds_and_persists(store, settings):
@@ -181,7 +193,7 @@ async def test_clip_filters_candidates_to_boundary(store, settings):
         overpass=FakeOverpass(synthetic_elements()),
         terrain_factory=fake_terrain_factory(slope_deg=3.0),
     )
-    run = await svc.score_bbox(TEST_BBOX, DEFAULT_WEIGHTS, clip_polygons=[wkb])
+    run = await _persist(svc, store, settings, DEFAULT_WEIGHTS, clip_polygons=[wkb])
     assert run.status == "done"
     assert run.candidate_count > 0
     gj = await store.get_run_geojson(run.id)
@@ -208,7 +220,7 @@ async def test_multiple_clips_intersect(store, settings):
         overpass=FakeOverpass(synthetic_elements()),
         terrain_factory=fake_terrain_factory(slope_deg=3.0),
     )
-    run = await svc.score_bbox(TEST_BBOX, DEFAULT_WEIGHTS, clip_polygons=[a, b])
+    run = await _persist(svc, store, settings, DEFAULT_WEIGHTS, clip_polygons=[a, b])
     assert run.status == "done" and run.candidate_count > 0
     gj = await store.get_run_geojson(run.id)
     for feat in gj["features"]:
@@ -266,23 +278,5 @@ async def test_tlc4_wallclock_bound_is_honored(store, settings):
     run_id = await store.create_run(b, DEFAULT_WEIGHTS, SCORING_CONFIG_VERSION)
     await svc._execute(run_id, b, DEFAULT_WEIGHTS, params, 0.0)
     run = await store.get_run(run_id)
-    assert run.status == "failed"
-    assert "WallClockExceeded" in run.failure_reason
-
-
-async def test_tlc4_async_path_uses_async_wallclock_not_sync(store, settings):
-    # The async background path must read max_wallclock_async_seconds ("async
-    # beyond" 120s), independent of the sync bound. With the async bound at 0
-    # and the sync bound generous, an async run still fails on the clock —
-    # proving the two paths use different bounds.
-    settings.max_wallclock_seconds = 999.0
-    settings.max_wallclock_async_seconds = 0.0
-    svc = _svc(store, settings)
-    run_id = await svc.start_async(TEST_BBOX, DEFAULT_WEIGHTS)
-    for _ in range(500):  # let the background task run to a terminal state
-        run = await store.get_run(run_id)
-        if run.status in ("done", "failed"):
-            break
-        await asyncio.sleep(0.01)
     assert run.status == "failed"
     assert "WallClockExceeded" in run.failure_reason

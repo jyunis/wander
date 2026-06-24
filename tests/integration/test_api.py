@@ -2,9 +2,10 @@
 
 The app's lifespan opens a real SpatiaLite store (temp dir) and a real
 OverpassClient; we swap in a fake-overpass-backed RunService before scoring so
-no network is touched. Asserts the FC-8 surface: /config exposes weights/
-presets/area-cap, /score runs sync, /runs and /runs/{id}/geojson carry the
-disclaimer + breakdown, and typed errors map to 422/404 (TLC-4/10).
+no network is touched. Asserts the FC-8/FC-17 surface: /config exposes weights/
+presets/area-cap, /score/view returns the ranked GeoJSON synchronously with the
+disclaimer + breakdown (no persisted run — doc #34 #4), and typed errors map to
+422 (TLC-4/10).
 """
 
 from __future__ import annotations
@@ -37,8 +38,8 @@ def client(tmp_path, monkeypatch):
             overpass=FakeOverpass(synthetic_elements()),
             terrain_factory=fake_terrain_factory(slope_deg=3.0),
         )
-        # A fake geocoder so /score's best-effort place labeling never hits the
-        # network (geocode tests swap in their own / None as needed).
+        # A fake geocoder for the /geocode + /suggest-name tests (they swap in
+        # their own / None as needed); never hits the network.
         app.state.geocoder = _FakeGeocoder([])
         yield c
     config_module._settings = None
@@ -69,21 +70,10 @@ def test_health_ok(client):
     assert r.json()["status"] == "ok"
 
 
-def test_score_sync_then_fetch_and_geojson(client):
-    r = client.post("/score", json={"bbox": TEST_BBOX})
-    assert r.status_code == 200
-    run = r.json()
-    assert run["status"] == "done"
-    assert run["candidate_count"] > 0
-    assert 1 <= run["distinct_count"] <= run["candidate_count"]
-    assert run["place"] == "Test Locality"  # best-effort reverse-geocode label
-    assert "physical suitability only" in run["disclaimer"].lower()
-    run_id = run["id"]
-
-    r = client.get(f"/runs/{run_id}")
-    assert r.status_code == 200 and r.json()["status"] == "done"
-
-    r = client.get(f"/runs/{run_id}/geojson")
+def test_score_view_returns_geojson(client):
+    # FC-17 / TLC-15: roving "Score this view" returns the ranked FeatureCollection
+    # synchronously, with the disclaimer + per-site breakdown, persisting no run.
+    r = client.post("/score/view", json={"bbox": TEST_BBOX})
     assert r.status_code == 200
     gj = r.json()
     assert gj["type"] == "FeatureCollection"
@@ -91,60 +81,14 @@ def test_score_sync_then_fetch_and_geojson(client):
     assert len(gj["features"]) > 0
     props = gj["features"][0]["properties"]
     assert props["contributions"] and "total" in props
-
-
-def test_rename_run(client):
-    run_id = client.post("/score", json={"bbox": TEST_BBOX}).json()["id"]
-    r = client.patch(f"/runs/{run_id}", json={"name": "  Birch Lake spur  "})
-    assert r.status_code == 200
-    assert r.json()["place"] == "Birch Lake spur"  # trimmed
-    # The new label persists on subsequent fetches + the run list.
-    assert client.get(f"/runs/{run_id}").json()["place"] == "Birch Lake spur"
-    assert any(
-        run["id"] == run_id and run["place"] == "Birch Lake spur"
-        for run in client.get("/runs").json()["runs"]
-    )
-    # Blank name -> 422; unknown run -> 404.
-    assert client.patch(f"/runs/{run_id}", json={"name": "   "}).status_code == 422
-    assert client.patch("/runs/999999", json={"name": "x"}).status_code == 404
-
-
-def test_delete_run_cascades(client):
-    run_id = client.post("/score", json={"bbox": TEST_BBOX}).json()["id"]
-    assert client.get(f"/runs/{run_id}").status_code == 200
-    r = client.delete(f"/runs/{run_id}")
-    assert r.status_code == 200 and r.json()["deleted"] is True
-    # gone (candidates/scores cascade with it) -> 404, and re-deleting is a no-op
-    assert client.get(f"/runs/{run_id}").status_code == 404
-    assert client.delete(f"/runs/{run_id}").json()["deleted"] is False
-
-
-def test_run_roads_geojson(client):
-    # The drivable-ways overlay: a LineString FeatureCollection of the run's
-    # scored roads (OSM ∪ MVUM), carrying the TLC-3 disclaimer.
-    run_id = client.post("/score", json={"bbox": TEST_BBOX}).json()["id"]
-    r = client.get(f"/runs/{run_id}/roads")
-    assert r.status_code == 200
-    gj = r.json()
-    assert gj["type"] == "FeatureCollection"
-    assert "physical suitability only" in gj["disclaimer"].lower()
-    assert len(gj["features"]) > 0
-    geom = gj["features"][0]["geometry"]
-    assert geom["type"] == "LineString" and len(geom["coordinates"]) >= 2
-    props = gj["features"][0]["properties"]
-    assert "forest_road" in props and "rough" in props
-
-
-def test_roads_unknown_run_returns_404(client):
-    r = client.get("/runs/999999/roads")
-    assert r.status_code == 404
-    assert r.json()["error"] == "RunNotFound"
+    assert "rank" in props and 1 <= props["rank"]
 
 
 def test_roads_viewport_geojson(client):
     # The viewport roads overlay: drivable ways in a bbox, independent of any
-    # run. Score first so the store has road data for the area.
-    client.post("/score", json={"bbox": TEST_BBOX})
+    # run. Score first so the store has road data for the area (osm_features
+    # survive the ephemeral scratch run).
+    client.post("/score/view", json={"bbox": TEST_BBOX})
     bbox = ",".join(str(x) for x in TEST_BBOX)
     r = client.get(f"/roads?bbox={bbox}")
     assert r.status_code == 200
@@ -318,35 +262,21 @@ def test_suggest_name_uses_reverse_when_no_local_feature(client):
     assert r.status_code == 200 and r.json()["name"] == "Side Lake"
 
 
-def test_runs_list(client):
-    client.post("/score", json={"bbox": TEST_BBOX})
-    r = client.get("/runs")
-    assert r.status_code == 200
-    assert len(r.json()["runs"]) >= 1
-
-
-def test_bbox_too_large_returns_422_and_no_run(client):
-    r = client.post("/score", json={"bbox": [0.0, 0.0, 1.0, 1.0]})  # ~12000 km²
+def test_score_view_bbox_too_large_returns_422(client):
+    # Over the sync-area cap → typed 422 before any work (TLC-18 / TLC-4).
+    r = client.post("/score/view", json={"bbox": [0.0, 0.0, 1.0, 1.0]})  # ~12000 km²
     assert r.status_code == 422
     assert r.json()["error"] == "BboxTooLarge"
-    # No run row was created (validation precedes creation — TLC-4).
-    assert client.get("/runs").json()["runs"] == []
 
 
-def test_invalid_weights_returns_422(client):
+def test_score_view_invalid_weights_returns_422(client):
     r = client.post(
-        "/score",
+        "/score/view",
         json={"bbox": TEST_BBOX, "weights": {"flatness": 0, "water_proximity": 0,
                                              "tree_cover": 0, "solitude": 0}},
     )
     assert r.status_code == 422
     assert r.json()["error"] == "InvalidWeights"
-
-
-def test_unknown_run_returns_404(client):
-    r = client.get("/runs/999999")
-    assert r.status_code == 404
-    assert r.json()["error"] == "RunNotFound"
 
 
 def test_trip_crud(client):

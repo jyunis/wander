@@ -33,7 +33,7 @@ from cairn.store.types import Bbox, Run
 
 _M_PER_DEG = 111320.0
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 # Sentinel for partial updates: distinguishes "field omitted" from "set to NULL".
@@ -117,6 +117,15 @@ _MIGRATIONS: dict[int, list[str]] = {
         # of an id. Nullable; display-only.
         "ALTER TABLE runs ADD COLUMN place TEXT",
         "INSERT INTO schema_version (version) VALUES (10)",
+    ],
+    10: [
+        # Forest pins + recents (v11): the Explore tab's "recent & pinned" group,
+        # moved off localStorage into the store so it follows the user across
+        # devices (doc #34 #3). UI prefs only, never scoring (TLC-3).
+        "CREATE TABLE IF NOT EXISTS forest_marks ("
+        "  kind TEXT NOT NULL, forest_key TEXT NOT NULL, position INTEGER NOT NULL, "
+        "  PRIMARY KEY (kind, forest_key))",
+        "INSERT INTO schema_version (version) VALUES (11)",
     ],
 }
 
@@ -377,13 +386,6 @@ class Store:
             place=row[16],
         )
 
-    async def set_run_place(self, run_id: int, place: str) -> None:
-        """Set a run's display place label (reverse-geocoded). Best-effort."""
-        await self.db.execute(
-            "UPDATE runs SET place = ? WHERE id = ?", (place, run_id)
-        )
-        await self.db.commit()
-
     async def list_runs(self, limit: int = 50) -> list[Run]:
         cur = await self.db.execute(
             "SELECT id FROM runs ORDER BY created_at DESC LIMIT ?", (limit,)
@@ -642,6 +644,38 @@ class Store:
             "SELECT COUNT(*) FROM place_collections WHERE collection_id=?", (collection_id,)
         )).fetchone())[0]
         return after - before
+
+    # --- Forest marks (Explore pins + recents — UI prefs, TLC-3) -------------
+
+    async def get_forest_marks(self) -> dict:
+        """The Explore tab's pinned + recent forest keys (each an ordered list,
+        front first). Cross-device replacement for the old localStorage."""
+        cur = await self.db.execute(
+            "SELECT kind, forest_key FROM forest_marks ORDER BY kind, position"
+        )
+        out: dict[str, list[str]] = {"pinned": [], "recent": []}
+        for kind, key in await cur.fetchall():
+            if kind in out:
+                out[kind].append(key)
+        return out
+
+    async def set_forest_marks(
+        self, pinned: list[str], recent: list[str]
+    ) -> dict:
+        """Replace both ordered lists wholesale (PUT semantics). De-dupes within
+        each list, preserving the given order. Returns the stored marks."""
+        rows = []
+        for kind, keys in (("pinned", pinned), ("recent", recent)):
+            for pos, key in enumerate(dict.fromkeys(keys)):  # order-preserving de-dupe
+                rows.append((kind, key, pos))
+        await self.db.execute("DELETE FROM forest_marks")
+        if rows:
+            await self.db.executemany(
+                "INSERT INTO forest_marks (kind, forest_key, position) VALUES (?, ?, ?)",
+                rows,
+            )
+        await self.db.commit()
+        return await self.get_forest_marks()
 
     # --- Trips (a dated grouping of saved places — user data, TLC-3) ---------
 
@@ -1149,25 +1183,6 @@ class Store:
                 "failure_reason": run.failure_reason,
             },
             "features": features,
-        }
-
-    async def get_run_roads_geojson(self, run_id: int) -> dict:
-        """The run's drivable ways (OSM ∪ MVUM) as a GeoJSON LineString
-        FeatureCollection, clipped to the run bbox — the road data Cairn
-        actually scored. Rendered as a vector overlay so forest spurs show
-        crisply at every zoom and on the satellite basemap, where Esri's
-        transportation reference layer carries no forest roads. Carries the
-        TLC-3 disclaimer; suitability not legality."""
-        from cairn import DISCLAIMER
-
-        run = await self.get_run(run_id)
-        ways = await self.load_drivable_ways(run.bbox, clip=True)
-        tags_by_id = await self.drivable_way_tags(run.bbox)
-        return {
-            "type": "FeatureCollection",
-            "disclaimer": DISCLAIMER,
-            "run": {"id": run.id, "status": run.status},
-            "features": _roads_features(ways, tags_by_id),
         }
 
     async def get_roads_geojson(self, bbox: Bbox, max_features: int = 4000) -> dict:
