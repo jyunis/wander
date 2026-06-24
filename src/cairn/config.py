@@ -231,6 +231,7 @@ class Settings(BaseSettings):
             "presets": WEIGHT_PRESETS,
             "feature_names": list(DEFAULT_WEIGHTS.keys()),
             "max_bbox_area_km2": self.max_bbox_area_km2,
+            "sync_area_threshold_km2": self.sync_area_threshold_km2,
             "max_candidates": self.max_candidates,
             "terrarium_zoom": self.terrarium_zoom,
             "distinct_radius_m": self.distinct_radius_m,

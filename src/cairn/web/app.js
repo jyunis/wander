@@ -186,7 +186,6 @@ async function init() {
   buildPresets();
   buildBasemaps();
   setupMap();
-  await loadRuns();
   await initLandOverlays();
   await initMvum();
   await loadForests(); // Explore tab (front door)
@@ -321,6 +320,7 @@ function setupMap() {
   L.control.zoom({ position: "topright" }).addTo(map);
   addBasemapControl(); // small on-map style picker (synced with the panel select)
   addMeasureControl(); // 📏 distance ruler (independent of the scoring tools)
+  addScoreViewControl(); // 🎯 roving "Score this view" (ephemeral) — doc #34 M2
   setBasemap(DEFAULT_BASEMAP);
   // Candidate-dot canvas: its OWN pane BELOW the land pane. The canvas spans the
   // whole viewport and captures pointer events across it, so if it sat above the
@@ -344,6 +344,7 @@ function setupMap() {
   map.createPane("shapeHighlight");
   map.getPane("shapeHighlight").style.zIndex = 260;
   map.getPane("shapeHighlight").style.pointerEvents = "none";
+  map.on("moveend", updateCapRect); // keep the "scoreable area" box current
   map.on("moveend", refreshActiveOverlays);
   map.on("moveend", scheduleRoads); // viewport roads overlay follows the map
   map.on("zoomend", restyleRoadsForZoom); // scale road weight to the new zoom
@@ -835,23 +836,52 @@ function setBboxFromBounds(b) {
   $("score-btn").disabled = !ok;
 }
 
-// --- scoring flow ----------------------------------------------------------
+// --- scoring flow (roving, ephemeral — doc #34 M2) -------------------------
+// Score is a flashlight, not a printer: every path runs synchronously over a
+// capped area via POST /score/view, renders transient results, and persists
+// nothing (TLC-15). The drawn-bbox "Score" button, the "Score within boundary"
+// chip, and the map's "Score this view" control all funnel through executeScore.
 async function runScore() {
   if (!bbox) return;
-  await executeScore(bbox, {});
+  await executeScore(bbox, { button: $("score-btn") });
 }
 
-// Shared score driver for both the drawn-bbox "Score" button and the
-// "Score within boundary" chip button. `opts.clip` ({layer, name}) restricts
-// candidates to a forest/park polygon; `opts.button` is the triggering element
-// to disable while the run is in flight (defaults to the draw Score button).
+// The 🎯 map control — score the current view (clipped to the active forest if
+// one is entered). Scores the cap rectangle when zoomed out past the cap.
+async function scoreThisView() {
+  const bb = scoreableBbox();
+  const opts = { button: document.querySelector(".scoreview-btn") };
+  if (selectedShape) opts.clip = { layer: selectedShape.layer, name: selectedShape.name };
+  await executeScore(bb, opts);
+}
+
+// The bbox "Score this view" will cover: the viewport, or — when the viewport
+// exceeds the sync cap — the centered cap-sized rectangle (TLC-18).
+function scoreableBbox() {
+  const b = map.getBounds();
+  const view = {
+    min_lon: b.getWest(), min_lat: b.getSouth(),
+    max_lon: b.getEast(), max_lat: b.getNorth(),
+  };
+  const cap = CONFIG.sync_area_threshold_km2 || 200;
+  const a = areaKm2(view);
+  if (a <= cap) return view;
+  const scale = Math.sqrt(cap / a);
+  const clat = (view.min_lat + view.max_lat) / 2;
+  const clon = (view.min_lon + view.max_lon) / 2;
+  const hlat = ((view.max_lat - view.min_lat) / 2) * scale;
+  const hlon = ((view.max_lon - view.min_lon) / 2) * scale;
+  return { min_lon: clon - hlon, min_lat: clat - hlat, max_lon: clon + hlon, max_lat: clat + hlat };
+}
+
 async function executeScore(bb, opts = {}) {
-  if (areaKm2(bb) > CONFIG.max_bbox_area_km2) {
-    // client-side mirror of TLC-4; the API is still the authority.
-    setStatus("Area exceeds the cap — draw a smaller box.", "err");
+  const cap = CONFIG.sync_area_threshold_km2 || 200;
+  if (areaKm2(bb) > cap) {
+    setStatus("Area too big — zoom in (or draw a smaller box) to score.", "err");
     return;
   }
-  const btn = opts.button || $("score-btn");
+  clearViewResults(); // each score replaces the last (pure ephemeral)
+  const btn = opts.button;
   if (btn) btn.disabled = true;
   setStatus(opts.clip ? "Scoring within boundary…" : "Scoring…");
   try {
@@ -861,36 +891,99 @@ async function executeScore(bb, opts = {}) {
     };
     if (opts.clip) body.clip = opts.clip;
     if ($("public-only")?.checked) body.public_only = true;
-    const resp = await fetch("/score", {
+    const resp = await fetch("/score/view", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (resp.status === 422) {
-      const err = await resp.json();
-      setStatus(err.detail || "Invalid request", "err");
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      setStatus(err.detail || "Scoring failed", "err");
       return;
     }
-    let run = await resp.json();
-    while (run.status === "pending" || run.status === "running") {
-      await new Promise((r) => setTimeout(r, 1000));
-      run = await (await fetch(`/runs/${run.id}`)).json();
-    }
-    await loadRuns();
-    if (run.status === "failed") {
-      setStatus("Run failed: " + run.failure_reason, "err");
-    } else {
-      setStatus(
-        `Done — ${run.distinct_count} distinct sites (${run.candidate_count} scored points).`,
-        "ok"
-      );
-      await loadRun(run.id);
-    }
+    const gj = await resp.json();
+    renderViewResults(gj);
   } catch (e) {
     setStatus("Error: " + e.message, "err");
   } finally {
     if (btn) btn.disabled = false;
   }
+}
+
+// Render an ephemeral score result: transient pins/dots (no fit-zoom — you
+// framed the view), a count chip with a clear ✕, no run persisted.
+function renderViewResults(gj) {
+  lastGj = gj;
+  renderCandidates(); // dots + pins from lastGj, honoring the min-score slider
+  const feats = (gj.features || []).filter((f) => f.properties.total >= minScore);
+  const distinct = (gj.features || []).filter((f) => f.properties.distinct).length;
+  setStatus(`${distinct} distinct sites · ${(gj.features || []).length} scored.`, "ok");
+  renderResultsChip(feats.length, distinct);
+}
+
+function renderResultsChip(shown, distinct) {
+  const chip = $("results-chip");
+  if (!chip) return;
+  chip.hidden = false;
+  chip.innerHTML =
+    `<span class="run-chip-text">📊 ${distinct} site${distinct === 1 ? "" : "s"}</span>` +
+    `<button type="button" class="run-chip-x" title="Clear results" aria-label="Clear results">✕</button>`;
+  chip.querySelector(".run-chip-x").onclick = clearViewResults;
+}
+
+// Pull transient results off the map (next score, forest exit, or the chip ✕).
+function clearViewResults() {
+  lastGj = null;
+  if (pinLayer) pinLayer.clearLayers();
+  if (candidatesLayer) candidatesLayer.clearLayers();
+  if (heatLayer) {
+    map.removeLayer(heatLayer);
+    heatLayer = null;
+  }
+  if (nearbyCgLayer) nearbyCgLayer.clearLayers();
+  const chip = $("results-chip");
+  if (chip) {
+    chip.hidden = true;
+    chip.innerHTML = "";
+  }
+}
+
+// --- "scoreable area" cap rectangle ----------------------------------------
+// When the viewport exceeds the sync cap, show the centered box that "Score this
+// view" will actually cover, so the cap is visible, not a surprise (TLC-18).
+let capRectLayer = null;
+function updateCapRect() {
+  if (!map) return;
+  const cap = (CONFIG && CONFIG.sync_area_threshold_km2) || 200;
+  const b = map.getBounds();
+  const view = {
+    min_lon: b.getWest(), min_lat: b.getSouth(),
+    max_lon: b.getEast(), max_lat: b.getNorth(),
+  };
+  if (capRectLayer) {
+    map.removeLayer(capRectLayer);
+    capRectLayer = null;
+  }
+  if (areaKm2(view) <= cap) return; // whole view scores — no box needed
+  const r = scoreableBbox();
+  capRectLayer = L.rectangle(
+    [[r.min_lat, r.min_lon], [r.max_lat, r.max_lon]],
+    { color: "#5b9c5a", weight: 1.5, dashArray: "6 4", fill: false, interactive: false }
+  ).addTo(map);
+}
+
+function addScoreViewControl() {
+  const ctrl = L.control({ position: "topright" });
+  ctrl.onAdd = () => {
+    const div = L.DomUtil.create("div", "scoreview-ctrl leaflet-control");
+    div.innerHTML =
+      `<button type="button" class="scoreview-btn" title="Score this view" ` +
+      `aria-label="Score this view">🎯 Score</button>`;
+    L.DomEvent.disableClickPropagation(div);
+    div.querySelector(".scoreview-btn").onclick = scoreThisView;
+    return div;
+  };
+  ctrl.addTo(map);
 }
 
 let runsList = []; // GET /runs — recent run summaries, newest first
@@ -1499,6 +1592,7 @@ async function enterForest(f) {
 
 function exitForestDetail() {
   forestActive = null;
+  clearViewResults(); // leaving the forest clears any transient score (TLC-15)
   renderForestList();
 }
 
@@ -1841,13 +1935,14 @@ function updateShapeScoreBtn() {
     max_lon: b.getEast(),
     max_lat: b.getNorth(),
   });
-  const ok = a <= CONFIG.max_bbox_area_km2;
+  const cap = CONFIG.sync_area_threshold_km2 || 200;
+  const ok = a <= cap;
   btn.textContent = _shapeScoring ? "Scoring…" : "Score within boundary";
   btn.disabled = _shapeScoring || !ok;
   btn.classList.toggle("over-cap", !ok);
   btn.title = ok
     ? "Score the current view, clipped to this boundary"
-    : `View is ${a.toFixed(0)} km² — over the ${CONFIG.max_bbox_area_km2} km² cap. Zoom to a section.`;
+    : `View is ${a.toFixed(0)} km² — over the ${cap} km² cap. Zoom to a section.`;
 }
 
 async function scoreWithinBoundary() {
@@ -1859,7 +1954,7 @@ async function scoreWithinBoundary() {
     max_lon: b.getEast(),
     max_lat: b.getNorth(),
   };
-  if (areaKm2(view) > CONFIG.max_bbox_area_km2) return; // cap-gated (button disabled)
+  if (areaKm2(view) > (CONFIG.sync_area_threshold_km2 || 200)) return; // cap-gated
   _shapeScoring = true;
   updateShapeScoreBtn();
   try {
@@ -2494,6 +2589,7 @@ async function toggleFav(fav, btn) {
   }
   const key = savedKey(fav.kind, fav.lat, fav.lon);
   const id = savedByKey.get(key);
+  let newRow = null;
   if (id != null) {
     await fetch(`/saved/${id}`, { method: "DELETE" });
     savedPlaces = savedPlaces.filter((s) => s.id !== id);
@@ -2506,12 +2602,12 @@ async function toggleFav(fav, btn) {
       body: JSON.stringify(fav),
     });
     if (r.ok) {
-      const row = await r.json();
-      savedPlaces.unshift(row);
-      savedByKey.set(key, row.id);
+      newRow = await r.json();
+      savedPlaces.unshift(newRow);
+      savedByKey.set(key, newRow.id);
       // Reflect the deduped name back into the sheet's name field.
       const nameEl = fav.kind === "site" && $("site-name");
-      if (nameEl) nameEl.value = row.name || "";
+      if (nameEl) nameEl.value = newRow.name || "";
     }
   }
   if (btn) {
@@ -2520,6 +2616,9 @@ async function toggleFav(fav, btn) {
     btn.classList.toggle("on", on);
   }
   renderSavedList();
+  // FC-18 / TLC-17: capture context at save time. The save already committed
+  // (instant, non-blocking); now offer collections — pick/create or ignore.
+  if (newRow && btn) openCollectionPicker(newRow, btn);
 }
 
 // Colored membership chips for a saved place (looked up against collById).
@@ -3231,7 +3330,7 @@ function clearMapForTrip() {
   closeSite(); // also clears nearbyCgLayer + any selected marker
   clearShape(); // drop any forest/park discovery highlight
   clearMeasure(); // drop any distance ruler
-  if ($("run-chip")) $("run-chip").hidden = true; // hide (activeRunId kept for restore)
+  if ($("results-chip")) $("results-chip").hidden = true; // hide transient score chip
   [pinLayer, candidatesLayer, heatLayer, roadsLayer, drawnItems].forEach((l) => {
     if (l && map.hasLayer(l)) map.removeLayer(l);
   });
@@ -3256,7 +3355,10 @@ function exitTripPlot() {
   if (drawnItems && !map.hasLayer(drawnItems)) map.addLayer(drawnItems);
   updateLayerVisibility(); // restore checked result layers (pins/dots/heat/roads)
   refreshActiveOverlays(); // re-fetch any active land overlays
-  renderRunChip(); // restore the "viewing run" chip if a run is still active
+  if (lastGj) renderResultsChip(
+    (lastGj.features || []).filter((f) => f.properties.total >= minScore).length,
+    (lastGj.features || []).filter((f) => f.properties.distinct).length
+  ); // restore the transient results chip if results are still up
 }
 
 function exportTrip(fmt) {

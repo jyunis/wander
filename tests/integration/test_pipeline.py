@@ -13,14 +13,52 @@ import re
 import pytest
 
 from cairn.config import DEFAULT_WEIGHTS
+from cairn.errors import BboxTooLarge
 from cairn.service import SCORING_CONFIG_VERSION, RunService
 from cairn.store import Store
+from cairn.store.types import Bbox
 from tests.fakes.pipeline import (
     TEST_BBOX,
     FakeOverpass,
     fake_terrain_factory,
     synthetic_elements,
 )
+
+
+# --- FC-17 / TLC-15 / TLC-18: roving "Score this view" (ephemeral) ---------
+# (`_svc(store, settings)` helper defined below, near the wall-clock test.)
+async def test_score_view_returns_geojson_and_persists_no_run(store, settings):
+    svc = _svc(store, settings)
+    before = len(await store.list_runs())
+    gj = await svc.score_view(TEST_BBOX, DEFAULT_WEIGHTS)
+    # Returns the same ranked FeatureCollection shape POST /score's geojson does.
+    assert gj["type"] == "FeatureCollection"
+    assert len(gj["features"]) > 0
+    assert "physical suitability only" in gj["disclaimer"].lower()
+    # TLC-15: the scratch run is deleted — nothing persists.
+    assert len(await store.list_runs()) == before
+
+
+async def test_score_view_over_sync_cap_raises(store, settings):
+    svc = _svc(store, settings)
+    # ~296 km² at ~0°: over the 200 km² sync cap, under the 2500 km² hard cap.
+    big = Bbox(0.0, 0.0, 0.2, 0.12)
+    assert big.area_km2() > settings.sync_area_threshold_km2
+    assert big.area_km2() < settings.max_bbox_area_km2
+    with pytest.raises(BboxTooLarge):
+        await svc.score_view(big, DEFAULT_WEIGHTS)
+    # Raised before any work — no scratch run left behind.
+    assert len(await store.list_runs()) == 0
+
+
+async def test_score_view_clip_restricts_candidates(store, settings):
+    svc = _svc(store, settings)
+    wkb = await _wkb_polygon(store, "POLYGON((0.010 0,0.02 0,0.02 0.012,0.010 0.012,0.010 0))")
+    gj = await svc.score_view(TEST_BBOX, DEFAULT_WEIGHTS, clip_polygons=[wkb])
+    for feat in gj["features"]:
+        lon = feat["geometry"]["coordinates"][0]
+        assert lon >= 0.010 - 1e-9, f"candidate at lon {lon} leaked outside the clip"
+    assert len(await store.list_runs()) == 0  # still ephemeral
 
 
 async def _run(store: Store, settings, elements, weights):
