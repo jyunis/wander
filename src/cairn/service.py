@@ -89,6 +89,32 @@ class RunService:
         )
         return await self._store.get_run(run_id)
 
+    async def score_view(
+        self, bbox: Bbox, weights: dict[str, float],
+        clip_polygons: list[bytes] | None = None,
+    ) -> dict:
+        """Roving "Score this view" (FC-17, doc #34): score `bbox` synchronously
+        and return the ranked-results GeoJSON DIRECTLY — no persisted run.
+
+        The engine pipeline is run-keyed, so this uses a SCRATCH run that is
+        deleted on completion (FK cascade drops its candidates/features/scores).
+        Observable contract (TLC-15): the `runs` table is unchanged afterward and
+        the result never appears in the Runs list. Enforces the sync-area cap
+        (TLC-18) — over it raises `BboxTooLarge` before any work. The viewport is
+        always ≤ cap in normal use (the UI scores the cap rectangle)."""
+        b = validate_request(bbox, weights, self._s)
+        if b.area_km2() > self._s.sync_area_threshold_km2:
+            raise BboxTooLarge(b.area_km2(), self._s.sync_area_threshold_km2)
+        params = await self._store.scoring_config_params(SCORING_CONFIG_VERSION)
+        run_id = await self._store.create_run(b, weights, SCORING_CONFIG_VERSION)
+        try:
+            await self._execute(
+                run_id, b, weights, params, self._s.max_wallclock_seconds, clip_polygons
+            )
+            return await self._store.get_run_geojson(run_id)
+        finally:
+            await self._store.delete_run(run_id)  # scratch — nothing persists
+
     async def start_async(
         self, bbox: Bbox, weights: dict[str, float],
         clip_polygons: list[bytes] | None = None,

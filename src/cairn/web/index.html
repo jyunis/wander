@@ -23,7 +23,12 @@
         <button id="nav-close" class="nav-close" aria-label="Hide panel" title="Hide">×</button>
         <h1>Wander <span class="cairn">🧭</span></h1>
         <nav id="tabs">
-          <button class="tab active" data-tab="score">Score</button>
+          <button class="tab active" data-tab="explore" title="Browse national & state forests">
+            Explore
+          </button>
+          <button class="tab" data-tab="score" title="Power tool: draw a custom area to score">
+            Score
+          </button>
           <button class="tab" data-tab="trips" title="Group saved places into a dated trip">
             Trips
           </button>
@@ -36,7 +41,35 @@
       <!-- TLC-3: persistent, non-dismissible legality disclaimer -->
       <div id="disclaimer" class="disclaimer">Loading…</div>
 
-      <section id="score-section" class="controls">
+      <!-- Explore: forest-first front door (doc #34). Browse NF + state forests,
+           tap to enter (fit-zoom + context + summary). -->
+      <section id="explore-section" class="controls">
+        <div id="forest-list-view">
+          <div class="row goto-row">
+            <input id="forest-search" type="text" placeholder="Search forests — e.g. Chippewa" autocomplete="off" />
+          </div>
+          <div id="forest-recent" class="forest-group"></div>
+          <h2>All forests <span id="forest-count" class="land-sub"></span></h2>
+          <div id="forest-list" class="forest-list"></div>
+          <div id="forest-empty" class="hint" hidden>No forests loaded.</div>
+        </div>
+
+        <div id="forest-detail" hidden>
+          <button id="forest-back" class="btn ghost trip-back">‹ All forests</button>
+          <div id="forest-detail-head" class="forest-head"></div>
+          <div id="forest-summary" class="forest-summary"></div>
+          <div class="row">
+            <button id="forest-pin" class="btn ghost">📌 Pin</button>
+            <button id="forest-zoom" class="btn ghost">🔍 Re-center</button>
+          </div>
+          <div class="forest-hint hint">
+            Pan to a promising pocket, then use the map's <b>Score this view</b>
+            button (coming next) — for now, the shape chip's <b>Score within boundary</b> works.
+          </div>
+        </div>
+      </section>
+
+      <section id="score-section" class="controls" hidden>
         <div class="row">
           <button id="draw-bbox" class="btn">▭ Draw area</button>
           <button id="use-view" class="btn ghost">Use current view</button>
@@ -116,9 +149,6 @@
           <div id="land-disclaimer" class="disclaimer-mini"></div>
         </div>
 
-        <h2>Runs</h2>
-        <div id="run-list" class="run-list"></div>
-        <div id="runs-empty" class="hint" hidden>No runs yet — score an area above.</div>
         <div id="provenance" class="provenance"></div>
         <div id="degraded" class="degraded"></div>
       </section>
@@ -198,7 +228,7 @@
 
     <!-- On-map chips stack top-center: active run, forest/park selection, measure -->
     <div id="map-chips">
-      <div id="run-chip" class="run-chip" hidden></div>
+      <div id="results-chip" class="run-chip" hidden></div>
       <div id="shape-chip" class="shape-chip" hidden></div>
       <div id="measure-chip" class="measure-chip" hidden></div>
     </div>

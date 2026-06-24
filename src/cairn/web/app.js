@@ -4,6 +4,7 @@
 let CONFIG = null;
 let map, drawnItems, heatLayer, pinLayer, candidatesLayer, roadsLayer, canvasRenderer, gotoMarker;
 let nearbyCgLayer; // ephemeral markers: the campgrounds near the open scored site
+let coverageLayer; // session-only fog: faint shading of views already scored (M3)
 let tripLayer; // markers for the currently plotted trip's members
 let runExtentLayer; // dashed rectangle showing the loaded run's scored bbox
 let savedLayer; // saved-place markers shown on the Saved tab (collection-colored)
@@ -186,9 +187,9 @@ async function init() {
   buildPresets();
   buildBasemaps();
   setupMap();
-  await loadRuns();
   await initLandOverlays();
   await initMvum();
+  await loadForests(); // Explore tab (front door)
   scheduleRoads(); // roads default on — load them for the opening view
 
   $("draw-bbox").onclick = startDraw;
@@ -343,6 +344,18 @@ function setupMap() {
   map.createPane("shapeHighlight");
   map.getPane("shapeHighlight").style.zIndex = 260;
   map.getPane("shapeHighlight").style.pointerEvents = "none";
+  // Forest "spotlight" mask: dims everything OUTSIDE the selected forest. Above
+  // roads (z400) so they dim too, below pins (markerPane z600) so they stay
+  // crisp; takes no taps so adjacent forests remain tappable.
+  map.createPane("forestMask");
+  map.getPane("forestMask").style.zIndex = 500;
+  map.getPane("forestMask").style.pointerEvents = "none";
+  // Coverage fog: faint shading of views already scored this session, just above
+  // the basemap and below everything else; takes no taps (display-only, TLC-19).
+  map.createPane("coverage");
+  map.getPane("coverage").style.zIndex = 215;
+  map.getPane("coverage").style.pointerEvents = "none";
+  map.on("moveend", updateCapRect); // keep the "scoreable area" box current
   map.on("moveend", refreshActiveOverlays);
   map.on("moveend", scheduleRoads); // viewport roads overlay follows the map
   map.on("zoomend", restyleRoadsForZoom); // scale road weight to the new zoom
@@ -371,6 +384,7 @@ function setupMap() {
   candidatesLayer = new L.LayerGroup().addTo(map);
   pinLayer = new L.LayerGroup().addTo(map);
   nearbyCgLayer = new L.LayerGroup().addTo(map);
+  coverageLayer = new L.LayerGroup().addTo(map); // session "where I've scored" fog
   tripLayer = new L.LayerGroup().addTo(map);
   savedLayer = new L.LayerGroup().addTo(map);
   runExtentLayer = new L.LayerGroup().addTo(map);
@@ -834,23 +848,62 @@ function setBboxFromBounds(b) {
   $("score-btn").disabled = !ok;
 }
 
-// --- scoring flow ----------------------------------------------------------
+// --- scoring flow (roving, ephemeral — doc #34 M2) -------------------------
+// Score is a flashlight, not a printer: every path runs synchronously over a
+// capped area via POST /score/view, renders transient results, and persists
+// nothing (TLC-15). The drawn-bbox "Score" button, the "Score within boundary"
+// chip, and the map's "Score this view" control all funnel through executeScore.
 async function runScore() {
   if (!bbox) return;
-  await executeScore(bbox, {});
+  await executeScore(bbox, { button: $("score-btn") });
 }
 
-// Shared score driver for both the drawn-bbox "Score" button and the
-// "Score within boundary" chip button. `opts.clip` ({layer, name}) restricts
-// candidates to a forest/park polygon; `opts.button` is the triggering element
-// to disable while the run is in flight (defaults to the draw Score button).
+// "Score this view" — lives in the forest chip. Scores the current view
+// (the centered cap rectangle when zoomed out past the cap), clipped to the
+// active forest. The chip only exists when a shape is selected, so there's
+// always a forest to clip to here.
+async function scoreThisView() {
+  if (_shapeScoring) return;
+  const bb = scoreableBbox();
+  const opts = { button: document.querySelector(".shape-chip-score") };
+  if (selectedShape) opts.clip = { layer: selectedShape.layer, name: selectedShape.name };
+  _shapeScoring = true;
+  updateShapeScoreBtn();
+  try {
+    await executeScore(bb, opts);
+  } finally {
+    _shapeScoring = false;
+    updateShapeScoreBtn();
+  }
+}
+
+// The bbox "Score this view" will cover: the viewport, or — when the viewport
+// exceeds the sync cap — the centered cap-sized rectangle (TLC-18).
+function scoreableBbox() {
+  const b = map.getBounds();
+  const view = {
+    min_lon: b.getWest(), min_lat: b.getSouth(),
+    max_lon: b.getEast(), max_lat: b.getNorth(),
+  };
+  const cap = CONFIG.sync_area_threshold_km2 || 200;
+  const a = areaKm2(view);
+  if (a <= cap) return view;
+  const scale = Math.sqrt(cap / a);
+  const clat = (view.min_lat + view.max_lat) / 2;
+  const clon = (view.min_lon + view.max_lon) / 2;
+  const hlat = ((view.max_lat - view.min_lat) / 2) * scale;
+  const hlon = ((view.max_lon - view.min_lon) / 2) * scale;
+  return { min_lon: clon - hlon, min_lat: clat - hlat, max_lon: clon + hlon, max_lat: clat + hlat };
+}
+
 async function executeScore(bb, opts = {}) {
-  if (areaKm2(bb) > CONFIG.max_bbox_area_km2) {
-    // client-side mirror of TLC-4; the API is still the authority.
-    setStatus("Area exceeds the cap — draw a smaller box.", "err");
+  const cap = CONFIG.sync_area_threshold_km2 || 200;
+  if (areaKm2(bb) > cap) {
+    setStatus("Area too big — zoom in (or draw a smaller box) to score.", "err");
     return;
   }
-  const btn = opts.button || $("score-btn");
+  clearViewResults(); // each score replaces the last (pure ephemeral)
+  const btn = opts.button;
   if (btn) btn.disabled = true;
   setStatus(opts.clip ? "Scoring within boundary…" : "Scoring…");
   try {
@@ -860,36 +913,105 @@ async function executeScore(bb, opts = {}) {
     };
     if (opts.clip) body.clip = opts.clip;
     if ($("public-only")?.checked) body.public_only = true;
-    const resp = await fetch("/score", {
+    const resp = await fetch("/score/view", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (resp.status === 422) {
-      const err = await resp.json();
-      setStatus(err.detail || "Invalid request", "err");
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      setStatus(err.detail || "Scoring failed", "err");
       return;
     }
-    let run = await resp.json();
-    while (run.status === "pending" || run.status === "running") {
-      await new Promise((r) => setTimeout(r, 1000));
-      run = await (await fetch(`/runs/${run.id}`)).json();
-    }
-    await loadRuns();
-    if (run.status === "failed") {
-      setStatus("Run failed: " + run.failure_reason, "err");
-    } else {
-      setStatus(
-        `Done — ${run.distinct_count} distinct sites (${run.candidate_count} scored points).`,
-        "ok"
-      );
-      await loadRun(run.id);
-    }
+    const gj = await resp.json();
+    renderViewResults(gj);
+    addCoverage(bb); // mark this view as scored this session (M3)
   } catch (e) {
     setStatus("Error: " + e.message, "err");
   } finally {
     if (btn) btn.disabled = false;
   }
+}
+
+// --- coverage fog (M3, TLC-19) ---------------------------------------------
+// Faintly shade each view scored this session so a forest sweep stays legible
+// ("where have I looked?"). Display-only; overlapping passes darken naturally.
+// Session-only: cleared on forest exit (below) and gone on reload.
+function addCoverage(bb) {
+  if (!coverageLayer) return;
+  coverageLayer.addLayer(
+    L.rectangle(
+      [[bb.min_lat, bb.min_lon], [bb.max_lat, bb.max_lon]],
+      { pane: "coverage", stroke: false, fill: true, fillColor: "#5b9c5a",
+        fillOpacity: 0.13, interactive: false }
+    )
+  );
+}
+
+function clearCoverage() {
+  if (coverageLayer) coverageLayer.clearLayers();
+}
+
+// Render an ephemeral score result: transient pins/dots (no fit-zoom — you
+// framed the view), a count chip with a clear ✕, no run persisted.
+function renderViewResults(gj) {
+  lastGj = gj;
+  renderCandidates(); // dots + pins from lastGj, honoring the min-score slider
+  const feats = (gj.features || []).filter((f) => f.properties.total >= minScore);
+  const distinct = (gj.features || []).filter((f) => f.properties.distinct).length;
+  setStatus(`${distinct} distinct sites · ${(gj.features || []).length} scored.`, "ok");
+  renderResultsChip(feats.length, distinct);
+}
+
+function renderResultsChip(shown, distinct) {
+  const chip = $("results-chip");
+  if (!chip) return;
+  chip.hidden = false;
+  chip.innerHTML =
+    `<span class="run-chip-text">📊 ${distinct} site${distinct === 1 ? "" : "s"}</span>` +
+    `<button type="button" class="run-chip-x" title="Clear results" aria-label="Clear results">✕</button>`;
+  chip.querySelector(".run-chip-x").onclick = clearViewResults;
+}
+
+// Pull transient results off the map (next score, forest exit, or the chip ✕).
+function clearViewResults() {
+  lastGj = null;
+  if (pinLayer) pinLayer.clearLayers();
+  if (candidatesLayer) candidatesLayer.clearLayers();
+  if (heatLayer) {
+    map.removeLayer(heatLayer);
+    heatLayer = null;
+  }
+  if (nearbyCgLayer) nearbyCgLayer.clearLayers();
+  const chip = $("results-chip");
+  if (chip) {
+    chip.hidden = true;
+    chip.innerHTML = "";
+  }
+}
+
+// --- "scoreable area" cap rectangle ----------------------------------------
+// When the viewport exceeds the sync cap, show the centered box that "Score this
+// view" will actually cover, so the cap is visible, not a surprise (TLC-18).
+let capRectLayer = null;
+function updateCapRect() {
+  if (!map) return;
+  const cap = (CONFIG && CONFIG.sync_area_threshold_km2) || 200;
+  const b = map.getBounds();
+  const view = {
+    min_lon: b.getWest(), min_lat: b.getSouth(),
+    max_lon: b.getEast(), max_lat: b.getNorth(),
+  };
+  if (capRectLayer) {
+    map.removeLayer(capRectLayer);
+    capRectLayer = null;
+  }
+  if (areaKm2(view) <= cap) return; // whole view scores — no box needed
+  const r = scoreableBbox();
+  capRectLayer = L.rectangle(
+    [[r.min_lat, r.min_lon], [r.max_lat, r.max_lon]],
+    { color: "#5b9c5a", weight: 1.5, dashArray: "6 4", fill: false, interactive: false }
+  ).addTo(map);
 }
 
 let runsList = []; // GET /runs — recent run summaries, newest first
@@ -1355,6 +1477,197 @@ function buildLandToggles() {
   });
 }
 
+// --- Explore: forest-first browse (doc #34, M1) ----------------------------
+let forestsAll = []; // GET /forests: [{layer, name, area_km2, bbox, has_mvum}]
+let forestActive = null; // {layer, name} currently entered (Explore detail view)
+
+const FOREST_RECENT_KEY = "wander.forest.recent";
+const FOREST_PINNED_KEY = "wander.forest.pinned";
+const FOREST_RECENT_MAX = 6;
+
+const _forestKey = (f) => `${f.layer}/${f.name}`;
+function _loadMarks(key) {
+  try {
+    return JSON.parse(localStorage.getItem(key) || "[]");
+  } catch {
+    return [];
+  }
+}
+function _saveMarks(key, arr) {
+  try {
+    localStorage.setItem(key, JSON.stringify(arr));
+  } catch {
+    /* private mode — pins just won't persist */
+  }
+}
+const forestPinned = () => _loadMarks(FOREST_PINNED_KEY);
+const isForestPinned = (f) => forestPinned().includes(_forestKey(f));
+function toggleForestPin(f) {
+  const k = _forestKey(f);
+  const pins = forestPinned();
+  _saveMarks(FOREST_PINNED_KEY, pins.includes(k) ? pins.filter((x) => x !== k) : [k, ...pins]);
+}
+function pushForestRecent(f) {
+  const k = _forestKey(f);
+  const r = _loadMarks(FOREST_RECENT_KEY).filter((x) => x !== k);
+  r.unshift(k);
+  _saveMarks(FOREST_RECENT_KEY, r.slice(0, FOREST_RECENT_MAX));
+}
+
+async function loadForests() {
+  try {
+    forestsAll = (await (await fetch("/forests")).json()).forests || [];
+  } catch {
+    forestsAll = [];
+  }
+  wireExplore();
+  renderForestList();
+}
+
+let _exploreWired = false;
+function wireExplore() {
+  if (_exploreWired || !$("forest-search")) return;
+  _exploreWired = true;
+  $("forest-search").addEventListener("input", renderForestList);
+  $("forest-back").onclick = exitForestDetail;
+  $("forest-pin").onclick = () => {
+    if (!forestActive) return;
+    toggleForestPin(forestActive);
+    renderForestDetail();
+  };
+  $("forest-zoom").onclick = () => {
+    if (forestActive) selectShape(forestActive.layer, forestActive.name);
+  };
+}
+
+// Nearby sort key: squared distance from map center to the forest bbox center
+// (lon scaled by cos(lat) so it's roughly metric).
+function _forestDist(f) {
+  if (!map) return 0;
+  const c = map.getCenter();
+  const fx = (f.bbox[0] + f.bbox[2]) / 2;
+  const fy = (f.bbox[1] + f.bbox[3]) / 2;
+  const dx = (fx - c.lng) * Math.cos((c.lat * Math.PI) / 180);
+  const dy = fy - c.lat;
+  return dx * dx + dy * dy;
+}
+
+function forestRowHtml(f, pinned) {
+  const layerLabel = f.layer === "national_forest" ? "National Forest" : "State Forest";
+  const area = Math.round(f.area_km2).toLocaleString();
+  return (
+    `<button class="forest-row" data-key="${esc(_forestKey(f))}">` +
+    `<div class="forest-row-main"><div class="forest-row-name">${pinned ? "📌 " : ""}${esc(f.name)}` +
+    `${f.has_mvum ? ' <span class="forest-mvum">MVUM</span>' : ""}</div>` +
+    `<div class="forest-row-sub">${layerLabel} · ${area} km²</div></div></button>`
+  );
+}
+
+function renderForestList() {
+  const listEl = $("forest-list");
+  if (!listEl) return;
+  $("forest-list-view").hidden = !!forestActive;
+  $("forest-detail").hidden = !forestActive;
+  if (forestActive) return; // detail view is showing instead
+  $("forest-empty").hidden = forestsAll.length > 0;
+  const q = ($("forest-search").value || "").trim().toLowerCase();
+  const byKey = new Map(forestsAll.map((f) => [_forestKey(f), f]));
+
+  // Recent + pinned group — only when not searching.
+  const recentEl = $("forest-recent");
+  if (!q) {
+    const seen = new Set();
+    const featured = [];
+    for (const k of [...forestPinned(), ..._loadMarks(FOREST_RECENT_KEY)]) {
+      if (seen.has(k) || !byKey.has(k)) continue;
+      seen.add(k);
+      featured.push(byKey.get(k));
+    }
+    recentEl.innerHTML = featured.length
+      ? "<h2>Recent &amp; pinned</h2>" +
+        featured.map((f) => forestRowHtml(f, isForestPinned(f))).join("")
+      : "";
+    recentEl.hidden = !featured.length;
+  } else {
+    recentEl.hidden = true;
+    recentEl.innerHTML = "";
+  }
+
+  // Full list — search-filtered, nearby-sorted.
+  let list = forestsAll.slice();
+  if (q) list = list.filter((f) => f.name.toLowerCase().includes(q));
+  list.sort((a, b) => _forestDist(a) - _forestDist(b));
+  $("forest-count").textContent = `(${list.length})`;
+  listEl.innerHTML = list.map((f) => forestRowHtml(f, isForestPinned(f))).join("");
+
+  document.querySelectorAll("#explore-section .forest-row").forEach((row) => {
+    row.onclick = () => {
+      const f = byKey.get(row.dataset.key);
+      if (f) enterForest(f);
+    };
+  });
+}
+
+async function enterForest(f) {
+  forestActive = { layer: f.layer, name: f.name };
+  pushForestRecent(f);
+  if (isMobile()) setNav(false); // reveal the map
+  selectShape(f.layer, f.name); // fit-zoom + highlight + active-context shape chip
+  enableBrowseLayers();
+  renderForestList(); // swap list -> detail
+  await renderForestDetail();
+}
+
+function exitForestDetail() {
+  forestActive = null;
+  clearViewResults(); // leaving the forest clears any transient score (TLC-15)
+  clearCoverage(); // and its coverage fog (TLC-19, session-scoped to the forest)
+  renderForestList();
+}
+
+// Browsing a forest turns on the dispersed-sites lens (the dispersed-camping
+// reason you're here); other layers stay user-controlled.
+function enableBrowseLayers() {
+  const cb = $("ov-dispersed");
+  if (cb && !cb.checked) {
+    cb.checked = true;
+    toggleOverlay("dispersed", true);
+  }
+}
+
+async function renderForestDetail() {
+  if (!forestActive) return;
+  const f = forestsAll.find((x) => _forestKey(x) === _forestKey(forestActive)) || forestActive;
+  const layerLabel = f.layer === "national_forest" ? "National Forest" : "State Forest";
+  const areaTxt = f.area_km2 ? " · " + Math.round(f.area_km2).toLocaleString() + " km²" : "";
+  $("forest-detail-head").innerHTML =
+    `<div class="forest-row-name">🌲 ${esc(f.name)}</div>` +
+    `<div class="forest-row-sub">${layerLabel}${areaTxt}</div>`;
+  $("forest-pin").textContent = isForestPinned(f) ? "📌 Pinned" : "📌 Pin";
+  const sum = $("forest-summary");
+  sum.innerHTML = `<div class="hint">Loading…</div>`;
+  let s;
+  try {
+    s = await (
+      await fetch(
+        `/forests/summary?layer=${encodeURIComponent(f.layer)}&name=${encodeURIComponent(f.name)}`
+      )
+    ).json();
+  } catch {
+    s = null;
+  }
+  if (!s || s.error) {
+    sum.innerHTML = "";
+    return;
+  }
+  const cell = (n, label) =>
+    `<div class="fs-cell"><div class="fs-n">${n}</div><div class="fs-l">${label}</div></div>`;
+  sum.innerHTML =
+    cell(s.dispersed, "dispersed") +
+    cell(s.campgrounds, "campgrounds") +
+    (s.has_mvum ? cell("✓", "MVUM") : "");
+}
+
 // --- MVUM raster overlays (display-only district map sheets) ---------------
 // Region-gated: the toggle only shows when the map view is over a district that
 // has an MVUM raster (and zoomed in enough to read it) — out of sight in MN etc.
@@ -1569,6 +1882,17 @@ function renderOverlayLayer(layerId, gj) {
 // --- forest/park shape discovery -------------------------------------------
 // Tap a forest/park -> fetch its WHOLE outline (the overlay tiles only carry the
 // viewport slice) -> highlight every disjoint part and fit-zoom to all of them.
+// The forest's exterior rings as Leaflet [lat,lon] arrays — the holes cut into
+// the spotlight mask so each (disjoint) part shows through crisp. Interior holes
+// of the forest itself are ignored (rare; they'd just stay un-dimmed).
+function forestHoles(geom) {
+  const toLatLng = (ring) => ring.map(([lon, lat]) => [lat, lon]);
+  if (!geom) return [];
+  if (geom.type === "Polygon") return [toLatLng(geom.coordinates[0])];
+  if (geom.type === "MultiPolygon") return geom.coordinates.map((poly) => toLatLng(poly[0]));
+  return [];
+}
+
 async function selectShape(layer, name) {
   let shape;
   try {
@@ -1579,18 +1903,30 @@ async function selectShape(layer, name) {
     return;
   }
   if (shapeSelectLayer) map.removeLayer(shapeSelectLayer);
-  shapeSelectLayer = L.geoJSON(shape, {
-    pane: "shapeHighlight",
+  // Spotlight: dim everything OUTSIDE the forest (a world-covering polygon with
+  // the forest cut out as holes) + a crisp boundary line. The forest itself
+  // stays full-brightness so the imagery reads clean.
+  const holes = forestHoles(shape.geometry);
+  const WORLD = [[-85, -180], [-85, 180], [85, 180], [85, -180]];
+  const mask = L.polygon([WORLD, ...holes], {
+    pane: "forestMask",
+    interactive: false,
+    stroke: false,
+    fillColor: "#0b1220",
+    fillOpacity: 0.35,
+  });
+  const outline = L.geoJSON(shape, {
+    pane: "forestMask",
     interactive: false,
     style: {
       color: "#ffd23f",
-      weight: 3,
+      weight: 2.5,
       opacity: 0.95,
-      fillColor: "#ffd23f",
-      fillOpacity: 0.12,
+      fill: false,
       className: "shape-pulse", // one-shot CSS pulse on (re)select
     },
-  }).addTo(map);
+  });
+  shapeSelectLayer = L.layerGroup([mask, outline]).addTo(map);
   selectedShape = { layer, name };
   renderShapeChip();
   const bb = shape.bbox; // [w, s, e, n] from the full geometry
@@ -1600,9 +1936,18 @@ async function selectShape(layer, name) {
         [bb[1], bb[0]],
         [bb[3], bb[2]],
       ],
-      { padding: [SHAPE_FIT_PADDING, SHAPE_FIT_PADDING], maxZoom: SHAPE_FIT_MAX_ZOOM }
+      { ...fitPadding(SHAPE_FIT_PADDING), maxZoom: SHAPE_FIT_MAX_ZOOM }
     );
   }
+}
+
+// fitBounds padding that accounts for the overlay panel: when it's open it
+// covers the left edge of the map, so pad the left by its width to center the
+// target in the VISIBLE area (Google-Maps behavior). Closed → symmetric.
+function fitPadding(base) {
+  const open = $("app").classList.contains("nav-open");
+  const w = open ? $("panel").offsetWidth || 0 : 0;
+  return { paddingTopLeft: [w + base, base], paddingBottomRight: [base, base] };
 }
 
 function clearShape() {
@@ -1612,6 +1957,9 @@ function clearShape() {
   }
   selectedShape = null;
   renderShapeChip();
+  // The active forest IS the selected shape — exiting the chip exits the forest
+  // (TLC-16: one-tap exit), returning Explore to its list.
+  if (typeof forestActive !== "undefined" && forestActive) exitForestDetail();
 }
 
 // The on-map chip: "<name>  [Score within boundary]  ✕" — shows the current
@@ -1628,56 +1976,21 @@ function renderShapeChip() {
   chip.hidden = false;
   chip.innerHTML =
     `<span class="shape-chip-name">${esc(selectedShape.name)}</span>` +
-    `<button type="button" class="shape-chip-score btn">Score within boundary</button>` +
+    `<button type="button" class="shape-chip-score btn">Score this view</button>` +
     `<button type="button" class="shape-chip-x" title="Clear selection" aria-label="Clear selection">✕</button>`;
   chip.querySelector(".shape-chip-x").onclick = clearShape;
-  chip.querySelector(".shape-chip-score").onclick = scoreWithinBoundary;
+  chip.querySelector(".shape-chip-score").onclick = scoreThisView;
   updateShapeScoreBtn();
 }
 
-// Cap-gate the within-boundary button exactly like the draw flow: the SEARCH
-// area is the current view (bbox-capped as usual); only the polygon clip is new.
-// A forest bigger than the cap stays scoreable once you zoom to a section.
+// Reflect the in-flight state on the chip's Score button. No cap gating —
+// scoreThisView always works (it scores the centered cap rectangle when the
+// view is over the cap), and updateCapRect shows what that box will be.
 function updateShapeScoreBtn() {
   const btn = document.querySelector(".shape-chip-score");
-  if (!btn || !CONFIG) return;
-  const b = map.getBounds();
-  const a = areaKm2({
-    min_lon: b.getWest(),
-    min_lat: b.getSouth(),
-    max_lon: b.getEast(),
-    max_lat: b.getNorth(),
-  });
-  const ok = a <= CONFIG.max_bbox_area_km2;
-  btn.textContent = _shapeScoring ? "Scoring…" : "Score within boundary";
-  btn.disabled = _shapeScoring || !ok;
-  btn.classList.toggle("over-cap", !ok);
-  btn.title = ok
-    ? "Score the current view, clipped to this boundary"
-    : `View is ${a.toFixed(0)} km² — over the ${CONFIG.max_bbox_area_km2} km² cap. Zoom to a section.`;
-}
-
-async function scoreWithinBoundary() {
-  if (!selectedShape || _shapeScoring) return;
-  const b = map.getBounds();
-  const view = {
-    min_lon: b.getWest(),
-    min_lat: b.getSouth(),
-    max_lon: b.getEast(),
-    max_lat: b.getNorth(),
-  };
-  if (areaKm2(view) > CONFIG.max_bbox_area_km2) return; // cap-gated (button disabled)
-  _shapeScoring = true;
-  updateShapeScoreBtn();
-  try {
-    await executeScore(view, {
-      clip: { layer: selectedShape.layer, name: selectedShape.name },
-      button: document.querySelector(".shape-chip-score"),
-    });
-  } finally {
-    _shapeScoring = false;
-    updateShapeScoreBtn();
-  }
+  if (!btn) return;
+  btn.textContent = _shapeScoring ? "Scoring…" : "Score this view";
+  btn.disabled = _shapeScoring;
 }
 
 // --- campground filters (Phase 2; client-side over meta) -------------------
@@ -2301,6 +2614,7 @@ async function toggleFav(fav, btn) {
   }
   const key = savedKey(fav.kind, fav.lat, fav.lon);
   const id = savedByKey.get(key);
+  let newRow = null;
   if (id != null) {
     await fetch(`/saved/${id}`, { method: "DELETE" });
     savedPlaces = savedPlaces.filter((s) => s.id !== id);
@@ -2313,12 +2627,12 @@ async function toggleFav(fav, btn) {
       body: JSON.stringify(fav),
     });
     if (r.ok) {
-      const row = await r.json();
-      savedPlaces.unshift(row);
-      savedByKey.set(key, row.id);
+      newRow = await r.json();
+      savedPlaces.unshift(newRow);
+      savedByKey.set(key, newRow.id);
       // Reflect the deduped name back into the sheet's name field.
       const nameEl = fav.kind === "site" && $("site-name");
-      if (nameEl) nameEl.value = row.name || "";
+      if (nameEl) nameEl.value = newRow.name || "";
     }
   }
   if (btn) {
@@ -2327,6 +2641,9 @@ async function toggleFav(fav, btn) {
     btn.classList.toggle("on", on);
   }
   renderSavedList();
+  // FC-18 / TLC-17: capture context at save time. The save already committed
+  // (instant, non-blocking); now offer collections — pick/create or ignore.
+  if (newRow && btn) openCollectionPicker(newRow, btn);
 }
 
 // Colored membership chips for a saved place (looked up against collById).
@@ -2596,12 +2913,14 @@ function setupTabs() {
       document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
       tab.classList.add("active");
       const which = tab.dataset.tab;
+      $("explore-section").hidden = which !== "explore";
       $("score-section").hidden = which !== "score";
       $("trips-section").hidden = which !== "trips";
       $("saved-section-tab").hidden = which !== "saved";
       if (which === "trips") loadTrips();
       else exitTripPlot(); // back to Score/Saved: restore the normal map
       if (which === "saved") openSavedTab();
+      if (which === "explore") renderForestList();
     };
   });
   buildCollSwatches();
@@ -3036,7 +3355,7 @@ function clearMapForTrip() {
   closeSite(); // also clears nearbyCgLayer + any selected marker
   clearShape(); // drop any forest/park discovery highlight
   clearMeasure(); // drop any distance ruler
-  if ($("run-chip")) $("run-chip").hidden = true; // hide (activeRunId kept for restore)
+  if ($("results-chip")) $("results-chip").hidden = true; // hide transient score chip
   [pinLayer, candidatesLayer, heatLayer, roadsLayer, drawnItems].forEach((l) => {
     if (l && map.hasLayer(l)) map.removeLayer(l);
   });
@@ -3061,7 +3380,10 @@ function exitTripPlot() {
   if (drawnItems && !map.hasLayer(drawnItems)) map.addLayer(drawnItems);
   updateLayerVisibility(); // restore checked result layers (pins/dots/heat/roads)
   refreshActiveOverlays(); // re-fetch any active land overlays
-  renderRunChip(); // restore the "viewing run" chip if a run is still active
+  if (lastGj) renderResultsChip(
+    (lastGj.features || []).filter((f) => f.properties.total >= minScore).length,
+    (lastGj.features || []).filter((f) => f.properties.distinct).length
+  ); // restore the transient results chip if results are still up
 }
 
 function exportTrip(fmt) {
