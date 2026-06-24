@@ -690,13 +690,6 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
   line-height: 1; box-shadow: 0 1px 5px rgba(0, 0, 0, 0.4); }
 .measure-toggle:hover { border-color: #2bb3ff; }
 .measure-toggle.active { border-color: #2bb3ff; color: #2bb3ff; background: #313942; }
-/* Roving "Score this view" control (doc #34 M2). */
-.scoreview-btn { display: flex; align-items: center; gap: 5px; height: 32px; padding: 0 11px;
-  background: var(--accent); color: var(--accent-ink); border: 1px solid var(--accent);
-  border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; line-height: 1;
-  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.4); }
-.scoreview-btn:hover { filter: brightness(1.08); }
-.scoreview-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 /* Brief attention pulse when a shape is (re)selected. */
 @keyframes shapePulse {
   0% { stroke-opacity: 0.2; fill-opacity: 0.32; }

@@ -321,7 +321,6 @@ function setupMap() {
   L.control.zoom({ position: "topright" }).addTo(map);
   addBasemapControl(); // small on-map style picker (synced with the panel select)
   addMeasureControl(); // 📏 distance ruler (independent of the scoring tools)
-  addScoreViewControl(); // 🎯 roving "Score this view" (ephemeral) — doc #34 M2
   setBasemap(DEFAULT_BASEMAP);
   // Candidate-dot canvas: its OWN pane BELOW the land pane. The canvas spans the
   // whole viewport and captures pointer events across it, so if it sat above the
@@ -859,13 +858,23 @@ async function runScore() {
   await executeScore(bbox, { button: $("score-btn") });
 }
 
-// The 🎯 map control — score the current view (clipped to the active forest if
-// one is entered). Scores the cap rectangle when zoomed out past the cap.
+// "🎯 Score this view" — lives in the forest chip. Scores the current view
+// (the centered cap rectangle when zoomed out past the cap), clipped to the
+// active forest. The chip only exists when a shape is selected, so there's
+// always a forest to clip to here.
 async function scoreThisView() {
+  if (_shapeScoring) return;
   const bb = scoreableBbox();
-  const opts = { button: document.querySelector(".scoreview-btn") };
+  const opts = { button: document.querySelector(".shape-chip-score") };
   if (selectedShape) opts.clip = { layer: selectedShape.layer, name: selectedShape.name };
-  await executeScore(bb, opts);
+  _shapeScoring = true;
+  updateShapeScoreBtn();
+  try {
+    await executeScore(bb, opts);
+  } finally {
+    _shapeScoring = false;
+    updateShapeScoreBtn();
+  }
 }
 
 // The bbox "Score this view" will cover: the viewport, or — when the viewport
@@ -1003,20 +1012,6 @@ function updateCapRect() {
     [[r.min_lat, r.min_lon], [r.max_lat, r.max_lon]],
     { color: "#5b9c5a", weight: 1.5, dashArray: "6 4", fill: false, interactive: false }
   ).addTo(map);
-}
-
-function addScoreViewControl() {
-  const ctrl = L.control({ position: "topright" });
-  ctrl.onAdd = () => {
-    const div = L.DomUtil.create("div", "scoreview-ctrl leaflet-control");
-    div.innerHTML =
-      `<button type="button" class="scoreview-btn" title="Score this view" ` +
-      `aria-label="Score this view">🎯 Score</button>`;
-    L.DomEvent.disableClickPropagation(div);
-    div.querySelector(".scoreview-btn").onclick = scoreThisView;
-    return div;
-  };
-  ctrl.addTo(map);
 }
 
 let runsList = []; // GET /runs — recent run summaries, newest first
@@ -1981,57 +1976,21 @@ function renderShapeChip() {
   chip.hidden = false;
   chip.innerHTML =
     `<span class="shape-chip-name">${esc(selectedShape.name)}</span>` +
-    `<button type="button" class="shape-chip-score btn">Score within boundary</button>` +
+    `<button type="button" class="shape-chip-score btn">🎯 Score this view</button>` +
     `<button type="button" class="shape-chip-x" title="Clear selection" aria-label="Clear selection">✕</button>`;
   chip.querySelector(".shape-chip-x").onclick = clearShape;
-  chip.querySelector(".shape-chip-score").onclick = scoreWithinBoundary;
+  chip.querySelector(".shape-chip-score").onclick = scoreThisView;
   updateShapeScoreBtn();
 }
 
-// Cap-gate the within-boundary button exactly like the draw flow: the SEARCH
-// area is the current view (bbox-capped as usual); only the polygon clip is new.
-// A forest bigger than the cap stays scoreable once you zoom to a section.
+// Reflect the in-flight state on the chip's Score button. No cap gating —
+// scoreThisView always works (it scores the centered cap rectangle when the
+// view is over the cap), and updateCapRect shows what that box will be.
 function updateShapeScoreBtn() {
   const btn = document.querySelector(".shape-chip-score");
-  if (!btn || !CONFIG) return;
-  const b = map.getBounds();
-  const a = areaKm2({
-    min_lon: b.getWest(),
-    min_lat: b.getSouth(),
-    max_lon: b.getEast(),
-    max_lat: b.getNorth(),
-  });
-  const cap = CONFIG.sync_area_threshold_km2 || 200;
-  const ok = a <= cap;
-  btn.textContent = _shapeScoring ? "Scoring…" : "Score within boundary";
-  btn.disabled = _shapeScoring || !ok;
-  btn.classList.toggle("over-cap", !ok);
-  btn.title = ok
-    ? "Score the current view, clipped to this boundary"
-    : `View is ${a.toFixed(0)} km² — over the ${cap} km² cap. Zoom to a section.`;
-}
-
-async function scoreWithinBoundary() {
-  if (!selectedShape || _shapeScoring) return;
-  const b = map.getBounds();
-  const view = {
-    min_lon: b.getWest(),
-    min_lat: b.getSouth(),
-    max_lon: b.getEast(),
-    max_lat: b.getNorth(),
-  };
-  if (areaKm2(view) > (CONFIG.sync_area_threshold_km2 || 200)) return; // cap-gated
-  _shapeScoring = true;
-  updateShapeScoreBtn();
-  try {
-    await executeScore(view, {
-      clip: { layer: selectedShape.layer, name: selectedShape.name },
-      button: document.querySelector(".shape-chip-score"),
-    });
-  } finally {
-    _shapeScoring = false;
-    updateShapeScoreBtn();
-  }
+  if (!btn) return;
+  btn.textContent = _shapeScoring ? "Scoring…" : "🎯 Score this view";
+  btn.disabled = _shapeScoring;
 }
 
 // --- campground filters (Phase 2; client-side over meta) -------------------
