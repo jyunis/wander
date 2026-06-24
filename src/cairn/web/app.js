@@ -345,6 +345,12 @@ function setupMap() {
   map.createPane("shapeHighlight");
   map.getPane("shapeHighlight").style.zIndex = 260;
   map.getPane("shapeHighlight").style.pointerEvents = "none";
+  // Forest "spotlight" mask: dims everything OUTSIDE the selected forest. Above
+  // roads (z400) so they dim too, below pins (markerPane z600) so they stay
+  // crisp; takes no taps so adjacent forests remain tappable.
+  map.createPane("forestMask");
+  map.getPane("forestMask").style.zIndex = 500;
+  map.getPane("forestMask").style.pointerEvents = "none";
   // Coverage fog: faint shading of views already scored this session, just above
   // the basemap and below everything else; takes no taps (display-only, TLC-19).
   map.createPane("coverage");
@@ -1881,6 +1887,17 @@ function renderOverlayLayer(layerId, gj) {
 // --- forest/park shape discovery -------------------------------------------
 // Tap a forest/park -> fetch its WHOLE outline (the overlay tiles only carry the
 // viewport slice) -> highlight every disjoint part and fit-zoom to all of them.
+// The forest's exterior rings as Leaflet [lat,lon] arrays — the holes cut into
+// the spotlight mask so each (disjoint) part shows through crisp. Interior holes
+// of the forest itself are ignored (rare; they'd just stay un-dimmed).
+function forestHoles(geom) {
+  const toLatLng = (ring) => ring.map(([lon, lat]) => [lat, lon]);
+  if (!geom) return [];
+  if (geom.type === "Polygon") return [toLatLng(geom.coordinates[0])];
+  if (geom.type === "MultiPolygon") return geom.coordinates.map((poly) => toLatLng(poly[0]));
+  return [];
+}
+
 async function selectShape(layer, name) {
   let shape;
   try {
@@ -1891,18 +1908,30 @@ async function selectShape(layer, name) {
     return;
   }
   if (shapeSelectLayer) map.removeLayer(shapeSelectLayer);
-  shapeSelectLayer = L.geoJSON(shape, {
-    pane: "shapeHighlight",
+  // Spotlight: dim everything OUTSIDE the forest (a world-covering polygon with
+  // the forest cut out as holes) + a crisp boundary line. The forest itself
+  // stays full-brightness so the imagery reads clean.
+  const holes = forestHoles(shape.geometry);
+  const WORLD = [[-85, -180], [-85, 180], [85, 180], [85, -180]];
+  const mask = L.polygon([WORLD, ...holes], {
+    pane: "forestMask",
+    interactive: false,
+    stroke: false,
+    fillColor: "#0b1220",
+    fillOpacity: 0.35,
+  });
+  const outline = L.geoJSON(shape, {
+    pane: "forestMask",
     interactive: false,
     style: {
       color: "#ffd23f",
-      weight: 3,
+      weight: 2.5,
       opacity: 0.95,
-      fillColor: "#ffd23f",
-      fillOpacity: 0.12,
+      fill: false,
       className: "shape-pulse", // one-shot CSS pulse on (re)select
     },
-  }).addTo(map);
+  });
+  shapeSelectLayer = L.layerGroup([mask, outline]).addTo(map);
   selectedShape = { layer, name };
   renderShapeChip();
   const bb = shape.bbox; // [w, s, e, n] from the full geometry
