@@ -4,6 +4,7 @@
 let CONFIG = null;
 let map, drawnItems, heatLayer, pinLayer, candidatesLayer, roadsLayer, canvasRenderer, gotoMarker;
 let nearbyCgLayer; // ephemeral markers: the campgrounds near the open scored site
+let coverageLayer; // session-only fog: faint shading of views already scored (M3)
 let tripLayer; // markers for the currently plotted trip's members
 let runExtentLayer; // dashed rectangle showing the loaded run's scored bbox
 let savedLayer; // saved-place markers shown on the Saved tab (collection-colored)
@@ -344,6 +345,11 @@ function setupMap() {
   map.createPane("shapeHighlight");
   map.getPane("shapeHighlight").style.zIndex = 260;
   map.getPane("shapeHighlight").style.pointerEvents = "none";
+  // Coverage fog: faint shading of views already scored this session, just above
+  // the basemap and below everything else; takes no taps (display-only, TLC-19).
+  map.createPane("coverage");
+  map.getPane("coverage").style.zIndex = 215;
+  map.getPane("coverage").style.pointerEvents = "none";
   map.on("moveend", updateCapRect); // keep the "scoreable area" box current
   map.on("moveend", refreshActiveOverlays);
   map.on("moveend", scheduleRoads); // viewport roads overlay follows the map
@@ -373,6 +379,7 @@ function setupMap() {
   candidatesLayer = new L.LayerGroup().addTo(map);
   pinLayer = new L.LayerGroup().addTo(map);
   nearbyCgLayer = new L.LayerGroup().addTo(map);
+  coverageLayer = new L.LayerGroup().addTo(map); // session "where I've scored" fog
   tripLayer = new L.LayerGroup().addTo(map);
   savedLayer = new L.LayerGroup().addTo(map);
   runExtentLayer = new L.LayerGroup().addTo(map);
@@ -903,11 +910,31 @@ async function executeScore(bb, opts = {}) {
     }
     const gj = await resp.json();
     renderViewResults(gj);
+    addCoverage(bb); // mark this view as scored this session (M3)
   } catch (e) {
     setStatus("Error: " + e.message, "err");
   } finally {
     if (btn) btn.disabled = false;
   }
+}
+
+// --- coverage fog (M3, TLC-19) ---------------------------------------------
+// Faintly shade each view scored this session so a forest sweep stays legible
+// ("where have I looked?"). Display-only; overlapping passes darken naturally.
+// Session-only: cleared on forest exit (below) and gone on reload.
+function addCoverage(bb) {
+  if (!coverageLayer) return;
+  coverageLayer.addLayer(
+    L.rectangle(
+      [[bb.min_lat, bb.min_lon], [bb.max_lat, bb.max_lon]],
+      { pane: "coverage", stroke: false, fill: true, fillColor: "#5b9c5a",
+        fillOpacity: 0.13, interactive: false }
+    )
+  );
+}
+
+function clearCoverage() {
+  if (coverageLayer) coverageLayer.clearLayers();
 }
 
 // Render an ephemeral score result: transient pins/dots (no fit-zoom — you
@@ -1593,6 +1620,7 @@ async function enterForest(f) {
 function exitForestDetail() {
   forestActive = null;
   clearViewResults(); // leaving the forest clears any transient score (TLC-15)
+  clearCoverage(); // and its coverage fog (TLC-19, session-scoped to the forest)
   renderForestList();
 }
 
