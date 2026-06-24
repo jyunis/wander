@@ -1941,9 +1941,18 @@ async function selectShape(layer, name) {
         [bb[1], bb[0]],
         [bb[3], bb[2]],
       ],
-      { padding: [SHAPE_FIT_PADDING, SHAPE_FIT_PADDING], maxZoom: SHAPE_FIT_MAX_ZOOM }
+      { ...fitPadding(SHAPE_FIT_PADDING), maxZoom: SHAPE_FIT_MAX_ZOOM }
     );
   }
+}
+
+// fitBounds padding that accounts for the overlay panel: when it's open it
+// covers the left edge of the map, so pad the left by its width to center the
+// target in the VISIBLE area (Google-Maps behavior). Closed → symmetric.
+function fitPadding(base) {
+  const open = $("app").classList.contains("nav-open");
+  const w = open ? $("panel").offsetWidth || 0 : 0;
+  return { paddingTopLeft: [w + base, base], paddingBottomRight: [base, base] };
 }
 
 function clearShape() {
