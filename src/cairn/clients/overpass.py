@@ -30,7 +30,6 @@ from cairn.store.types import Bbox
 log = logging.getLogger("cairn.overpass")
 
 QUERY_VERSION = 2  # +building (dispersed sites must avoid houses/cabins)
-TRAILS_QUERY_VERSION = 1  # display-only hiking-trails overlay (separate cache key)
 
 # --- Scored tag classes (the ONLY things the query asks for — TLC-14) ------
 _DRIVABLE = ("track", "unclassified", "service", "residential", "tertiary")
@@ -46,11 +45,6 @@ _MAJOR_HIGHWAY = (
 _WATERWAYS = ("river", "stream", "canal")
 _BUILTUP = ("residential", "commercial", "industrial", "retail")
 _PLACES = ("city", "town", "village", "hamlet")
-
-# Foot/non-motorized ways for the display-only Trails overlay (never scored —
-# TLC-3). `track` is intentionally excluded: it's a drivable road (the Roads
-# overlay), not a hiking trail.
-_FOOT_PATHS = ("path", "footway", "bridleway", "cycleway", "steps")
 
 
 def _re(values: tuple[str, ...]) -> str:
@@ -90,95 +84,6 @@ def build_query(bbox: Bbox, timeout_s: int = 180) -> str:
         ");"
         "out geom;"
     )
-
-
-def build_trails_query(bbox: Bbox, timeout_s: int = 60) -> str:
-    """Overpass QL for the display-only Trails overlay: foot/non-motorized paths
-    plus named hiking ROUTE relations (so a through-trail like the North Country
-    Trail keeps its name even where the underlying way is unnamed). `out geom`
-    returns way + relation-member geometry inline. Never scored (TLC-3)."""
-    b = bbox.normalized()
-    box = f"{b.min_lat},{b.min_lon},{b.max_lat},{b.max_lon}"
-    paths = _re(_FOOT_PATHS)
-    # `out geom({box})` CLIPS returned geometry to the bbox — essential for the
-    # route relations: a through-trail like the North Country Trail spans the
-    # whole state, and unclipped `out geom` would return its entire statewide
-    # member geometry per viewport (thousands of off-screen segments).
-    return (
-        f"[out:json][timeout:{timeout_s}];"
-        "("
-        f'way["highway"~"{paths}"]({box});'
-        f'relation["route"="hiking"]["name"]({box});'
-        ");"
-        f"out geom({box});"
-    )
-
-
-def _segments(geometry) -> list[list[list[float]]]:
-    """Overpass `geometry` ([{lat,lon}|null,...]) -> GeoJSON [[lon,lat],...]
-    segments. `out geom(bbox)` clips to the bbox and marks out-of-bbox vertices
-    as `null`; split on those so a clipped way becomes one or more line pieces
-    (never a straight line drawn across the gap), each with >= 2 points."""
-    segs: list[list[list[float]]] = []
-    cur: list[list[float]] = []
-    for g in geometry or []:
-        if g and "lon" in g and "lat" in g:
-            cur.append([g["lon"], g["lat"]])
-        else:  # null / clipped-out vertex -> break the run
-            if len(cur) >= 2:
-                segs.append(cur)
-            cur = []
-    if len(cur) >= 2:
-        segs.append(cur)
-    return segs
-
-
-def trails_to_geojson(elements: list[dict], disclaimer: str) -> dict:
-    """Overpass trail elements -> a GeoJSON LineString FeatureCollection.
-
-    Named hiking-route relations win: their member ways are emitted labelled
-    with the route name and those way ids are then suppressed as standalone
-    features (so the North Country Trail draws once, named, not twice)."""
-    features: list[dict] = []
-    routed: set[int] = set()
-
-    for el in elements:
-        if el.get("type") != "relation" or el.get("tags", {}).get("route") != "hiking":
-            continue
-        name = el.get("tags", {}).get("name")
-        for m in el.get("members", []):
-            if m.get("type") != "way":
-                continue
-            routed.add(m.get("ref"))
-            for seg in _segments(m.get("geometry")):
-                features.append(_trail_feature(seg, name, "hiking_route"))
-
-    for el in elements:
-        if el.get("type") != "way" or el.get("id") in routed:
-            continue
-        tags = el.get("tags", {})
-        for seg in _segments(el.get("geometry")):
-            features.append(_trail_feature(seg, tags.get("name"), tags.get("highway"), tags))
-
-    return {
-        "type": "FeatureCollection",
-        "disclaimer": disclaimer,
-        "features": features,
-    }
-
-
-def _trail_feature(coords: list[list[float]], name, kind, tags: dict | None = None) -> dict:
-    tags = tags or {}
-    return {
-        "type": "Feature",
-        "geometry": {"type": "LineString", "coordinates": coords},
-        "properties": {
-            "name": name or None,
-            "kind": kind,
-            "sac_scale": tags.get("sac_scale"),
-            "surface": tags.get("surface"),
-        },
-    }
 
 
 def classify_osm(element: dict) -> str | None:
@@ -248,15 +153,6 @@ class OverpassClient:
             self.cache_key(bbox),
             build_query(bbox, timeout_s=int(self._s.overpass_timeout_s)),
             QUERY_VERSION,
-        )
-
-    async def fetch_trails(self, bbox: Bbox) -> OverpassResult:
-        """Foot/non-motorized trails + named hiking routes for the display-only
-        Trails overlay. Separate cache key from the scoring query."""
-        return await self._fetch(
-            self._key("overpass-trails", TRAILS_QUERY_VERSION, bbox),
-            build_trails_query(bbox, timeout_s=int(self._s.overpass_timeout_s)),
-            TRAILS_QUERY_VERSION,
         )
 
     async def _fetch(self, key: str, query: str, query_version: int) -> OverpassResult:

@@ -144,6 +144,7 @@ const OWNERSHIP_MIN_ZOOM = 11;
 // roads, so a missed road tap shouldn't yank the map out to the whole forest.
 const ROADS_MIN_ZOOM = 13;
 const TRAILS_MIN_ZOOM = 13; // hiking-trails overlay (live OSM/Overpass) renders at z13+
+const TRAIL_LABEL_MAX = 6; // cap on-map trail name labels (routes + longest first)
 
 let overlayDefs = []; // from GET /overlays
 let mvumOverlays = []; // from GET /mvum: [{key, name, bounds:[s,w,n,e], url}]
@@ -1185,6 +1186,9 @@ async function loadTrailsForView() {
     return; // best-effort, display-only
   }
   if (!$("layer-trails").checked) return; // toggled off mid-fetch
+  // An Overpass hiccup returns an empty `degraded` layer — don't wipe the trails
+  // already on screen; leave _trailsBounds unset so the next move retries.
+  if (gj.degraded) return;
   renderTrails(gj);
   _trailsBounds = padded;
 }
@@ -1197,8 +1201,8 @@ function renderTrails(gj) {
   _trailsGj = gj;
   trailsLayer.clearLayers();
   const w = trailWeight();
-  // Collect the longest segment per named route so each name gets ONE on-map
-  // label (not one per OSM member way) — legible, like the old baked label.
+  // Collect the longest segment per trail NAME so each named trail gets ONE
+  // on-map label (not one per OSM segment) — legible, like the old baked labels.
   const labelBest = new Map(); // name -> {len, latlng}
   (gj.features || []).forEach((f) => {
     const p = f.properties || {};
@@ -1220,20 +1224,26 @@ function renderTrails(gj) {
     const hit = L.geoJSON(f, { style: { color: "#000", weight: w + 12, opacity: 0 } });
     hit.bindTooltip(label, { sticky: true });
     trailsLayer.addLayer(hit);
-    if (route && p.name) {
+    if (p.name) {
       const c = f.geometry.coordinates;
-      if (c.length >= 2 && (!labelBest.has(p.name) || c.length > labelBest.get(p.name).len)) {
+      const prev = labelBest.get(p.name);
+      if (c.length >= 2 && (!prev || c.length > prev.len)) {
         const mid = c[Math.floor(c.length / 2)];
-        labelBest.set(p.name, { len: c.length, latlng: [mid[1], mid[0]] });
+        labelBest.set(p.name, { len: c.length, latlng: [mid[1], mid[0]], route });
       }
     }
   });
-  labelBest.forEach((v, name) => {
-    L.tooltip({ permanent: true, direction: "center", className: "trail-label", interactive: false })
-      .setLatLng(v.latlng)
-      .setContent(esc(name))
-      .addTo(trailsLayer);
-  });
+  // Cap on-map labels so a dense trail system (e.g. one trail's many named spurs)
+  // doesn't bury the map — through-routes first, then longest trails.
+  [...labelBest.entries()]
+    .sort((a, b) => b[1].route - a[1].route || b[1].len - a[1].len)
+    .slice(0, TRAIL_LABEL_MAX)
+    .forEach(([name, v]) => {
+      L.tooltip({ permanent: true, direction: "center", className: "trail-label", interactive: false })
+        .setLatLng(v.latlng)
+        .setContent(esc(name))
+        .addTo(trailsLayer);
+    });
 }
 
 function restyleTrailsForZoom() {

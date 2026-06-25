@@ -9,9 +9,8 @@ from cairn.store.types import Bbox
 class FakeOverpass:
     """Returns a fixed element set; records that fetch was called."""
 
-    def __init__(self, elements: list[dict], trail_elements: list[dict] | None = None) -> None:
+    def __init__(self, elements: list[dict]) -> None:
         self._elements = elements
-        self._trail_elements = trail_elements or []
         self.calls = 0
 
     async def fetch(self, bbox: Bbox) -> OverpassResult:
@@ -20,15 +19,6 @@ class FakeOverpass:
             elements=self._elements,
             cache_key=f"fake/v{QUERY_VERSION}",
             query_version=QUERY_VERSION,
-            fetched_at="2026-06-09T00:00:00+00:00",
-            from_cache=False,
-        )
-
-    async def fetch_trails(self, bbox: Bbox) -> OverpassResult:
-        return OverpassResult(
-            elements=self._trail_elements,
-            cache_key="fake-trails/v1",
-            query_version=1,
             fetched_at="2026-06-09T00:00:00+00:00",
             from_cache=False,
         )

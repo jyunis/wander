@@ -37,11 +37,11 @@ from cairn.availability import trip_availability
 from cairn.clients.availability import RecreationGovClient
 from cairn.clients.mvum import MvumClient
 from cairn.clients.nominatim import GeocodeClient
-from cairn.clients.overpass import OverpassClient, trails_to_geojson
+from cairn.clients.overpass import OverpassClient
 from cairn.clients.usa_structures import StructuresClient
 from cairn.clients.usedirect import UseDirectClient
 from cairn.config import get_settings
-from cairn.errors import GeocodeError, OverpassError, RunNotFound, ValidationError
+from cairn.errors import GeocodeError, RunNotFound, ValidationError
 from cairn.export import trip_slug, trip_to_gpx, trip_to_kml
 from cairn.logging import configure
 from cairn.service import RunService
@@ -317,32 +317,18 @@ async def get_roads(request: Request, bbox: str) -> dict:
 @app.get("/trails")
 async def get_trails(request: Request, bbox: str) -> dict:
     """Display-only hiking-trails overlay — foot paths + named hiking ROUTES
-    (e.g. the North Country Trail) within `bbox`, from OSM/Overpass. Never scored
-    (TLC-3). Best-effort: a too-large bbox or an Overpass failure yields an empty
-    layer (`degraded: true`), never an error — the overlay just shows nothing."""
+    (e.g. the North Country Trail) within `bbox`, read from LOCAL data preloaded
+    by scripts/load_trails.py (public Overpass is too flaky for a live per-view
+    query). Never scored (TLC-3). Empty until the loader has run."""
+    store: Store = request.app.state.store
     settings = request.app.state.settings
-    overpass: OverpassClient = request.app.state.overpass
     try:
         parts = [float(x) for x in bbox.split(",")]
         if len(parts) != 4:
             raise ValueError
     except ValueError:
         raise ValidationError("bbox must be 'min_lon,min_lat,max_lon,max_lat'") from None
-    b = Bbox(*parts)
-    empty = {
-        "type": "FeatureCollection", "features": [], "disclaimer": DISCLAIMER, "degraded": True,
-    }
-    if b.normalized().area_km2() > settings.max_bbox_area_km2:
-        return empty  # guard the Overpass query size like scoring does
-    try:
-        res = await overpass.fetch_trails(b)
-    except OverpassError:  # best-effort, display-only (TLC-3)
-        return empty
-    gj = trails_to_geojson(res.elements, DISCLAIMER)
-    cap = settings.overlay_max_features
-    gj["truncated"] = len(gj["features"]) > cap
-    gj["features"] = gj["features"][:cap]
-    return gj
+    return await store.get_trails_geojson(Bbox(*parts), max_features=settings.overlay_max_features)
 
 
 @app.get("/overlays")

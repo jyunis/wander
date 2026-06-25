@@ -1,23 +1,14 @@
-"""Trails overlay: Overpass query + GeoJSON conversion (display-only, TLC-3).
+"""Trails ingest: Overpass elements -> osm_features 'trail' rows (TLC-3).
 
-Foot/non-motorized paths plus named hiking ROUTES (e.g. the North Country
-Trail). Route relations win: their member ways draw once, labelled with the
-route name; `track` is never a trail (that's the Roads overlay)."""
+Named hiking-route relations win + dedupe their member ways; named paths are
+stored standalone. Stored unclipped (whole LineStrings); the /trails read clips
+to the viewport."""
 
 from __future__ import annotations
 
-from cairn.clients.overpass import build_trails_query, trails_to_geojson
-from cairn.store.types import Bbox
+import json
 
-DISC = "physical suitability only"
-
-
-def test_build_trails_query_targets_paths_and_hiking_routes():
-    q = build_trails_query(Bbox(-94.5, 46.9, -94.2, 47.1))
-    assert 'way["highway"~"^(path|footway|bridleway|cycleway|steps)$"]' in q
-    assert 'relation["route"="hiking"]["name"]' in q
-    assert "out geom(46.9,-94.5,47.1,-94.2);" in q  # geometry clipped to the bbox
-    assert '"track"' not in q  # track is a drivable road, not a trail
+from cairn.ingest.trails import linestring_wkt, trail_rows
 
 
 def _way(wid, coords, **tags):
@@ -28,34 +19,30 @@ def _way(wid, coords, **tags):
 
 
 def test_named_route_wins_and_dedupes_member_ways():
-    # The NCT relation has member way 100 (also returned standalone) + way 101.
-    nct_geom = [(-94.40, 47.00), (-94.38, 47.00)]
     elements = [
-        {"type": "relation", "id": 9, "tags": {"route": "hiking", "name": "North Country Trail"},
+        {"type": "relation", "id": 9,
+         "tags": {"route": "hiking", "name": "North Country Trail"},
          "members": [
-             {"type": "way", "ref": 100, "geometry": [{"lat": 47.00, "lon": -94.40},
-                                                       {"lat": 47.00, "lon": -94.38}]},
-             {"type": "way", "ref": 101, "geometry": [{"lat": 47.00, "lon": -94.38},
-                                                       {"lat": 47.00, "lon": -94.36}]},
+             {"type": "way", "ref": 100,
+              "geometry": [{"lat": 47.0, "lon": -94.40}, {"lat": 47.0, "lon": -94.38}]},
+             {"type": "way", "ref": 101,
+              "geometry": [{"lat": 47.0, "lon": -94.38}, {"lat": 47.0, "lon": -94.36}]},
          ]},
-        _way(100, nct_geom, highway="path"),                      # suppressed (in the route)
-        _way(200, [(-94.30, 47.05), (-94.29, 47.06)], highway="footway", name="Lakeshore Path"),
+        _way(100, [(-94.40, 47.0), (-94.38, 47.0)], highway="path"),  # suppressed (route member)
+        _way(200, [(-94.30, 47.05), (-94.29, 47.06)], highway="path", name="Lakeshore Path"),
     ]
-    gj = trails_to_geojson(elements, DISC)
-    feats = gj["features"]
-    assert gj["type"] == "FeatureCollection" and gj["disclaimer"] == DISC
-    # 2 route members (named) + 1 standalone footway; the standalone way 100 is
-    # suppressed because it's part of the route.
-    routes = [f for f in feats if f["properties"]["kind"] == "hiking_route"]
-    paths = [f for f in feats if f["properties"]["kind"] == "footway"]
-    assert len(routes) == 2
-    assert all(f["properties"]["name"] == "North Country Trail" for f in routes)
-    assert len(paths) == 1 and paths[0]["properties"]["name"] == "Lakeshore Path"
-    # geometry is GeoJSON [lon, lat] LineStrings
-    assert routes[0]["geometry"]["type"] == "LineString"
-    assert routes[0]["geometry"]["coordinates"][0] == [-94.40, 47.00]
+    rows = trail_rows(elements)
+    # rows: (osm_type, osm_id, feature_class, tags_json, wkt)
+    assert all(r[0] == "trail" and r[2] == "trail" for r in rows)
+    by_id = {r[1]: json.loads(r[3]) for r in rows}
+    assert set(by_id) == {100, 101, 200}  # way 100 stored once (as a route member)
+    assert by_id[100]["kind"] == "hiking_route" and by_id[100]["name"] == "North Country Trail"
+    assert by_id[101]["name"] == "North Country Trail"
+    assert by_id[200]["kind"] == "path" and by_id[200]["name"] == "Lakeshore Path"
+    wkt = {r[1]: r[4] for r in rows}
+    assert wkt[100].startswith("LINESTRING(") and "-94.4 47" in wkt[100]
 
 
 def test_degenerate_geometry_dropped():
-    elements = [_way(1, [(-94.4, 47.0)], highway="path")]  # single point -> no line
-    assert trails_to_geojson(elements, DISC)["features"] == []
+    assert linestring_wkt([{"lat": 47, "lon": -94}]) is None  # single point
+    assert trail_rows([_way(1, [(-94.4, 47.0)], highway="path")]) == []

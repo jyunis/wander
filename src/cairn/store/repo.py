@@ -1203,6 +1203,58 @@ class Store:
             "features": features[:max_features],
         }
 
+    async def get_trails_geojson(self, bbox: Bbox, max_features: int = 4000) -> dict:
+        """Hiking trails (foot paths + named routes, e.g. the North Country Trail)
+        within `bbox` — the display-only Trails overlay, read from LOCAL
+        osm_features (feature_class='trail', bulk-loaded by scripts/load_trails.py
+        — public Overpass is too flaky for a live per-view query). Clipped to the
+        bbox + capped. Empty until the loader runs. Never scored (TLC-3)."""
+        from cairn import DISCLAIMER
+
+        b = bbox.normalized()
+        cur = await self.db.execute(
+            "SELECT tags_json, "
+            "AsGeoJSON(ST_Intersection(geom, BuildMbr(?, ?, ?, ?, 4326))) "
+            "FROM osm_features WHERE feature_class = 'trail' AND ROWID IN ("
+            "  SELECT ROWID FROM SpatialIndex WHERE f_table_name = 'osm_features' "
+            "  AND f_geometry_column = 'geom' "
+            "  AND search_frame = BuildMbr(?, ?, ?, ?, 4326))",
+            (b.min_lon, b.min_lat, b.max_lon, b.max_lat,
+             b.min_lon, b.min_lat, b.max_lon, b.max_lat),
+        )
+        features = []
+        for tags_json, gj in await cur.fetchall():
+            if not gj:
+                continue
+            tags = json.loads(tags_json) if tags_json else {}
+            for part in _line_parts(json.loads(gj)):
+                if len(part) >= 2:
+                    features.append({
+                        "type": "Feature",
+                        "geometry": {"type": "LineString", "coordinates": [list(c) for c in part]},
+                        "properties": {
+                            "name": tags.get("name") or None,
+                            "kind": tags.get("kind"),
+                            "sac_scale": tags.get("sac_scale"),
+                            "surface": tags.get("surface"),
+                        },
+                    })
+        return {
+            "type": "FeatureCollection",
+            "disclaimer": DISCLAIMER,
+            "truncated": len(features) > max_features,
+            "features": features[:max_features],
+        }
+
+    async def replace_trails(self, rows: list[tuple]) -> int:
+        """Replace ALL stored trail features (loader use): clear the
+        feature_class='trail' set, then bulk-insert `rows`
+        (osm_type, osm_id, feature_class, tags_json, wkt). Returns the count."""
+        await self.db.execute("DELETE FROM osm_features WHERE feature_class = 'trail'")
+        await self.db.commit()
+        await self.upsert_osm_chunk(rows)
+        return len(rows)
+
 
 def _roads_features(ways: list, tags_by_id: dict[int, dict]) -> list[dict]:
     """Build LineString Features for drivable ways + their source tags. Shared by
