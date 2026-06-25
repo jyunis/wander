@@ -8,7 +8,7 @@ typed engine errors to HTTP codes, and returns `failed` runs as status+reason
 Endpoints: POST /score, GET /runs, GET/PATCH/DELETE /runs/{id}, GET /runs/{id}/geojson,
 GET /runs/{id}/roads, GET /roads, GET /overlays, GET /overlays/{layer},
 GET /overlays/{layer}/shape,
-GET /nearby-campgrounds, GET /saved, POST /saved, PATCH/DELETE /saved/{id},
+GET /nearby-campgrounds, GET /nearby-resupply, GET /saved, POST /saved, PATCH/DELETE /saved/{id},
 PUT /saved/{id}/collections, GET/POST /collections,
 PATCH/DELETE /collections/{id}, POST /collections/{id}/places,
 GET/POST /trips, GET/PATCH/DELETE /trips/{id}, POST /trips/{id}/members,
@@ -776,6 +776,15 @@ async def nearby_campgrounds(
     scoring."""
     overlays: OverlayStore = request.app.state.overlays
     return {"campgrounds": await overlays.nearest_campgrounds(lat, lon, limit=limit)}
+
+
+@app.get("/nearby-resupply")
+async def nearby_resupply(request: Request, lat: float, lon: float) -> dict:
+    """Nearest resupply + logistics to a point (display-only — TLC-3): the closest
+    gas / groceries / water fill / dump station / propane, plus the nearest town.
+    Teardrop logistics on a scored site's sheet; never feeds scoring."""
+    overlays: OverlayStore = request.app.state.overlays
+    return await overlays.nearest_amenities(lat, lon)
 
 
 @app.get("/geocode")

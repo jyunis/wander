@@ -54,6 +54,24 @@ def _build_overlays_db(path: str) -> None:
         "'{\"sites\": 50, \"electric\": true, \"max_rv_ft\": 30}', "
         "GeomFromText('POINT(0.005 0.005)',4326))"
     )
+    # Resupply 'amenity' layer (sheet-only tie-in): one nearest-of-each-category
+    # near (0.005,0.005), with a SECOND, farther fuel to prove the per-category
+    # window picks the closest; a town; and a far point excluded by max_km.
+    for cat, name, meta, lon, lat in [
+        ("fuel", "Close Gas", '{"brand": "Holiday"}', 0.005, 0.005),
+        ("fuel", "Far Gas", None, 0.02, 0.02),
+        ("groceries", "IGA", '{"shop": "supermarket"}', 0.006, 0.006),
+        ("water", "Spigot", None, 0.004, 0.004),
+        ("dump_station", "Dump", '{"fee": true}', 0.007, 0.007),
+        ("propane", "Propane Co", None, 0.0055, 0.0055),
+        ("town", "Walker", '{"place": "town"}', 0.003, 0.003),
+        ("fuel", "Way Off", None, 5.0, 5.0),  # > max_km away
+    ]:
+        con.execute(
+            "INSERT INTO overlay_points(layer, category, name, meta, geom) "
+            f"VALUES ('amenity', ?, ?, ?, GeomFromText('POINT({lon} {lat})', 4326))",
+            (cat, name, meta),
+        )
     con.commit()
     con.close()
 
@@ -419,6 +437,75 @@ async def test_nearest_campgrounds(overlay_settings):
     await s.close()
 
 
+async def test_nearest_amenities(overlay_settings):
+    s = await OverlayStore.open(overlay_settings)
+    out = await s.nearest_amenities(0.005, 0.005)
+    res = out["resupply"]
+    # One nearest of each resupply category; the closer of the two fuels wins.
+    assert res["fuel"]["name"] == "Close Gas"
+    assert res["fuel"]["meta"]["brand"] == "Holiday"  # meta passes through
+    assert res["fuel"]["distance_m"] < 100  # essentially on top of it
+    assert res["groceries"]["name"] == "IGA"
+    assert res["water"]["name"] == "Spigot"
+    assert res["dump_station"]["name"] == "Dump"
+    assert res["propane"]["name"] == "Propane Co"
+    # Town is surfaced separately, not as a resupply category.
+    assert out["town"]["name"] == "Walker"
+    assert "town" not in res
+    assert res["fuel"]["lon"] == pytest.approx(0.005) and res["fuel"]["lat"] == pytest.approx(0.005)
+    await s.close()
+
+
+async def test_nearest_amenities_max_km_excludes_far(overlay_settings):
+    s = await OverlayStore.open(overlay_settings)
+    # (3,3) sits far from BOTH clusters (the 0.00x amenities and the lone (5,5)
+    # "Way Off" fuel ~300 km away); a tight radius finds nothing in any category.
+    out = await s.nearest_amenities(3.0, 3.0, max_km=50.0)
+    assert all(v is None for v in out["resupply"].values())
+    assert out["town"] is None
+    # Widening the radius reaches the lone far fuel but still no other category.
+    wide = await s.nearest_amenities(5.0, 5.0, max_km=10.0)
+    assert wide["resupply"]["fuel"]["name"] == "Way Off"  # at (5,5), distance ~0
+    assert wide["resupply"]["groceries"] is None  # nearest groceries is ~785 km off
+    await s.close()
+
+
+async def test_nearest_amenities_inert_without_db(tmp_path):
+    s = await OverlayStore.open(
+        Settings(_env_file=None, data_dir=tmp_path, overlays_db_path=tmp_path / "nope.db")
+    )
+    out = await s.nearest_amenities(47.5, -94.1)
+    assert out["town"] is None
+    assert set(out["resupply"]) == {"fuel", "groceries", "water", "dump_station", "propane"}
+    assert all(v is None for v in out["resupply"].values())
+    await s.close()
+
+
+async def test_amenity_layer_hidden_from_layers(overlay_settings):
+    # The amenity layer is sheet-only (served via /nearby-resupply), so it must
+    # NOT appear as a browsable overlay in the Land panel.
+    s = await OverlayStore.open(overlay_settings)
+    assert "amenity" not in {layer["id"] for layer in await s.layers()}
+    await s.close()
+
+
+def test_api_nearby_resupply(tmp_path, monkeypatch):
+    db = tmp_path / "overlays.db"
+    _build_overlays_db(str(db))
+    monkeypatch.setenv("CAIRN_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CAIRN_OVERLAYS_DB_PATH", str(db))
+    config_module._settings = None
+    from cairn.api import app
+
+    with TestClient(app) as c:
+        r = c.get("/nearby-resupply", params={"lat": 0.005, "lon": 0.005})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["resupply"]["fuel"]["name"] == "Close Gas"
+        assert body["town"]["name"] == "Walker"
+    config_module._settings = None
+
+
 async def test_query_clips_to_bbox(overlay_settings):
     s = await OverlayStore.open(overlay_settings)
     fc = await s.query("ownership", Bbox(-0.005, -0.005, 0.005, 0.005))
@@ -465,4 +552,11 @@ def test_api_overlays_endpoints_inert_without_db(tmp_path, monkeypatch):
         # nearby-campgrounds responds (empty without an overlays.db)
         r = c.get("/nearby-campgrounds?lat=47.5&lon=-94.1")
         assert r.status_code == 200 and r.json()["campgrounds"] == []
+
+        # nearby-resupply responds inert too (all categories None)
+        r = c.get("/nearby-resupply?lat=47.5&lon=-94.1")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["town"] is None
+        assert all(v is None for v in body["resupply"].values())
     config_module._settings = None

@@ -116,6 +116,20 @@ def test_engine_never_references_availability_data_tlc3():
         )
 
 
+def test_engine_never_references_resupply_data_tlc3():
+    # TLC-3: resupply + nearest-town (the `amenity` overlay layer) is display-only
+    # teardrop logistics on the spot sheet — gas / groceries / water / dump /
+    # propane / town, never a scoring input. Guard the engine against importing the
+    # nearest-amenity store surface so proximity-to-town can't quietly become a
+    # remoteness/solitude shortcut. Code-shaped tokens only.
+    forbidden = re.compile(r"nearest_amenities|nearby_resupply|nearby-resupply")
+    for path in ENGINE_DIR.glob("*.py"):
+        source = _strip_comments(path.read_text(encoding="utf-8"))
+        assert forbidden.search(source) is None, (
+            f"{path.name} references display-only resupply data (TLC-3 violation)"
+        )
+
+
 def test_no_nondeterminism_primitives_in_engine_sources():
     checked_any = False
     for name in MODULES:

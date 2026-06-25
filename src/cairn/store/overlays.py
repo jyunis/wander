@@ -38,6 +38,19 @@ LAYER_ORDER = [
 # layer in `overlay_features`.
 POINT_LAYERS = {"campground", "dispersed"}
 
+# Layers that exist only to feed a scored-site's bottom-sheet tie-in (served via
+# a dedicated nearest-N endpoint), NOT as a browsable map overlay. `layers()`
+# hides them so they never show up in the Land panel. `amenity` (resupply +
+# nearest town) is sheet-only — like the nearest-campgrounds list, display-only
+# context (TLC-3), never scored.
+SHEET_ONLY_LAYERS = {"amenity"}
+
+# The `amenity` point layer's resupply categories (one nearest of each is shown
+# on the spot sheet). `town` is carried in the same layer but surfaced
+# separately (nearest town, not a resupply stop).
+AMENITY_LAYER = "amenity"
+RESUPPLY_CATEGORIES = ("fuel", "groceries", "water", "dump_station", "propane")
+
 # The dispersed-friendly zones the Explore tab browses (state parks excluded —
 # developed/reserved camping, a different mode). See doc #34.
 FOREST_LAYERS = ("national_forest", "state_forest")
@@ -116,6 +129,8 @@ class OverlayStore:
         for lid in [*LAYER_ORDER, *(c for c in counts if c not in LAYER_ORDER)]:
             if lid not in counts:
                 continue
+            if lid in SHEET_ONLY_LAYERS:
+                continue  # sheet-only tie-in layer, not a browsable overlay
             table = "overlay_points" if lid in pts else "overlay_features"
             cur = await self._db.execute(
                 f"SELECT DISTINCT category FROM {table} "
@@ -320,6 +335,51 @@ class OverlayStore:
                     "distance_m": float(d),
                 }
             )
+        return out
+
+    async def nearest_amenities(
+        self, lat: float, lon: float, max_km: float = 80.0
+    ) -> dict:
+        """Resupply + logistics near a candidate site: the single NEAREST point of
+        each resupply category (`fuel`/`groceries`/`water`/`dump_station`/`propane`)
+        within `max_km`, plus the nearest `town`. Returns
+        `{"resupply": {cat: rec|None, ...}, "town": rec|None}`, each `rec` being
+        `{name, category, meta, lon, lat, distance_m}`.
+
+        Display-only (TLC-3): teardrop logistics on the spot sheet — gas, a grocery
+        run, a water fill, a dump station, a propane refill, the nearest town —
+        NEVER read by scoring. A window function picks the closest per category in
+        one R*Tree-bounded pass (so the five categories aren't crowded out by, say,
+        five gas stations clustered in one town)."""
+        empty = {"resupply": {c: None for c in RESUPPLY_CATEGORIES}, "town": None}
+        if self._db is None:
+            return empty
+        rdeg = max_km / 111.0  # ~deg of latitude; generous R*Tree search frame
+        dist = "ST_Distance(MakePoint(?, ?, 4326), geom, 1)"
+        cur = await self._db.execute(
+            "SELECT category, name, meta, lon, lat, d FROM ("
+            f"  SELECT category, name, meta, X(geom) AS lon, Y(geom) AS lat, {dist} AS d, "
+            f"    ROW_NUMBER() OVER (PARTITION BY category ORDER BY {dist}) AS rn "
+            "  FROM overlay_points WHERE layer='amenity' AND ROWID IN ("
+            "    SELECT ROWID FROM SpatialIndex WHERE f_table_name='overlay_points' "
+            "    AND f_geometry_column='geom' AND search_frame=BuildCircleMbr(?, ?, ?, 4326))"
+            ") WHERE rn=1 AND d IS NOT NULL",
+            (lon, lat, lon, lat, lon, lat, rdeg),
+        )
+        out = {"resupply": {c: None for c in RESUPPLY_CATEGORIES}, "town": None}
+        for category, name, meta, lon_, lat_, d in await cur.fetchall():
+            rec = {
+                "name": name,
+                "category": category,
+                "meta": json.loads(meta) if meta else None,
+                "lon": lon_,
+                "lat": lat_,
+                "distance_m": float(d),
+            }
+            if category == "town":
+                out["town"] = rec
+            elif category in out["resupply"]:
+                out["resupply"][category] = rec
         return out
 
     async def list_forests(self) -> list[dict]:
