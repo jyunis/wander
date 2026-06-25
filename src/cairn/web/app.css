@@ -725,8 +725,9 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .forest-bar:focus-within { border-color: var(--accent); }
 .forest-bar[hidden] { display: none; }
 .fbar-leaf { flex: none; font-size: 14px; opacity: 0.9; }
+/* 16px: below this iOS Safari auto-zooms the page when the field is focused. */
 .fbar-input { flex: 1 1 auto; min-width: 0; background: none; border: none; color: var(--ink);
-  font-size: 14px; outline: none; }
+  font-size: 16px; outline: none; }
 .fbar-input::placeholder { color: var(--muted); }
 .fbar-clear { flex: none; width: 20px; height: 20px; border: none; border-radius: 50%;
   background: #313942; color: var(--muted); cursor: pointer; font-size: 11px; line-height: 1; }
@@ -802,6 +803,9 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
    control — cap the width so a long forest name truncates instead of sliding
    under the ☰ button. */
 .shape-chip, .measure-chip, .run-chip { max-width: calc(100vw - 116px); }
+/* The centered forest-bar must clear the top-left hamburger + top-right zoom
+   too, or it sits over the ☰ button. */
+.forest-bar { width: calc(100vw - 116px); }
 #panel header { padding-top: calc(14px + env(safe-area-inset-top, 0px)); }
 #panel { padding-bottom: env(safe-area-inset-bottom, 0px); }
 .sheet { bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
