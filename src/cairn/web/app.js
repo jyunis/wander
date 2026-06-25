@@ -886,7 +886,10 @@ function scoreableBbox() {
   const cap = CONFIG.sync_area_threshold_km2 || 200;
   const a = areaKm2(view);
   if (a <= cap) return view;
-  const scale = Math.sqrt(cap / a);
+  // Target a hair UNDER the cap: scaling about the center hits the cap exactly,
+  // so float rounding can land marginally over and trip executeScore's strict
+  // `> cap` guard ("Area too big" with no request). 0.1% headroom is imperceptible.
+  const scale = Math.sqrt((cap * 0.999) / a);
   const clat = (view.min_lat + view.max_lat) / 2;
   const clon = (view.min_lon + view.max_lon) / 2;
   const hlat = ((view.max_lat - view.min_lat) / 2) * scale;
@@ -1770,12 +1773,17 @@ async function selectShape(layer, name) {
   renderShapeChip();
   const bb = shape.bbox; // [w, s, e, n] from the full geometry
   if (bb && bb.every((v) => typeof v === "number")) {
+    // animate:false so the view lands synchronously: the chip's "Score this
+    // view" is live the instant the forest is entered, and it reads map bounds
+    // (scoreableBbox). An animated fit would leave getBounds() on the pre-zoom
+    // (off-forest) view mid-animation, so an immediate tap scored the wrong area
+    // (clipped to the forest → 0 sites = "does nothing").
     map.fitBounds(
       [
         [bb[1], bb[0]],
         [bb[3], bb[2]],
       ],
-      { ...fitPadding(SHAPE_FIT_PADDING), maxZoom: SHAPE_FIT_MAX_ZOOM }
+      { ...fitPadding(SHAPE_FIT_PADDING), maxZoom: SHAPE_FIT_MAX_ZOOM, animate: false }
     );
   }
 }
