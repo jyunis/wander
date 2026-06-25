@@ -907,6 +907,204 @@ def load_dispersed(con, states) -> int:
     return total
 
 
+# --- resupply + nearest-town (the `amenity` point layer) -------------------
+# Display-only (TLC-3) teardrop logistics shown on a scored site's bottom sheet:
+# the nearest gas / groceries / water fill / dump station / propane, plus the
+# nearest town. NEVER scored. Unlike campgrounds/dispersed (gated INSIDE a
+# forest), resupply lives in the towns AROUND a forest, so we preload a buffer
+# of ~RESUPPLY_BUFFER_KM around every loaded NF/SF boundary — keeping the
+# convenience-store firehose down to actual camping country and bounding each
+# Overpass query — rather than the whole state.
+AMENITY_LAYER = "amenity"
+RESUPPLY_BUFFER_KM = 40.0
+RESUPPLY_BUFFER_DEG = RESUPPLY_BUFFER_KM / 111.0  # ~deg of latitude
+
+_GROCERY_SHOPS = {"supermarket", "convenience", "general", "grocery", "greengrocer"}
+_TOWN_PLACES = {"city", "town", "village"}
+
+# Default display names per category for an unnamed OSM element.
+_AMENITY_DEFAULT_NAME = {
+    "fuel": "Gas station",
+    "groceries": "Store",
+    "water": "Drinking water",
+    "dump_station": "Dump station",
+    "propane": "Propane",
+}
+
+
+def _categorize_amenity(tags: dict) -> set[str]:
+    """Every resupply category (+ `town`) an OSM element belongs to, by tags. An
+    element can match several (a fuel station that also sells propane → both
+    `fuel` and `propane`), so it's stored once per category and the spot sheet's
+    nearest-of-each query finds it under either. Best-effort over sparse OSM
+    tagging — display-only (TLC-3)."""
+    cats: set[str] = set()
+    amenity = tags.get("amenity")
+    shop = tags.get("shop")
+    if amenity == "fuel":
+        cats.add("fuel")
+    if shop in _GROCERY_SHOPS:
+        cats.add("groceries")
+    if amenity == "drinking_water" or (
+        tags.get("man_made") == "water_tap" and _truthy(tags.get("drinking_water"))
+    ):
+        cats.add("water")
+    if (
+        amenity == "sanitary_dump_station"
+        or tags.get("waste_disposal") == "dump_station"
+        or _truthy(tags.get("sanitary_dump_station"))
+    ):
+        cats.add("dump_station")
+    # Propane/LPG refill: a fuel station flagged for it, or a standalone gas dealer.
+    if _truthy(tags.get("fuel:propane")) or _truthy(tags.get("fuel:lpg")) or shop == "gas":
+        cats.add("propane")
+    if tags.get("place") in _TOWN_PLACES:
+        cats.add("town")
+    return cats
+
+
+def _amenity_name(category: str, tags: dict) -> str | None:
+    """Display name for an (element, category) row. A town must be named (an
+    unnamed place node is useless as 'nearest town' → dropped); every other
+    category falls back to a generic per-category label."""
+    name = (tags.get("name") or "").strip()
+    if category == "town":
+        return name or None
+    return name or _AMENITY_DEFAULT_NAME.get(category, category)
+
+
+def _amenity_meta(category: str, tags: dict) -> dict:
+    """Compact, display-only meta for a resupply/town row — only what the sheet
+    might show. Sparse by design (`_compact` drops empties)."""
+    meta = {
+        "brand": tags.get("brand") or tags.get("operator"),
+        "hours": tags.get("opening_hours"),
+    }
+    if category == "groceries":
+        meta["shop"] = tags.get("shop")
+    elif category in ("dump_station", "water"):
+        meta["fee"] = _truthy(tags.get("fee")) or None
+    elif category == "town":
+        meta = {"place": tags.get("place"), "population": tags.get("population")}
+    return _compact(meta)
+
+
+def _merge_bboxes(bboxes: list[tuple]) -> list[tuple]:
+    """Greedily union overlapping (w, s, e, n) rectangles until stable. The
+    buffered forest bboxes overlap heavily (dozens of small state forests in one
+    region), so merging cuts the Overpass query count to a handful; cross-region
+    duplicates are de-duped by OSM id anyway. Pure + deterministic."""
+    boxes = [tuple(b) for b in bboxes]
+    merged = True
+    while merged:
+        merged = False
+        out: list[tuple] = []
+        for b in boxes:
+            placed = False
+            for i, o in enumerate(out):
+                # Overlap test (touching edges count as overlapping).
+                if not (b[2] < o[0] or b[0] > o[2] or b[3] < o[1] or b[1] > o[3]):
+                    out[i] = (min(b[0], o[0]), min(b[1], o[1]), max(b[2], o[2]), max(b[3], o[3]))
+                    placed = True
+                    merged = True
+                    break
+            if not placed:
+                out.append(b)
+        boxes = out
+    return boxes
+
+
+def load_amenities(con, states) -> int:
+    """The `amenity` point layer: resupply (fuel/groceries/water/dump/propane) +
+    nearest towns from OSM, within ~RESUPPLY_BUFFER_KM of every loaded NF/SF
+    boundary. Display-only (TLC-3), NEVER scored. Reads the forest boundaries
+    that main() loads first; if none are present it skips (nothing to buffer)."""
+    con.execute("DELETE FROM overlay_points WHERE layer=?", (AMENITY_LAYER,))
+    con.commit()
+    rows = con.execute(
+        "SELECT MbrMinX(geom), MbrMinY(geom), MbrMaxX(geom), MbrMaxY(geom) "
+        "FROM overlay_features WHERE layer IN ('national_forest', 'state_forest')"
+    ).fetchall()
+    rows = [r for r in rows if r[0] is not None]
+    if not rows:
+        print("[amenity] no NF/SF boundaries loaded — skipping (load forests first)", flush=True)
+        return 0
+    buffered = [
+        (w - RESUPPLY_BUFFER_DEG, s - RESUPPLY_BUFFER_DEG,
+         e + RESUPPLY_BUFFER_DEG, n + RESUPPLY_BUFFER_DEG)
+        for (w, s, e, n) in rows
+    ]
+    regions = _merge_bboxes(buffered)
+    print(
+        f"[amenity] {len(rows)} forest parts -> {len(regions)} query regions "
+        f"(buffer {RESUPPLY_BUFFER_KM:.0f} km)",
+        flush=True,
+    )
+    seen: set[tuple] = set()  # (osm_type, osm_id, category) across overlapping regions
+    total = 0
+    for idx, (w, s, e, n) in enumerate(regions, 1):
+        # Overpass bbox order is (south, west, north, east).
+        bbox = f"{s},{w},{n},{e}"
+        query = (
+            "[out:json][timeout:180];("
+            f'nwr["amenity"="fuel"]({bbox});'
+            f'nwr["shop"~"^(supermarket|convenience|general|grocery|greengrocer)$"]({bbox});'
+            f'nwr["amenity"="drinking_water"]({bbox});'
+            f'nwr["man_made"="water_tap"]["drinking_water"="yes"]({bbox});'
+            f'nwr["amenity"="sanitary_dump_station"]({bbox});'
+            f'nwr["waste_disposal"="dump_station"]({bbox});'
+            f'nwr["shop"="gas"]({bbox});'
+            f'node["place"~"^(city|town|village)$"]({bbox});'
+            ");out center tags;"
+        )
+        print(f"[amenity] region {idx}/{len(regions)} …", flush=True)
+        # Overpass routinely 504/429s a big region under load (we hit this on the
+        # Black Hills region). Retry with backoff so a fresh rebuild is reliable
+        # rather than silently dropping a whole state's resupply.
+        els = None
+        for attempt in range(4):
+            try:
+                els = _overpass(query).get("elements", [])
+                break
+            except Exception as exc:
+                wait = 15 * (attempt + 1)
+                print(
+                    f"[amenity]   region {idx} attempt {attempt + 1}/4 failed: {exc}"
+                    + (f" — retrying in {wait}s" if attempt < 3 else " — giving up"),
+                    flush=True,
+                )
+                if attempt < 3:
+                    time.sleep(wait)
+        if els is None:
+            continue
+        rows_ins = []
+        for el in els:
+            tags = el.get("tags") or {}
+            cats = _categorize_amenity(tags)
+            if not cats:
+                continue
+            lat = el.get("lat") or (el.get("center") or {}).get("lat")
+            lon = el.get("lon") or (el.get("center") or {}).get("lon")
+            if lat is None or lon is None:
+                continue
+            otype, oid = el.get("type"), el.get("id")
+            for cat in cats:
+                key = (otype, oid, cat)
+                if key in seen:
+                    continue
+                name = _amenity_name(cat, tags)
+                if name is None:
+                    continue  # unnamed town
+                seen.add(key)
+                meta = _amenity_meta(cat, tags)
+                rows_ins.append((cat, name, None, meta or None, f"POINT({lon} {lat})", 4326))
+        _insert_points(con, AMENITY_LAYER, rows_ins)
+        total += len(rows_ins)
+        print(f"[amenity]   region {idx}: {len(rows_ins)} kept", flush=True)
+    print(f"[amenity] total: {total}", flush=True)
+    return total
+
+
 # WI DNR managed-property layer: all DNR-owned properties (parks, forests, rec
 # areas, wildlife areas, …) keyed by PROP_NAME — there's no per-type service, so
 # parks vs forests are selected by name. (data-wi-dnr.opendata.arcgis.com backs
@@ -1039,6 +1237,10 @@ def main() -> None:
         total += load_campgrounds(con, states)
     if not only or DISPERSED_LAYER in only:
         total += load_dispersed(con, states)
+    # Resupply + nearest-town — buffered around the NF/SF boundaries loaded above
+    # (so run forests first if reloading just this layer).
+    if not only or AMENITY_LAYER in only:
+        total += load_amenities(con, states)
     print("--- overlay_features (polygons) ---", flush=True)
     for lyr, c in con.execute(
         "SELECT layer, COUNT(*) FROM overlay_features GROUP BY layer ORDER BY layer"

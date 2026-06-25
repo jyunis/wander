@@ -4,6 +4,7 @@
 let CONFIG = null;
 let map, drawnItems, heatLayer, pinLayer, candidatesLayer, roadsLayer, trailsLayer, canvasRenderer, gotoMarker;
 let nearbyCgLayer; // ephemeral markers: the campgrounds near the open scored site
+let resupplyLayer; // ephemeral markers: resupply (gas/groceries/…) near the open site
 let coverageLayer; // session-only fog: faint shading of views already scored (M3)
 let tripLayer; // markers for the currently plotted trip's members
 let savedLayer; // saved-place markers shown on the Saved tab (collection-colored)
@@ -430,6 +431,7 @@ function setupMap() {
   candidatesLayer = new L.LayerGroup().addTo(map);
   pinLayer = new L.LayerGroup().addTo(map);
   nearbyCgLayer = new L.LayerGroup().addTo(map);
+  resupplyLayer = new L.LayerGroup().addTo(map);
   coverageLayer = new L.LayerGroup().addTo(map); // session "where I've scored" fog
   tripLayer = new L.LayerGroup().addTo(map);
   savedLayer = new L.LayerGroup().addTo(map);
@@ -1073,6 +1075,7 @@ function clearViewResults() {
     heatLayer = null;
   }
   if (nearbyCgLayer) nearbyCgLayer.clearLayers();
+  if (resupplyLayer) resupplyLayer.clearLayers();
   const chip = $("results-chip");
   if (chip) {
     chip.hidden = true;
@@ -2312,6 +2315,7 @@ function showSite(p, lat, lon, presetName) {
   });
   wireSiteNote(body.querySelector(".bd-note"), lat, lon);
   loadNearbyCampgrounds(lat, lon, body);
+  loadNearbyResupply(lat, lon, body);
 }
 
 // Free-text note for the open site. Like rating, editing a note saves the site
@@ -2440,6 +2444,7 @@ function closeSite() {
   $("sheet").classList.add("hidden");
   $("sheet").classList.remove("collapsed"); // reset for next open
   nearbyCgLayer.clearLayers();
+  resupplyLayer.clearLayers();
   clearSelectedMarker();
   map.closePopup();
 }
@@ -2943,6 +2948,107 @@ async function loadNearbyCampgrounds(lat, lon, body) {
   });
 }
 
+// Resupply + nearest-town tie-in (display-only — TLC-3). Teardrop logistics for
+// a candidate spur: the nearest gas / groceries / water fill / dump station /
+// propane, plus the nearest town. Icon + ordered display per category.
+const RESUPPLY_INFO = {
+  fuel: { icon: "⛽", label: "Gas" },
+  groceries: { icon: "🛒", label: "Groceries" },
+  water: { icon: "🚰", label: "Water" },
+  dump_station: { icon: "🚽", label: "Dump" },
+  propane: { icon: "🛢️", label: "Propane" },
+};
+const RESUPPLY_ORDER = ["fuel", "groceries", "water", "dump_station", "propane"];
+
+// Lean popup for a resupply/town point (no save/trip-add — it's logistics, not a
+// site you'd camp at).
+function resupplyCard(rec) {
+  const info = RESUPPLY_INFO[rec.category] || { icon: "📍", label: rec.category };
+  const mi = (rec.distance_m / 1609.34).toFixed(1);
+  const m = rec.meta || {};
+  const bits = [];
+  if (m.brand) bits.push(esc(m.brand));
+  if (m.hours) bits.push(esc(m.hours));
+  if (m.fee) bits.push("fee");
+  if (m.population) bits.push(`pop. ${esc(m.population)}`);
+  const gmaps = `https://www.google.com/maps/search/?api=1&query=${rec.lat},${rec.lon}`;
+  return (
+    `<div class="cg-pop"><b>${info.icon} ${esc(rec.name)}</b>` +
+    `<div class="cg-cat">${info.label} · ${mi} mi</div>` +
+    (bits.length ? `<div class="cg-facts">${bits.join(" · ")}</div>` : "") +
+    `<div class="cg-actions">` +
+    `<a class="cg-link" href="${gmaps}" target="_blank" rel="noopener">Directions ↗</a>` +
+    `</div></div>`
+  );
+}
+
+// Fill the .bd-resupply block: a row of category chips (dimmed + "—" when none
+// is within range) + a nearest-town line, plus ephemeral markers a chip tap
+// opens. Fetched lazily when the breakdown opens; never part of scoring (TLC-3).
+async function loadNearbyResupply(lat, lon, body) {
+  resupplyLayer.clearLayers();
+  let data;
+  try {
+    data = await (await fetch(`/nearby-resupply?lat=${lat}&lon=${lon}`)).json();
+  } catch {
+    return;
+  }
+  const el = body.querySelector(".bd-resupply");
+  if (!el || !data) return;
+  const res = data.resupply || {};
+  const town = data.town;
+  // Nothing at all nearby (e.g. no overlays.db / out of coverage) — stay silent.
+  if (!town && RESUPPLY_ORDER.every((c) => !res[c])) return;
+
+  const markerByCat = {}; // category -> its marker, for chip taps
+  const addMarker = (rec) => {
+    const info = RESUPPLY_INFO[rec.category] || { icon: "📍" };
+    const mk = L.marker([rec.lat, rec.lon], {
+      icon: L.divIcon({
+        className: "",
+        html: `<div class="resup-pin">${info.icon}</div>`,
+        iconSize: [22, 22],
+        iconAnchor: [11, 11],
+      }),
+    }).bindPopup(() => resupplyCard(rec), { maxWidth: 240, className: "cg-popup" });
+    resupplyLayer.addLayer(mk);
+    return mk;
+  };
+
+  const chips = RESUPPLY_ORDER.map((cat) => {
+    const rec = res[cat];
+    const info = RESUPPLY_INFO[cat];
+    if (!rec) {
+      return `<span class="resup-chip empty">${info.icon} —</span>`;
+    }
+    markerByCat[cat] = addMarker(rec);
+    const mi = (rec.distance_m / 1609.34).toFixed(1);
+    return `<span class="resup-chip" data-cat="${cat}" title="${esc(rec.name)}">${info.icon} ${mi} mi</span>`;
+  }).join("");
+
+  let townHtml = "";
+  if (town) {
+    const tmk = addMarker(town);
+    markerByCat.__town = tmk;
+    const mi = (town.distance_m / 1609.34).toFixed(1);
+    townHtml = `<div class="bd-resup-town" data-cat="__town">📍 Nearest town: ${esc(town.name)} · ${mi} mi</div>`;
+  }
+
+  el.innerHTML =
+    `<div class="bd-resup-title">Resupply</div>` +
+    `<div class="bd-resup-chips">${chips}</div>` +
+    townHtml;
+
+  el.querySelectorAll("[data-cat]").forEach((node) => {
+    const mk = markerByCat[node.dataset.cat];
+    if (!mk) return;
+    node.onclick = () => {
+      map.panTo(mk.getLatLng());
+      mk.openPopup();
+    };
+  });
+}
+
 function breakdownHtml(p, lat, lon, { expanded = false } = {}) {
   p = p || {};
   const hasScore = p.total != null;
@@ -2963,6 +3069,7 @@ function breakdownHtml(p, lat, lon, { expanded = false } = {}) {
   if (!hasScore) {
     return (
       nameBar + ratingRow + coordsHtml + noteRow +
+      `<div class="bd-resupply"></div>` +
       `<div class="bd-nearby"></div>` +
       `<div class="bd-raw bd-disc">${CONFIG.disclaimer}</div>`
     );
@@ -2995,6 +3102,7 @@ function breakdownHtml(p, lat, lon, { expanded = false } = {}) {
     coordsHtml +
     noteRow +
     `<div class="bd-total">Total: ${p.total.toFixed(3)} (rank #${p.rank})${rough}</div>` +
+    `<div class="bd-resupply"></div>` +
     `<div class="bd-nearby"></div>` +
     `<button type="button" class="bd-toggle">${expanded ? "▾" : "▸"} Why this score</button>` +
     `<div class="bd-details${expanded ? "" : " collapsed"}">` +
