@@ -196,8 +196,10 @@ class Settings(BaseSettings):
     # --- Distinct-site selection (spatial NMS) ----------------------------
     # After scoring, suppress lower-scoring candidates within this radius of a
     # higher-scoring one so ranked "sites" are distinct, not adjacent road
-    # samples. Exposed via GET /config so the UI can show/tune it.
-    distinct_radius_m: float = 300.0
+    # samples. Exposed via GET /config so the UI can show/tune it. 150m keeps
+    # the "10 pins on one stretch" clutter down while still pinning genuinely
+    # separate spots — e.g. two dead-end spurs ~300m apart each keep a pin.
+    distinct_radius_m: float = 150.0
     # Candidates within this distance of any OSM building are dropped — no
     # camping in someone's yard. Buildings also feed the solitude gradient.
     building_setback_m: float = 80.0

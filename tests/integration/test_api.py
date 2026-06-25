@@ -61,7 +61,7 @@ def test_config_exposes_ui_subset(client):
     }
     assert "presets" in body and "dispersed" in body["presets"]
     assert body["max_bbox_area_km2"] == 2500.0
-    assert body["distinct_radius_m"] == 300.0
+    assert body["distinct_radius_m"] == 150.0
     assert "physical suitability only" in body["disclaimer"].lower()
 
 

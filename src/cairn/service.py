@@ -278,17 +278,28 @@ def _inject_termini(
     grid_m: float,
     max_candidates: int,
 ) -> list[Candidate]:
-    """Add dead-end terminus points as candidates (grid-deduped against the
-    uniform samples) so every spur-end is a scored, recommendable site."""
-    cells = {grid_cell(c.lon, c.lat, grid_m) for c in candidates}
+    """Add dead-end terminus points as candidates so every spur-end is a scored,
+    recommendable site. A terminus is the meaningful spot at the end of a spur,
+    so when it lands in the same dedup grid cell as a uniform sample it REPLACES
+    that sample (the candidate snaps onto the dead-end) rather than being
+    discarded. New cells are capped at max_candidates; a replacement never grows
+    the list. First terminus wins a cell (no terminus replaces another)."""
     out = list(candidates)
+    by_cell = {grid_cell(c.lon, c.lat, grid_m): i for i, c in enumerate(out)}
+    terminus_cells: set[tuple] = set()
     for lon, lat, way_id in termini:
-        if len(out) >= max_candidates:
-            break
         cell = grid_cell(lon, lat, grid_m)
-        if cell not in cells:
-            cells.add(cell)
-            out.append(Candidate(lon=lon, lat=lat, source_way_id=way_id))
+        if cell in terminus_cells:
+            continue  # another dead-end already owns this cell
+        cand = Candidate(lon=lon, lat=lat, source_way_id=way_id)
+        if cell in by_cell:
+            out[by_cell[cell]] = cand  # snap the uniform sample onto the dead-end
+        elif len(out) < max_candidates:
+            by_cell[cell] = len(out)
+            out.append(cand)
+        else:
+            continue
+        terminus_cells.add(cell)
     return out
 
 
