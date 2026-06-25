@@ -176,6 +176,7 @@ const FEATURE_LABELS = {
   solitude: "Solitude",
   flatness: "Flatness",
   tree_cover: "Trees",
+  trail_proximity: "Near a trail",
 };
 
 // --- helpers ---------------------------------------------------------------

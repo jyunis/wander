@@ -37,6 +37,7 @@ DEFAULT_WEIGHTS: dict[str, float] = {
     "solitude": 0.05,
     "flatness": 0.05,
     "tree_cover": 0.00,  # unavailable from OSM in national forests; renormalized out
+    "trail_proximity": 0.00,  # opt-in; near a mapped hiking trail (preloaded states only)
 }
 
 # UI weight presets — each just sets slider values (FC-9). Served via
@@ -53,6 +54,7 @@ WEIGHT_PRESETS: dict[str, dict[str, float]] = {
         "solitude": 0.15,
         "flatness": 0.05,
         "tree_cover": 0.00,
+        "trail_proximity": 0.00,
     },
     "lakeside_spur": {
         "road_end": 0.30,
@@ -62,6 +64,7 @@ WEIGHT_PRESETS: dict[str, dict[str, float]] = {
         "solitude": 0.05,
         "flatness": 0.05,
         "tree_cover": 0.00,
+        "trail_proximity": 0.00,
     },
     "flat_and_easy": {
         "road_end": 0.15,
@@ -71,6 +74,7 @@ WEIGHT_PRESETS: dict[str, dict[str, float]] = {
         "solitude": 0.05,
         "flatness": 0.40,
         "tree_cover": 0.05,
+        "trail_proximity": 0.00,
     },
 }
 

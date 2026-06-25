@@ -75,12 +75,13 @@ def road_is_rough(tags: dict) -> bool:
     )
 
 
-def _search_radii(scoring_config: dict) -> tuple[float, float, float]:
+def _search_radii(scoring_config: dict) -> tuple[float, float, float, float]:
     f = scoring_config["features"]
     water = float(f["water_proximity"].get("fall_end", 1500.0))
     forest = float(f["tree_cover"].get("decay_m", 200.0)) * 7.0  # exp(-7) ~ 0
     solitude = float(f["solitude"].get("cap_m", 3000.0))
-    return water, forest, solitude
+    trail = float(f.get("trail_proximity", {}).get("decay_m", 200.0)) * 7.0  # exp(-7) ~ 0
+    return water, forest, solitude, trail
 
 
 def _dist_m(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
@@ -102,7 +103,7 @@ async def extract_features(
     forest_overlap: bool = False,
 ) -> CandidateFeatures:
     lon, lat = candidate.lon, candidate.lat
-    water_r, forest_r, solitude_r = _search_radii(scoring_config)
+    water_r, forest_r, solitude_r, trail_r = _search_radii(scoring_config)
 
     # Building setback (hard filter, TLC-4): no camping in someone's yard.
     disqualified = False
@@ -154,6 +155,11 @@ async def extract_features(
     solitude = await _distance_feature(
         store, lon, lat, _SOLITUDE_CLASSES, solitude_r, solitude_present
     )
+    # trail_proximity <- nearest mapped hiking trail (preloaded 'trail' overlay
+    # data). Unavailable (degraded, TLC-6) where no trails are loaded.
+    trail = await _distance_feature(
+        store, lon, lat, ("trail",), trail_r, "trail" in present_classes
+    )
 
     near_campsite = False
     if "campsite" in present_classes:
@@ -170,6 +176,7 @@ async def extract_features(
             "road_character": road,
             "remoteness": remoteness,
             "road_end": road_end,
+            "trail_proximity": trail,
         },
         near_campsite=near_campsite,
         rough_road=rough,

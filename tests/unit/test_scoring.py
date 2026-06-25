@@ -135,6 +135,27 @@ def test_water_trapezoid_shape():
     assert math.isclose(c.normalized, 0.5, abs_tol=1e-9)
 
 
+def test_trail_proximity_decay_score_and_degrade():
+    decay = PARAMS["features"]["trail_proximity"]["decay_m"]
+    # At a trail -> exp(0)=1; ~decay m away -> exp(-1) ~ 0.368. Weighted alone,
+    # the renormalized contribution equals the normalized value.
+    for dist, expected in [(0.0, 1.0), (decay, 1.0 / math.e)]:
+        cf = CandidateFeatures(
+            candidate=Candidate(0.0, 0.0, 1),
+            features={"trail_proximity": fv(dist, True)},
+        )
+        c = contributions_by_feature(score([cf], {"trail_proximity": 1.0}, PARAMS)[0])
+        assert math.isclose(c["trail_proximity"].contribution, expected, abs_tol=1e-9)
+    # No trails loaded -> unavailable -> degraded + renormalized away (TLC-6).
+    cf = CandidateFeatures(
+        candidate=Candidate(0.0, 0.0, 2),
+        features={"flatness": fv(0.0, True), "trail_proximity": fv(None, False)},
+    )
+    out = score([cf], {"flatness": 0.5, "trail_proximity": 0.5}, PARAMS)[0]
+    assert "trail_proximity" in out.degraded_features
+    assert "trail_proximity" not in contributions_by_feature(out)
+
+
 def test_tree_distance_decay():
     assert math.isclose(norm_tree(0.0), 1.0, abs_tol=1e-12)
     assert math.isclose(norm_tree(DECAY_M), 1.0 / math.e, abs_tol=1e-12)

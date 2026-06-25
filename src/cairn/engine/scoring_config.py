@@ -24,7 +24,7 @@ Normalization conventions (every feature maps a raw value -> [0, 1]):
 
 from __future__ import annotations
 
-SCORING_CONFIG_VERSION = 6
+SCORING_CONFIG_VERSION = 7  # +trail_proximity (display-only trails -> a scoring lens)
 
 DEFAULT_SCORING_PARAMS: dict = {
     "version": SCORING_CONFIG_VERSION,
@@ -109,6 +109,18 @@ DEFAULT_SCORING_PARAMS: dict = {
             # An endpoint is a terminus if no OTHER drivable way has a vertex
             # within this many meters (computed on UNCLIPPED geometry).
             "terminus_tol_m": 20.0,
+        },
+        # trail_proximity <- distance to the nearest mapped hiking trail (the
+        # display-only Trails overlay's data, feature_class='trail'). Closer is
+        # better (trail access from a dispersed site). distance_decay: at the
+        # trail -> 1, ~200 m -> 0.37, ~600 m -> 0.05. OFF by default (weight 0 in
+        # DEFAULT_WEIGHTS) — opt-in via the slider. Only has data where trails
+        # are PRELOADED (currently MN/WI/MI/SD); degraded + renormalized away
+        # elsewhere (TLC-6). Suitability, never a legality claim (TLC-3).
+        "trail_proximity": {
+            "input": "dist_trail_m",
+            "shape": "distance_decay",
+            "decay_m": 200.0,
         },
     },
 }
