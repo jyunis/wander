@@ -1,6 +1,8 @@
 :root {
   --bg: #1d2227;
   --panel: #262c33;
+  /* Translucent panel fill — the left drawer frosts over the map behind it. */
+  --panel-glass: rgba(38, 44, 51, 0.86);
   --ink: #e8eaed;
   --muted: #9aa3ad;
   --line: #3a424b;
@@ -34,7 +36,9 @@ body {
   left: 0;
   bottom: 0;
   z-index: 1500;
-  background: var(--panel);
+  background: var(--panel-glass);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border-right: 1px solid var(--line);
   box-shadow: 2px 0 22px rgba(0, 0, 0, 0.4);
   display: flex;
@@ -42,8 +46,10 @@ body {
   overflow-y: auto;   /* one scroll region; forest browse moved to the map */
   overflow-x: hidden;
 }
-/* Tabs stay reachable while the library + drawers scroll under them. */
-#panel header { position: sticky; top: 0; z-index: 2; background: var(--panel); }
+/* Tabs stay reachable while the library + drawers scroll under them. The header
+   re-blurs so content scrolling under it stays masked against the glass panel. */
+#panel header { position: sticky; top: 0; z-index: 2; background: var(--panel-glass);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
 #panel-scroll { flex: 0 0 auto; }
 #app:not(.nav-open) #panel { display: none; }
 #map { flex: 1; height: 100%; min-width: 0; }
@@ -75,7 +81,8 @@ body {
 /* Sticky so the close (×) / title stay reachable when the panel is scrolled
    down to the Saved list — especially in the mobile drawer. */
 #panel header { padding: 14px 16px 8px; border-bottom: 1px solid var(--line);
-  position: sticky; top: 0; z-index: 3; background: var(--panel); }
+  position: sticky; top: 0; z-index: 3; background: var(--panel-glass);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
 h1 { font-size: 19px; margin: 0 0 8px; font-weight: 650; }
 .cairn { filter: grayscale(0.2); }
 h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
