@@ -20,7 +20,16 @@ let minScore = 0.45; // hide candidates/sites below this absolute total (noise f
 // Satellite is the default: in the backcountry the imagery (+ Cairn's own roads
 // overlay) reads better than a street map, and it's where the vector roads earn
 // their keep. Switch the menu's default by changing this id.
-const DEFAULT_BASEMAP = "satellite";
+const DEFAULT_BASEMAP = "satellite-esri";
+
+// Esri transparent reference overlays (place + WATER names + roads), drawn on
+// top of whichever satellite imagery is active so lakes/towns get labelled.
+// Shared by both satellite basemaps; quota-free, display-only.
+const ESRI_REFERENCE_LABELS = [
+  "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+  "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}",
+];
+
 const BASEMAPS = [
   {
     id: "topo",
@@ -55,11 +64,30 @@ const BASEMAPS = [
     },
   },
   {
+    // Esri World Imagery — free public basemap, NO API key and NO monthly
+    // request quota (unlike MapTiler's 100k/mo). Served through the same nginx
+    // disk cache at a distinct path (/tiles/esri/...). The default, so casual
+    // browsing doesn't burn MapTiler; the MapTiler layer below stays selectable
+    // for side-by-side comparison.
+    id: "satellite-esri",
+    name: "Satellite — Esri",
+    url: "/tiles/esri/{z}/{x}/{y}",
+    options: {
+      maxNativeZoom: 19, // Esri imagery is cached to ~z19; z20 overzooms (no extra fetch)
+      maxZoom: 20,
+      attribution:
+        'Imagery © <a href="https://www.esri.com/">Esri</a>, Maxar, Earthstar Geographics · ' +
+        "labels © Esri",
+    },
+    labels: ESRI_REFERENCE_LABELS,
+  },
+  {
     id: "satellite",
-    name: "Satellite (labeled)",
+    name: "Satellite — MapTiler",
     // MapTiler "satellite" (pure imagery, no labels) served through our own nginx
     // tile cache (wander.home.arpa/tiles/...), which injects the API key server-side
     // and caches the imagery to disk — CDN-fast first load, local on revisit.
+    // Kept for comparison; metered at 100k tiles/mo, so not the default.
     url: "/tiles/satellite/{z}/{x}/{y}",
     options: {
       maxNativeZoom: 20,
@@ -72,10 +100,7 @@ const BASEMAPS = [
     // Labels (place + WATER + roads) come from Esri's transparent reference
     // overlays, drawn on top of the imagery. Direct from Esri, display-only / not
     // cached (MapTiler's "satellite" doesn't name lakes; "hybrid" barely did).
-    labels: [
-      "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
-      "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}",
-    ],
+    labels: ESRI_REFERENCE_LABELS,
   },
   {
     id: "streets",
