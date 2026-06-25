@@ -711,6 +711,9 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
   align-items: center; justify-content: center; background: #313942; color: var(--muted);
   border: none; border-radius: 50%; cursor: pointer; font-size: 13px; line-height: 1; }
 .shape-chip-x:hover, .measure-chip-x:hover, .run-chip-x:hover { color: var(--ink); border: 1px solid var(--accent); }
+.shape-chip-stats { flex: none; display: flex; align-items: center; gap: 7px;
+  font-size: 12px; color: var(--muted); white-space: nowrap; }
+.shape-chip-stats .cstat { cursor: default; }
 .shape-chip-pin { flex: none; width: 26px; height: 26px; display: flex; align-items: center;
   justify-content: center; background: #313942; color: var(--muted); border: 1px solid transparent;
   border-radius: 50%; cursor: pointer; font-size: 13px; line-height: 1; }
@@ -801,6 +804,8 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .sheet { bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
 @media (max-width: 640px) {
   .sheet { bottom: calc(8px + env(safe-area-inset-bottom, 0px)); }
+  /* Keep the chip lean on a phone — name + score + ✕ matter more than counts. */
+  .shape-chip-stats { display: none; }
 }
 .basemap-opt { background: none; border: none; color: var(--muted); text-align: left;
   padding: 7px 12px; cursor: pointer; white-space: nowrap; font-size: 12.5px; }
