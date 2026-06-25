@@ -210,7 +210,6 @@ function readWeights() {
 // --- init ------------------------------------------------------------------
 async function init() {
   CONFIG = await (await fetch("/config")).json();
-  $("disclaimer").textContent = CONFIG.disclaimer;
   buildSliders();
   buildPresets();
   buildBasemaps();
@@ -1417,7 +1416,7 @@ async function initLandOverlays() {
   if (!overlayDefs.length) return;
   $("land-disclaimer").textContent = data.disclaimer || "";
   buildLandToggles();
-  $("land-drawer").hidden = false; // reveal the (collapsed) Land drawer
+  $("land-drawer").hidden = false; // reveal the Land drawer (expanded by default)
 }
 
 function buildLandToggles() {

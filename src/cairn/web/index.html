@@ -23,14 +23,14 @@
         <button id="nav-close" class="nav-close" aria-label="Hide panel" title="Hide">×</button>
         <h1>Wander <span class="cairn">🧭</span></h1>
         <nav id="tabs">
-          <button class="tab active" data-tab="saved" title="Your saved places, organized into collections">
+          <button class="tab active" data-tab="tune" title="Ranking weights, layers, custom-area scoring & reference overlays">
+            Tune
+          </button>
+          <button class="tab" data-tab="saved" title="Your saved places, organized into collections">
             Saved
           </button>
           <button class="tab" data-tab="trips" title="Group saved places into a dated trip">
             Trips
-          </button>
-          <button class="tab" data-tab="tune" title="Ranking weights, layers, custom-area scoring & reference overlays">
-            Tune
           </button>
         </nav>
       </header>
@@ -38,11 +38,8 @@
       <!-- Panel = library (Saved / Trips). Forest browse lives on the map now
            (the forest-bar), and the scoring knobs sit in #map-settings below. -->
       <div id="panel-scroll">
-      <!-- TLC-3: persistent, non-dismissible legality disclaimer -->
-      <div id="disclaimer" class="disclaimer">Loading…</div>
-
       <!-- Saved: your library of starred places, organized into collections. -->
-      <section id="saved-section-tab" class="controls">
+      <section id="saved-section-tab" class="controls" hidden>
         <div class="row saved-top">
           <h2 class="saved-h">★ Saved</h2>
           <div class="saved-top-btns">
@@ -107,8 +104,8 @@
       </section>
       <!-- Tune tab: scoring + map controls (was the Score tab). Ranking weights,
            custom-area scoring, layer display toggles, and reference overlays. -->
-      <section id="map-settings" class="controls" hidden>
-        <details id="tune-drawer" class="tune-drawer">
+      <section id="map-settings" class="controls">
+        <details id="tune-drawer" class="tune-drawer" open>
           <summary><span class="tune-title">Ranking weights</span><span class="tune-hint">how sites are ranked</span></summary>
           <div class="tune-body">
             <div id="presets" class="presets"></div>
@@ -120,28 +117,7 @@
           </div>
         </details>
 
-        <details id="score-tool-drawer" class="tune-drawer">
-          <summary><span class="tune-title">Score a custom area</span><span class="tune-hint">outside a forest</span></summary>
-          <div class="tune-body">
-            <div class="row">
-              <button id="draw-bbox" class="btn">▭ Draw area</button>
-              <button id="use-view" class="btn ghost">Use current view</button>
-            </div>
-            <div id="bbox-readout" class="hint">No area selected.</div>
-            <div class="row goto-row">
-              <input id="goto-input" type="text" placeholder="place name or lat, lon — e.g. Chippewa National Forest" />
-              <button id="goto-btn" class="btn ghost">Go</button>
-            </div>
-            <div id="goto-results" class="goto-results" hidden></div>
-            <button id="drop-pin" class="btn ghost pin-btn">📍 Drop a pin</button>
-            <button id="score-btn" class="btn primary" disabled>Score this area</button>
-            <div id="status" class="status"></div>
-            <div id="provenance" class="provenance"></div>
-            <div id="degraded" class="degraded"></div>
-          </div>
-        </details>
-
-        <details id="layers-drawer" class="tune-drawer">
+        <details id="layers-drawer" class="tune-drawer" open>
           <summary><span class="tune-title">Layers</span><span class="tune-hint">what's on the map</span></summary>
           <div class="tune-body">
             <div class="basemap-row">
@@ -177,7 +153,7 @@
           </div>
         </details>
 
-        <details id="land-drawer" class="tune-drawer" hidden>
+        <details id="land-drawer" class="tune-drawer" open hidden>
           <summary><span class="tune-title">Land</span><span class="tune-hint">reference overlays</span></summary>
           <div class="tune-body" id="land-section">
           <div id="land-layers" class="layers land-layers"></div>
@@ -199,6 +175,27 @@
           <div id="land-legend" class="land-legend"></div>
           <div id="land-hint" class="land-hint"></div>
           <div id="land-disclaimer" class="disclaimer-mini"></div>
+          </div>
+        </details>
+
+        <details id="score-tool-drawer" class="tune-drawer">
+          <summary><span class="tune-title">Score a custom area</span><span class="tune-hint">outside a forest</span></summary>
+          <div class="tune-body">
+            <div class="row">
+              <button id="draw-bbox" class="btn">▭ Draw area</button>
+              <button id="use-view" class="btn ghost">Use current view</button>
+            </div>
+            <div id="bbox-readout" class="hint">No area selected.</div>
+            <div class="row goto-row">
+              <input id="goto-input" type="text" placeholder="place name or lat, lon — e.g. Chippewa National Forest" />
+              <button id="goto-btn" class="btn ghost">Go</button>
+            </div>
+            <div id="goto-results" class="goto-results" hidden></div>
+            <button id="drop-pin" class="btn ghost pin-btn">📍 Drop a pin</button>
+            <button id="score-btn" class="btn primary" disabled>Score this area</button>
+            <div id="status" class="status"></div>
+            <div id="provenance" class="provenance"></div>
+            <div id="degraded" class="degraded"></div>
           </div>
         </details>
       </section>
