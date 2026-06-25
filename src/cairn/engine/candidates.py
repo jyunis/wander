@@ -29,32 +29,88 @@ def grid_cell(lon: float, lat: float, grid_m: float) -> tuple[int, int]:
     return (cell_lon, cell_lat)
 
 
+# Two ways meeting at a vertex are a duplicate/overlap of the SAME road (not a
+# real junction) when they leave the vertex in the same direction. A real branch
+# or a continuation leaves at a clearly different bearing — duplicates are ~0°
+# apart, a straight continuation ~180°, a branch somewhere between. Generous
+# tolerance so slightly-wiggly digitization still reads as a duplicate.
+_DUP_BEARING_TOL_DEG = 25.0
+
+
+def _endpoint_bearing(coords: tuple, end_idx: int) -> float | None:
+    """Bearing (radians; lon scaled by cos lat) from an endpoint toward the way's
+    body — i.e. the first interior vertex more than a hair away. None for a
+    zero-length way."""
+    ex, ey = coords[end_idx]
+    interior = coords[1:] if end_idx == 0 else coords[-2::-1]
+    cos_lat = math.cos(math.radians(ey))
+    for px, py in interior:
+        if _segment_length_m(ex, ey, px, py) > 1e-6:
+            return math.atan2(py - ey, (px - ex) * cos_lat)
+    return None
+
+
+def _bearing_diff_deg(a: float, b: float) -> float:
+    """Smallest absolute angle between two bearings, in [0, 180] degrees."""
+    d = abs(a - b) % (2 * math.pi)
+    return math.degrees(min(d, 2 * math.pi - d))
+
+
 def find_termini(
     ways: list[Way], bbox: Bbox, tol_m: float = 20.0
 ) -> list[tuple[float, float, int]]:
-    """Drivable DEAD-ENDS within the bbox: way endpoints not shared with any
-    other way. Pure; computed on UNCLIPPED geometry so bbox-edge cuts aren't
-    mistaken for real termini. Returns (lon, lat, source_way_id).
+    """Drivable DEAD-ENDS within the bbox: way endpoints where no OTHER road
+    actually connects. Pure; computed on UNCLIPPED geometry so bbox-edge cuts
+    aren't mistaken for real termini. Returns (lon, lat, source_way_id).
 
-    Endpoints are matched by rounding to ~tol_m (OSM shares exact node coords),
-    so an endpoint touched only by its own way is a terminus.
+    Endpoints are matched by rounding to ~tol_m (OSM shares exact node coords).
+    A vertex is a real junction if another way passes THROUGH it, or another
+    way ENDS there leaving in a different direction. A coincident DUPLICATE/
+    overlap of the same road (another way ending there in the *same* direction)
+    does NOT count — otherwise a road's own duplicate copies would mask its
+    dead-end (the MVUM service emits duplicate records; see ingest/mvum.py).
     """
     decimals = max(0, round(math.log10(_M_PER_DEG / max(tol_m, 1.0))))
-    vertex_ways: dict[tuple, set[int]] = defaultdict(set)
+
+    def vkey(lon: float, lat: float) -> tuple:
+        return (round(lon, decimals), round(lat, decimals))
+
+    # Per vertex: ways it's INTERIOR to (passing through -> junction), and the
+    # (way_id, outgoing bearing) of every way that ENDS there.
+    through: dict[tuple, set[int]] = defaultdict(set)
+    ends: dict[tuple, list[tuple[int, float | None]]] = defaultdict(list)
     for w in ways:
-        for lon, lat in w.coords:
-            vertex_ways[(round(lon, decimals), round(lat, decimals))].add(w.osm_id)
+        n = len(w.coords)
+        for i, (lon, lat) in enumerate(w.coords):
+            if 0 < i < n - 1:
+                through[vkey(lon, lat)].add(w.osm_id)
+        if n >= 2:
+            for end_idx in (0, n - 1):
+                lon, lat = w.coords[end_idx]
+                ends[vkey(lon, lat)].append((w.osm_id, _endpoint_bearing(w.coords, end_idx)))
 
     b = bbox.normalized()
     termini: list[tuple[float, float, int]] = []
     for w in ways:
         if len(w.coords) < 2:
             continue
-        for lon, lat in (w.coords[0], w.coords[-1]):
-            key = (round(lon, decimals), round(lat, decimals))
-            if vertex_ways[key] == {w.osm_id}:  # only this way touches it
-                if b.min_lon <= lon <= b.max_lon and b.min_lat <= lat <= b.max_lat:
-                    termini.append((lon, lat, w.osm_id))
+        for end_idx in (0, len(w.coords) - 1):
+            lon, lat = w.coords[end_idx]
+            if not (b.min_lon <= lon <= b.max_lon and b.min_lat <= lat <= b.max_lat):
+                continue
+            key = vkey(lon, lat)
+            if through[key] - {w.osm_id}:  # another road runs through -> junction
+                continue
+            wb = _endpoint_bearing(w.coords, end_idx)
+            # A terminus iff every OTHER way ending here is just a duplicate/
+            # overlap (leaves in the same direction as this one).
+            connects = any(
+                wid != w.osm_id
+                and (wb is None or ob is None or _bearing_diff_deg(ob, wb) > _DUP_BEARING_TOL_DEG)
+                for wid, ob in ends[key]
+            )
+            if not connects:
+                termini.append((lon, lat, w.osm_id))
     return termini
 
 
