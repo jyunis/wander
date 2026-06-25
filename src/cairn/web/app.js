@@ -217,7 +217,7 @@ async function init() {
   await initLandOverlays();
   await initMvum();
   await loadForests(); // Explore tab (front door)
-  scheduleRoads(); // roads default on — load them for the opening view
+  updateLayerVisibility(); // roads + trails default on — add the layers + load the opening view
 
   $("draw-bbox").onclick = startDraw;
   $("use-view").onclick = useCurrentView;
