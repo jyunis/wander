@@ -698,6 +698,14 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
   color: var(--ink); border: 1px solid var(--accent); border-radius: 18px;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45); font-size: 13px; }
 .measure-chip { border-color: #2bb3ff; }
+/* On-map transient toast (e.g. a failed score) — visible regardless of tab. */
+.map-toast { pointer-events: auto; max-width: min(94vw, 470px); padding: 8px 14px;
+  background: var(--panel); color: var(--ink); border: 1px solid var(--warn);
+  border-radius: 14px; box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45); font-size: 13px;
+  font-weight: 600; text-align: center; }
+.map-toast.err { border-color: #e8786b; }
+.map-toast.info { border-color: var(--line); color: var(--muted); font-weight: 500; }
+.map-toast[hidden] { display: none; }
 .measure-chip-text, .run-chip-text { font-weight: 600; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; }
 .measure-chip-done { flex: none; padding: 5px 10px; font-size: 12px; font-weight: 600;

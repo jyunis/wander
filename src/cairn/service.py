@@ -26,6 +26,7 @@ from cairn.errors import (
     InvalidBbox,
     InvalidWeights,
     MvumError,
+    RunFailed,
     StructuresError,
     WallClockExceeded,
 )
@@ -92,6 +93,13 @@ class RunService:
             await self._execute(
                 run_id, b, weights, params, self._s.max_wallclock_seconds, clip_polygons
             )
+            # _execute records failures on the run row rather than raising (TLC-10,
+            # for async jobs). On this SYNC path we must surface them: a failed run
+            # would otherwise return an empty result that looks identical to a
+            # genuinely empty area ("finished, no results, no error").
+            run = await self._store.get_run(run_id)
+            if run.status != "done":
+                raise RunFailed(run.failure_reason or "scoring failed")
             return await self._store.get_run_geojson(run_id)
         finally:
             await self._store.delete_run(run_id)  # scratch — nothing persists

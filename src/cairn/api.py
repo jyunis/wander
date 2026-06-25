@@ -41,7 +41,7 @@ from cairn.clients.overpass import OverpassClient
 from cairn.clients.usa_structures import StructuresClient
 from cairn.clients.usedirect import UseDirectClient
 from cairn.config import get_settings
-from cairn.errors import GeocodeError, RunNotFound, ValidationError
+from cairn.errors import GeocodeError, RunFailed, RunNotFound, ValidationError
 from cairn.export import trip_slug, trip_to_gpx, trip_to_kml
 from cairn.logging import configure
 from cairn.service import RunService
@@ -254,6 +254,13 @@ async def _validation_handler(request: Request, exc: ValidationError) -> JSONRes
 @app.exception_handler(RunNotFound)
 async def _notfound_handler(request: Request, exc: RunNotFound) -> JSONResponse:
     return JSONResponse(status_code=404, content={"error": "RunNotFound", "detail": str(exc)})
+
+
+@app.exception_handler(RunFailed)
+async def _runfailed_handler(request: Request, exc: RunFailed) -> JSONResponse:
+    # A run ended in a typed failure (upstream data, wall-clock, etc.) — surface
+    # the reason verbatim (TLC-10) so the client shows it instead of empty results.
+    return JSONResponse(status_code=502, content={"error": type(exc).__name__, "detail": str(exc)})
 
 
 # --- helpers ---------------------------------------------------------------

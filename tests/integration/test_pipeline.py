@@ -12,7 +12,7 @@ import re
 import pytest
 
 from cairn.config import DEFAULT_WEIGHTS
-from cairn.errors import BboxTooLarge
+from cairn.errors import BboxTooLarge, OverpassUnreachable, RunFailed
 from cairn.service import SCORING_CONFIG_VERSION, RunService, validate_request
 from cairn.store import Store
 from cairn.store.types import Bbox
@@ -47,6 +47,33 @@ async def test_score_view_over_sync_cap_raises(store, settings):
     with pytest.raises(BboxTooLarge):
         await svc.score_view(big, DEFAULT_WEIGHTS)
     # Raised before any work — no scratch run left behind.
+    assert len(await store.list_runs()) == 0
+
+
+class _RaisingOverpass:
+    """Overpass that always fails (e.g. the service is unreachable)."""
+
+    async def fetch(self, bbox):
+        raise OverpassUnreachable("overpass-api.de refused the connection")
+
+    async def aclose(self):
+        pass
+
+
+async def test_score_view_failed_run_raises_not_empty(store, settings):
+    # A run that fails internally (Overpass down, wall-clock, …) must SURFACE the
+    # failure on the sync path — not return an empty FeatureCollection that looks
+    # identical to a genuinely empty area ("finished, no results, no error").
+    svc = RunService(
+        store,
+        settings,
+        overpass=_RaisingOverpass(),
+        terrain_factory=fake_terrain_factory(slope_deg=3.0),
+    )
+    with pytest.raises(RunFailed) as ei:
+        await svc.score_view(TEST_BBOX, DEFAULT_WEIGHTS)
+    assert "Overpass" in str(ei.value)
+    # The scratch run is still cleaned up (deleted in the finally).
     assert len(await store.list_runs()) == 0
 
 

@@ -199,6 +199,22 @@ function setStatus(msg, kind) {
   el.className = "status" + (kind ? " " + kind : "");
 }
 
+// On-map transient toast — for feedback that must be seen regardless of which
+// tab/drawer is open (e.g. a failed "Score this view" from the chip, whose
+// #status lives in the collapsed Score drawer and would otherwise go unseen).
+let _mapToastTimer = null;
+function showMapToast(msg, kind = "err", ms = 6000) {
+  const el = $("map-toast");
+  if (!el) return;
+  el.textContent = msg;
+  el.className = "map-toast" + (kind ? " " + kind : "");
+  el.hidden = false;
+  if (_mapToastTimer) clearTimeout(_mapToastTimer);
+  _mapToastTimer = setTimeout(() => {
+    el.hidden = true;
+  }, ms);
+}
+
 function readWeights() {
   const w = {};
   CONFIG.feature_names.forEach((f) => {
@@ -957,7 +973,9 @@ function scoreableBbox() {
 async function executeScore(bb, opts = {}) {
   const cap = CONFIG.sync_area_threshold_km2 || 200;
   if (areaKm2(bb) > cap) {
-    setStatus("Area too big — zoom in (or draw a smaller box) to score.", "err");
+    const msg = "Area too big — zoom in (or draw a smaller box) to score.";
+    setStatus(msg, "err");
+    showMapToast(msg);
     return;
   }
   clearViewResults(); // each score replaces the last (pure ephemeral)
@@ -978,14 +996,18 @@ async function executeScore(bb, opts = {}) {
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
-      setStatus(err.detail || "Scoring failed", "err");
+      const msg = err.detail || "Scoring failed — try again.";
+      setStatus(msg, "err");
+      showMapToast(msg);
       return;
     }
     const gj = await resp.json();
     renderViewResults(gj);
     addCoverage(bb); // mark this view as scored this session (M3)
   } catch (e) {
-    setStatus("Error: " + e.message, "err");
+    const msg = "Scoring failed — " + (e.message || "connection error") + ".";
+    setStatus(msg, "err");
+    showMapToast(msg);
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -1015,9 +1037,19 @@ function clearCoverage() {
 function renderViewResults(gj) {
   lastGj = gj;
   renderCandidates(); // dots + pins from lastGj, honoring the min-score slider
-  const feats = (gj.features || []).filter((f) => f.properties.total >= minScore);
-  const distinct = (gj.features || []).filter((f) => f.properties.distinct).length;
-  setStatus(`${distinct} distinct sites · ${(gj.features || []).length} scored.`, "ok");
+  const all = gj.features || [];
+  const scored = all.length;
+  const feats = all.filter((f) => f.properties.total >= minScore);
+  const distinct = all.filter((f) => f.properties.distinct).length;
+  setStatus(`${distinct} distinct sites · ${scored} scored.`, "ok");
+  // A successful run can still surface nothing — say so on the map, so an empty
+  // result isn't mistaken for a silent no-op (it's distinct from a failure now,
+  // which raises and toasts an error).
+  if (scored === 0) {
+    showMapToast("No campable sites found in this view — try panning to forest roads.", "info");
+  } else if (feats.length === 0) {
+    showMapToast(`Nothing above Min score ${minScore.toFixed(2)} — lower it (Tune ▸ Layers) to see more.`, "info");
+  }
   renderResultsChip(feats.length, distinct);
 }
 
