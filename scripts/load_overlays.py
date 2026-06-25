@@ -945,6 +945,10 @@ STATES: dict[str, dict] = {
         "name": "Wisconsin",
         "bbox": (-92.9, 42.4, -86.8, 47.1),  # covers Chequamegon-Nicolet NF
         "shp_sources": [],
+        # WI publishes no statewide parcel-ownership SHP like MN's govt_own, so
+        # `ownership` (the "public land only" filter's data) comes from PAD-US
+        # (national) — federal/state/county fee land. Coarser than MN's parcels.
+        "padus_state": "WI",
         # WI has no shapefile/per-type service — parks & forests are rows in one
         # managed-property layer, selected by PROP_NAME.
         "arcgis_sources": [
