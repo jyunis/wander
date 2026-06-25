@@ -39,9 +39,12 @@ body {
   box-shadow: 2px 0 22px rgba(0, 0, 0, 0.4);
   display: flex;
   flex-direction: column;
-  overflow-x: hidden;  /* no sideways rubber-band/wobble; scrolls vertically only */
-  overflow-y: auto;
+  overflow-y: auto;   /* one scroll region; forest browse moved to the map */
+  overflow-x: hidden;
 }
+/* Tabs stay reachable while the library + drawers scroll under them. */
+#panel header { position: sticky; top: 0; z-index: 2; background: var(--panel); }
+#panel-scroll { flex: 0 0 auto; }
 #app:not(.nav-open) #panel { display: none; }
 #map { flex: 1; height: 100%; min-width: 0; }
 
@@ -91,6 +94,26 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 }
 
 .controls { padding: 0 16px 8px; }
+
+/* Collapsible "Ranking weights" drawer — keeps the sliders tucked away by
+   default so the panel reads clean; expand to tune. */
+.tune-drawer { margin: 10px 0 4px; border: 1px solid var(--line); border-radius: 8px;
+  background: #21262c; }
+.tune-drawer > summary { list-style: none; cursor: pointer; padding: 9px 12px;
+  display: flex; align-items: baseline; gap: 8px; user-select: none;
+  border-radius: 8px; }
+.tune-drawer > summary::-webkit-details-marker { display: none; }
+.tune-drawer > summary::after { content: "▸"; margin-left: auto; color: var(--muted, #9aa4ae);
+  transition: transform 0.15s; }
+.tune-drawer[open] > summary::after { transform: rotate(90deg); }
+.tune-drawer > summary:hover { border-color: var(--accent); }
+.tune-title { font-weight: 600; font-size: 13px; }
+.tune-hint { font-size: 11px; color: var(--muted, #9aa4ae); }
+.tune-body { padding: 4px 12px 12px; }
+
+/* Tune tab (Ranking · Score area · Layers · Land) — its own tab now, not pinned
+   under the library. Behaves like the other tab sections. */
+#map-settings { padding-top: 4px; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; }  /* wrap on narrow screens, don't overflow */
 .btn { background: #313942; color: var(--ink); border: 1px solid var(--line);
        padding: 8px 12px; border-radius: 7px; cursor: pointer; font-size: 13px; }
@@ -688,6 +711,42 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
   align-items: center; justify-content: center; background: #313942; color: var(--muted);
   border: none; border-radius: 50%; cursor: pointer; font-size: 13px; line-height: 1; }
 .shape-chip-x:hover, .measure-chip-x:hover, .run-chip-x:hover { color: var(--ink); border: 1px solid var(--accent); }
+.shape-chip-pin { flex: none; width: 26px; height: 26px; display: flex; align-items: center;
+  justify-content: center; background: #313942; color: var(--muted); border: 1px solid transparent;
+  border-radius: 50%; cursor: pointer; font-size: 13px; line-height: 1; }
+.shape-chip-pin:hover { border-color: var(--accent); color: var(--ink); }
+.shape-chip-pin.on { background: #3a3320; color: #ffd23f; }
+
+/* Forest-bar: the resting on-map search pill + typeahead (the forest front
+   door now lives on the map, not the panel). Its "active" state is the
+   shape-chip below it. */
+.forest-bar { pointer-events: auto; position: relative; display: flex; align-items: center;
+  gap: 6px; width: min(92vw, 360px); padding: 7px 12px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 20px; box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45); }
+.forest-bar:focus-within { border-color: var(--accent); }
+.forest-bar[hidden] { display: none; }
+.fbar-leaf { flex: none; font-size: 14px; opacity: 0.9; }
+.fbar-input { flex: 1 1 auto; min-width: 0; background: none; border: none; color: var(--ink);
+  font-size: 14px; outline: none; }
+.fbar-input::placeholder { color: var(--muted); }
+.fbar-clear { flex: none; width: 20px; height: 20px; border: none; border-radius: 50%;
+  background: #313942; color: var(--muted); cursor: pointer; font-size: 11px; line-height: 1; }
+.fbar-clear[hidden] { display: none; }
+.fbar-menu { position: absolute; top: calc(100% + 6px); left: 0; right: 0; max-height: 60vh;
+  overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5); padding: 4px; }
+.fbar-menu[hidden] { display: none; }
+.fbar-group-h { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--muted); padding: 8px 10px 4px; }
+.fbar-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  background: none; border: none; color: var(--ink); padding: 8px 10px; border-radius: 8px;
+  cursor: pointer; }
+.fbar-row:hover, .fbar-row.active { background: #313942; }
+.fbar-row-main { flex: 1 1 auto; min-width: 0; }
+.fbar-row-name { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; }
+.fbar-row-sub { font-size: 11px; color: var(--muted); }
+.fbar-empty { padding: 12px 10px; color: var(--muted); font-size: 13px; }
 
 /* On-map measure (📏) tool button — mirrors the basemap control's footprint
    so it stacks cleanly under the zoom + basemap controls (top-right). */

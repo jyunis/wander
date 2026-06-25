@@ -23,139 +23,26 @@
         <button id="nav-close" class="nav-close" aria-label="Hide panel" title="Hide">×</button>
         <h1>Wander <span class="cairn">🧭</span></h1>
         <nav id="tabs">
-          <button class="tab active" data-tab="explore" title="Browse national & state forests">
-            Explore
-          </button>
-          <button class="tab" data-tab="score" title="Power tool: draw a custom area to score">
-            Score
+          <button class="tab active" data-tab="saved" title="Your saved places, organized into collections">
+            Saved
           </button>
           <button class="tab" data-tab="trips" title="Group saved places into a dated trip">
             Trips
           </button>
-          <button class="tab" data-tab="saved" title="Your saved places, organized into collections">
-            Saved
+          <button class="tab" data-tab="tune" title="Ranking weights, layers, custom-area scoring & reference overlays">
+            Tune
           </button>
         </nav>
       </header>
 
+      <!-- Panel = library (Saved / Trips). Forest browse lives on the map now
+           (the forest-bar), and the scoring knobs sit in #map-settings below. -->
+      <div id="panel-scroll">
       <!-- TLC-3: persistent, non-dismissible legality disclaimer -->
       <div id="disclaimer" class="disclaimer">Loading…</div>
 
-      <!-- Explore: forest-first front door (doc #34). Browse NF + state forests,
-           tap to enter (fit-zoom + context + summary). -->
-      <section id="explore-section" class="controls">
-        <div id="forest-list-view">
-          <div class="row goto-row">
-            <input id="forest-search" type="text" placeholder="Search forests — e.g. Chippewa" autocomplete="off" />
-          </div>
-          <div id="forest-recent" class="forest-group"></div>
-          <h2>All forests <span id="forest-count" class="land-sub"></span></h2>
-          <div id="forest-list" class="forest-list"></div>
-          <div id="forest-empty" class="hint" hidden>No forests loaded.</div>
-        </div>
-
-        <div id="forest-detail" hidden>
-          <button id="forest-back" class="btn ghost trip-back">‹ All forests</button>
-          <div id="forest-detail-head" class="forest-head"></div>
-          <div id="forest-summary" class="forest-summary"></div>
-          <div class="row">
-            <button id="forest-pin" class="btn ghost">📌 Pin</button>
-            <button id="forest-zoom" class="btn ghost">🔍 Re-center</button>
-          </div>
-          <div class="forest-hint hint">
-            Pan to a promising pocket, then use the map's <b>Score this view</b>
-            button (coming next) — for now, the shape chip's <b>Score within boundary</b> works.
-          </div>
-        </div>
-      </section>
-
-      <section id="score-section" class="controls" hidden>
-        <div class="row">
-          <button id="draw-bbox" class="btn">▭ Draw area</button>
-          <button id="use-view" class="btn ghost">Use current view</button>
-        </div>
-        <div id="bbox-readout" class="hint">No area selected.</div>
-
-        <div class="row goto-row">
-          <input id="goto-input" type="text" placeholder="place name or lat, lon — e.g. Chippewa National Forest" />
-          <button id="goto-btn" class="btn ghost">Go</button>
-        </div>
-        <div id="goto-results" class="goto-results" hidden></div>
-        <button id="drop-pin" class="btn ghost pin-btn">📍 Drop a pin</button>
-
-        <h2>Weights</h2>
-        <div id="presets" class="presets"></div>
-        <div id="sliders"></div>
-
-        <label id="public-only-row" class="check-row" title="Drop candidates on private inholdings — keeps only spots on public land (where ownership data exists)">
-          <input type="checkbox" id="public-only" />
-          <span>🏛 Public land only <span class="hint-inline">(skip private inholdings)</span></span>
-        </label>
-
-        <button id="score-btn" class="btn primary" disabled>Score this area</button>
-        <div id="status" class="status"></div>
-
-        <h2>Layers</h2>
-        <div class="basemap-row">
-          <label for="basemap">Basemap</label>
-          <select id="basemap"></select>
-        </div>
-        <div class="layers">
-          <label><input type="checkbox" id="layer-pins" checked> Top sites</label>
-          <label><input type="checkbox" id="layer-dots"> Candidates</label>
-          <label><input type="checkbox" id="layer-heat"> Heatmap</label>
-          <label><input type="checkbox" id="layer-roads" checked> Roads</label>
-          <label><input type="checkbox" id="layer-trails" checked> Trails</label>
-        </div>
-        <div class="saved-layer-row">
-          <label><input type="checkbox" id="layer-saved"> Saved places</label>
-          <select id="saved-layer-coll" class="saved-layer-coll" title="Filter saved markers by collection"></select>
-        </div>
-        <div class="legend roads-legend" title="Wander's scored roads — orange = forest road (MVUM/FS), purple = special-designation MVUM, yellow = other drivable; dashed = rough/high-clearance. Tap a road for its MVUM class + season.">
-          <span class="rd-swatch rd-forest"></span><span>forest road</span>
-          <span class="rd-swatch rd-special"></span><span>special</span>
-          <span class="rd-swatch rd-other"></span><span>drivable</span>
-        </div>
-        <div class="legend" title="pin / dot color = absolute score; ramp spans ~0.4 (poor) to 0.8 (excellent)">
-          <span>0.4</span>
-          <div class="legend-bar"></div>
-          <span>0.8</span>
-        </div>
-        <div class="minscore-row">
-          <label for="min-score">Min score <span id="min-score-val" class="val">0.45</span></label>
-          <input type="range" id="min-score" min="0" max="0.9" step="0.05" value="0.45" />
-          <div id="result-count" class="hint"></div>
-        </div>
-
-        <div id="land-section" hidden>
-          <h2>Land <span class="land-sub">(reference only)</span></h2>
-          <div id="land-layers" class="layers land-layers"></div>
-          <div id="mvum-layers" class="layers mvum-layers" hidden></div>
-          <div id="disp-filters" class="cg-filters" hidden>
-            <label title="Most dispersed sites are paddle/hike-in backcountry (BWCA); off by default so drive-in teardrop sites aren't buried"><input type="checkbox" id="f-disp-hike"> Show hike-in / backcountry sites</label>
-            <div id="disp-filt-count" class="cg-filt-count"></div>
-          </div>
-          <div id="cg-filters" class="cg-filters" hidden>
-            <div class="cg-filt-title">Campground filters</div>
-            <label><input type="checkbox" id="f-firstcome"> First-come only</label>
-            <label><input type="checkbox" id="f-electric"> Electric</label>
-            <label><input type="checkbox" id="f-water"> Waterfront</label>
-            <label><input type="checkbox" id="f-pets"> Pets OK</label>
-            <label><input type="checkbox" id="f-ada"> ADA</label>
-            <label class="cg-rv">RV ≥ <input type="number" id="f-rv" min="0" step="5"> ft</label>
-            <div id="cg-filt-count" class="cg-filt-count"></div>
-          </div>
-          <div id="land-legend" class="land-legend"></div>
-          <div id="land-hint" class="land-hint"></div>
-          <div id="land-disclaimer" class="disclaimer-mini"></div>
-        </div>
-
-        <div id="provenance" class="provenance"></div>
-        <div id="degraded" class="degraded"></div>
-      </section>
-
       <!-- Saved: your library of starred places, organized into collections. -->
-      <section id="saved-section-tab" class="controls" hidden>
+      <section id="saved-section-tab" class="controls">
         <div class="row saved-top">
           <h2 class="saved-h">★ Saved</h2>
           <div class="saved-top-btns">
@@ -218,6 +105,104 @@
           <div class="trip-export-hint hint">GPX → onX / Gaia / Garmin · KML → Google Earth. Load before you lose signal.</div>
         </div>
       </section>
+      <!-- Tune tab: scoring + map controls (was the Score tab). Ranking weights,
+           custom-area scoring, layer display toggles, and reference overlays. -->
+      <section id="map-settings" class="controls" hidden>
+        <details id="tune-drawer" class="tune-drawer">
+          <summary><span class="tune-title">Ranking weights</span><span class="tune-hint">how sites are ranked</span></summary>
+          <div class="tune-body">
+            <div id="presets" class="presets"></div>
+            <div id="sliders"></div>
+            <label id="public-only-row" class="check-row" title="Drop candidates on private inholdings — keeps only spots on public land (where ownership data exists)">
+              <input type="checkbox" id="public-only" />
+              <span>🏛 Public land only <span class="hint-inline">(skip private inholdings)</span></span>
+            </label>
+          </div>
+        </details>
+
+        <details id="score-tool-drawer" class="tune-drawer">
+          <summary><span class="tune-title">Score a custom area</span><span class="tune-hint">outside a forest</span></summary>
+          <div class="tune-body">
+            <div class="row">
+              <button id="draw-bbox" class="btn">▭ Draw area</button>
+              <button id="use-view" class="btn ghost">Use current view</button>
+            </div>
+            <div id="bbox-readout" class="hint">No area selected.</div>
+            <div class="row goto-row">
+              <input id="goto-input" type="text" placeholder="place name or lat, lon — e.g. Chippewa National Forest" />
+              <button id="goto-btn" class="btn ghost">Go</button>
+            </div>
+            <div id="goto-results" class="goto-results" hidden></div>
+            <button id="drop-pin" class="btn ghost pin-btn">📍 Drop a pin</button>
+            <button id="score-btn" class="btn primary" disabled>Score this area</button>
+            <div id="status" class="status"></div>
+            <div id="provenance" class="provenance"></div>
+            <div id="degraded" class="degraded"></div>
+          </div>
+        </details>
+
+        <details id="layers-drawer" class="tune-drawer">
+          <summary><span class="tune-title">Layers</span><span class="tune-hint">what's on the map</span></summary>
+          <div class="tune-body">
+            <div class="basemap-row">
+              <label for="basemap">Basemap</label>
+              <select id="basemap"></select>
+            </div>
+            <div class="layers">
+              <label><input type="checkbox" id="layer-pins" checked> Top sites</label>
+              <label><input type="checkbox" id="layer-dots"> Candidates</label>
+              <label><input type="checkbox" id="layer-heat"> Heatmap</label>
+              <label><input type="checkbox" id="layer-roads" checked> Roads</label>
+              <label><input type="checkbox" id="layer-trails" checked> Trails</label>
+            </div>
+            <div class="saved-layer-row">
+              <label><input type="checkbox" id="layer-saved"> Saved places</label>
+              <select id="saved-layer-coll" class="saved-layer-coll" title="Filter saved markers by collection"></select>
+            </div>
+            <div class="legend roads-legend" title="Wander's scored roads — orange = forest road (MVUM/FS), purple = special-designation MVUM, yellow = other drivable; dashed = rough/high-clearance. Tap a road for its MVUM class + season.">
+              <span class="rd-swatch rd-forest"></span><span>forest road</span>
+              <span class="rd-swatch rd-special"></span><span>special</span>
+              <span class="rd-swatch rd-other"></span><span>drivable</span>
+            </div>
+            <div class="legend" title="pin / dot color = absolute score; ramp spans ~0.4 (poor) to 0.8 (excellent)">
+              <span>0.4</span>
+              <div class="legend-bar"></div>
+              <span>0.8</span>
+            </div>
+            <div class="minscore-row">
+              <label for="min-score">Min score <span id="min-score-val" class="val">0.45</span></label>
+              <input type="range" id="min-score" min="0" max="0.9" step="0.05" value="0.45" />
+              <div id="result-count" class="hint"></div>
+            </div>
+          </div>
+        </details>
+
+        <details id="land-drawer" class="tune-drawer" hidden>
+          <summary><span class="tune-title">Land</span><span class="tune-hint">reference overlays</span></summary>
+          <div class="tune-body" id="land-section">
+          <div id="land-layers" class="layers land-layers"></div>
+          <div id="mvum-layers" class="layers mvum-layers" hidden></div>
+          <div id="disp-filters" class="cg-filters" hidden>
+            <label title="Most dispersed sites are paddle/hike-in backcountry (BWCA); off by default so drive-in teardrop sites aren't buried"><input type="checkbox" id="f-disp-hike"> Show hike-in / backcountry sites</label>
+            <div id="disp-filt-count" class="cg-filt-count"></div>
+          </div>
+          <div id="cg-filters" class="cg-filters" hidden>
+            <div class="cg-filt-title">Campground filters</div>
+            <label><input type="checkbox" id="f-firstcome"> First-come only</label>
+            <label><input type="checkbox" id="f-electric"> Electric</label>
+            <label><input type="checkbox" id="f-water"> Waterfront</label>
+            <label><input type="checkbox" id="f-pets"> Pets OK</label>
+            <label><input type="checkbox" id="f-ada"> ADA</label>
+            <label class="cg-rv">RV ≥ <input type="number" id="f-rv" min="0" step="5"> ft</label>
+            <div id="cg-filt-count" class="cg-filt-count"></div>
+          </div>
+          <div id="land-legend" class="land-legend"></div>
+          <div id="land-hint" class="land-hint"></div>
+          <div id="land-disclaimer" class="disclaimer-mini"></div>
+          </div>
+        </details>
+      </section>
+      </div><!-- /#panel-scroll -->
 
       <footer class="foot">
         <a href="/config" target="_blank">config</a> ·
@@ -227,8 +212,16 @@
 
     <main id="map"></main>
 
-    <!-- On-map chips stack top-center: active run, forest/park selection, measure -->
+    <!-- On-map chips stack top-center: forest search bar (resting), active run,
+         forest/park selection (active), measure -->
     <div id="map-chips">
+      <div id="forest-bar" class="forest-bar">
+        <span class="fbar-leaf">🌲</span>
+        <input id="fbar-input" class="fbar-input" type="text"
+               placeholder="Find a forest…" autocomplete="off" aria-label="Find a forest" />
+        <button id="fbar-clear" class="fbar-clear" type="button" aria-label="Clear" hidden>✕</button>
+        <div id="fbar-menu" class="fbar-menu" hidden></div>
+      </div>
       <div id="results-chip" class="run-chip" hidden></div>
       <div id="shape-chip" class="shape-chip" hidden></div>
       <div id="measure-chip" class="measure-chip" hidden></div>

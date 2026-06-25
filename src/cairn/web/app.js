@@ -286,9 +286,8 @@ async function init() {
       /* ignore malformed */
     }
   });
-  loadSaved();
-  loadCollections(); // populate the Layers-panel saved-collection dropdown
   setupTabs();
+  openSavedTab(); // Saved is the default landing tab (the panel is the library)
 }
 
 function buildSliders() {
@@ -1418,7 +1417,7 @@ async function initLandOverlays() {
   if (!overlayDefs.length) return;
   $("land-disclaimer").textContent = data.disclaimer || "";
   buildLandToggles();
-  $("land-section").hidden = false;
+  $("land-drawer").hidden = false; // reveal the (collapsed) Land drawer
 }
 
 function buildLandToggles() {
@@ -1485,23 +1484,59 @@ async function loadForests() {
   }
   await loadForestMarks(); // hydrate pins + recents before the first render
   wireExplore();
-  renderForestList();
+  updateForestBar();
 }
 
 let _exploreWired = false;
 function wireExplore() {
-  if (_exploreWired || !$("forest-search")) return;
+  if (_exploreWired || !$("fbar-input")) return;
   _exploreWired = true;
-  $("forest-search").addEventListener("input", renderForestList);
-  $("forest-back").onclick = exitForestDetail;
-  $("forest-pin").onclick = () => {
-    if (!forestActive) return;
-    toggleForestPin(forestActive);
-    renderForestDetail();
+  const input = $("fbar-input");
+  input.addEventListener("focus", openForestMenu);
+  input.addEventListener("input", () => {
+    $("fbar-clear").hidden = !input.value;
+    openForestMenu();
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      input.blur();
+      closeForestMenu();
+    } else if (e.key === "Enter") {
+      const first = $("fbar-menu").querySelector(".fbar-row");
+      if (first) first.click();
+    }
+  });
+  $("fbar-clear").onclick = () => {
+    input.value = "";
+    $("fbar-clear").hidden = true;
+    input.focus();
+    renderForestMenu();
   };
-  $("forest-zoom").onclick = () => {
-    if (forestActive) selectShape(forestActive.layer, forestActive.name);
-  };
+  // Click anywhere outside the bar closes the dropdown.
+  document.addEventListener("click", (e) => {
+    if (_fbarOpen && !$("forest-bar").contains(e.target)) closeForestMenu();
+  });
+}
+
+let _fbarOpen = false;
+function openForestMenu() {
+  _fbarOpen = true;
+  renderForestMenu();
+  $("fbar-menu").hidden = false;
+}
+function closeForestMenu() {
+  _fbarOpen = false;
+  if ($("fbar-menu")) $("fbar-menu").hidden = true;
+}
+
+// The resting forest-bar shows only when nothing is selected; an active forest
+// (or park) is the shape-chip instead. Driven from renderShapeChip().
+function updateForestBar() {
+  const bar = $("forest-bar");
+  if (!bar) return;
+  const active = typeof selectedShape !== "undefined" && !!selectedShape;
+  bar.hidden = active;
+  if (active) closeForestMenu();
 }
 
 // Nearby sort key: squared distance from map center to the forest bbox center
@@ -1516,29 +1551,27 @@ function _forestDist(f) {
   return dx * dx + dy * dy;
 }
 
-function forestRowHtml(f, pinned) {
+function fbarRowHtml(f, pinned) {
   const layerLabel = f.layer === "national_forest" ? "National Forest" : "State Forest";
   const area = Math.round(f.area_km2).toLocaleString();
   return (
-    `<button class="forest-row" data-key="${esc(_forestKey(f))}">` +
-    `<div class="forest-row-main"><div class="forest-row-name">${pinned ? "📌 " : ""}${esc(f.name)}` +
+    `<button class="fbar-row" data-key="${esc(_forestKey(f))}">` +
+    `<div class="fbar-row-main"><div class="fbar-row-name">${pinned ? "📌 " : ""}${esc(f.name)}` +
     `${f.has_mvum ? ' <span class="forest-mvum">MVUM</span>' : ""}</div>` +
-    `<div class="forest-row-sub">${layerLabel} · ${area} km²</div></div></button>`
+    `<div class="fbar-row-sub">${layerLabel} · ${area} km²</div></div></button>`
   );
 }
 
-function renderForestList() {
-  const listEl = $("forest-list");
-  if (!listEl) return;
-  $("forest-list-view").hidden = !!forestActive;
-  $("forest-detail").hidden = !forestActive;
-  if (forestActive) return; // detail view is showing instead
-  $("forest-empty").hidden = forestsAll.length > 0;
-  const q = ($("forest-search").value || "").trim().toLowerCase();
+// Render the forest-bar dropdown: Recent & pinned + Nearby when idle, a
+// name-filtered (nearby-sorted) list while typing.
+const FBAR_NEARBY_MAX = 8;
+function renderForestMenu() {
+  const menu = $("fbar-menu");
+  if (!menu) return;
+  const q = ($("fbar-input").value || "").trim().toLowerCase();
   const byKey = new Map(forestsAll.map((f) => [_forestKey(f), f]));
+  let html = "";
 
-  // Recent + pinned group — only when not searching.
-  const recentEl = $("forest-recent");
   if (!q) {
     const seen = new Set();
     const featured = [];
@@ -1547,27 +1580,39 @@ function renderForestList() {
       seen.add(k);
       featured.push(byKey.get(k));
     }
-    recentEl.innerHTML = featured.length
-      ? "<h2>Recent &amp; pinned</h2>" +
-        featured.map((f) => forestRowHtml(f, isForestPinned(f))).join("")
-      : "";
-    recentEl.hidden = !featured.length;
+    if (featured.length) {
+      html +=
+        `<div class="fbar-group-h">Recent &amp; pinned</div>` +
+        featured.map((f) => fbarRowHtml(f, isForestPinned(f))).join("");
+    }
+    const nearby = forestsAll
+      .filter((f) => !seen.has(_forestKey(f)))
+      .sort((a, b) => _forestDist(a) - _forestDist(b))
+      .slice(0, FBAR_NEARBY_MAX);
+    if (nearby.length) {
+      html +=
+        `<div class="fbar-group-h">Nearby</div>` +
+        nearby.map((f) => fbarRowHtml(f, isForestPinned(f))).join("");
+    }
   } else {
-    recentEl.hidden = true;
-    recentEl.innerHTML = "";
+    const list = forestsAll
+      .filter((f) => f.name.toLowerCase().includes(q))
+      .sort((a, b) => _forestDist(a) - _forestDist(b));
+    html = list.length
+      ? list.map((f) => fbarRowHtml(f, isForestPinned(f))).join("")
+      : `<div class="fbar-empty">No forests match “${esc(q)}”.</div>`;
   }
+  menu.innerHTML = html || `<div class="fbar-empty">No forests loaded.</div>`;
 
-  // Full list — search-filtered, nearby-sorted.
-  let list = forestsAll.slice();
-  if (q) list = list.filter((f) => f.name.toLowerCase().includes(q));
-  list.sort((a, b) => _forestDist(a) - _forestDist(b));
-  $("forest-count").textContent = `(${list.length})`;
-  listEl.innerHTML = list.map((f) => forestRowHtml(f, isForestPinned(f))).join("");
-
-  document.querySelectorAll("#explore-section .forest-row").forEach((row) => {
+  menu.querySelectorAll(".fbar-row").forEach((row) => {
     row.onclick = () => {
       const f = byKey.get(row.dataset.key);
-      if (f) enterForest(f);
+      if (!f) return;
+      $("fbar-input").value = "";
+      $("fbar-clear").hidden = true;
+      $("fbar-input").blur();
+      closeForestMenu();
+      enterForest(f);
     };
   });
 }
@@ -1576,10 +1621,8 @@ async function enterForest(f) {
   forestActive = { layer: f.layer, name: f.name };
   pushForestRecent(f);
   if (isMobile()) setNav(false); // reveal the map
-  selectShape(f.layer, f.name); // fit-zoom + highlight + active-context shape chip
+  selectShape(f.layer, f.name); // fit-zoom + highlight + active chip (hides the bar)
   enableBrowseLayers();
-  renderForestList(); // swap list -> detail
-  await renderForestDetail();
 }
 
 function exitForestDetail() {
@@ -1587,9 +1630,9 @@ function exitForestDetail() {
   forestScopeOn = false; // un-scope Saved (decision #2)
   clearViewResults(); // leaving the forest clears any transient score (TLC-15)
   clearCoverage(); // and its coverage fog (TLC-19, session-scoped to the forest)
-  renderForestList();
   renderCollFilterBar(); // drop the "Inside <forest>" chip
   renderSavedList(); // un-scope the list + markers
+  updateForestBar(); // bring the resting search bar back
 }
 
 // Browsing a forest turns on the dispersed-sites lens (the dispersed-camping
@@ -1600,39 +1643,6 @@ function enableBrowseLayers() {
     cb.checked = true;
     toggleOverlay("dispersed", true);
   }
-}
-
-async function renderForestDetail() {
-  if (!forestActive) return;
-  const f = forestsAll.find((x) => _forestKey(x) === _forestKey(forestActive)) || forestActive;
-  const layerLabel = f.layer === "national_forest" ? "National Forest" : "State Forest";
-  const areaTxt = f.area_km2 ? " · " + Math.round(f.area_km2).toLocaleString() + " km²" : "";
-  $("forest-detail-head").innerHTML =
-    `<div class="forest-row-name">🌲 ${esc(f.name)}</div>` +
-    `<div class="forest-row-sub">${layerLabel}${areaTxt}</div>`;
-  $("forest-pin").textContent = isForestPinned(f) ? "📌 Pinned" : "📌 Pin";
-  const sum = $("forest-summary");
-  sum.innerHTML = `<div class="hint">Loading…</div>`;
-  let s;
-  try {
-    s = await (
-      await fetch(
-        `/forests/summary?layer=${encodeURIComponent(f.layer)}&name=${encodeURIComponent(f.name)}`
-      )
-    ).json();
-  } catch {
-    s = null;
-  }
-  if (!s || s.error) {
-    sum.innerHTML = "";
-    return;
-  }
-  const cell = (n, label) =>
-    `<div class="fs-cell"><div class="fs-n">${n}</div><div class="fs-l">${label}</div></div>`;
-  sum.innerHTML =
-    cell(s.dispersed, "dispersed") +
-    cell(s.campgrounds, "campgrounds") +
-    (s.has_mvum ? cell("✓", "MVUM") : "");
 }
 
 // --- MVUM raster overlays (display-only district map sheets) ---------------
@@ -1952,16 +1962,31 @@ function renderShapeChip() {
   if (!selectedShape) {
     chip.hidden = true;
     chip.innerHTML = "";
+    updateForestBar(); // nothing selected -> bring the search bar back
     return;
   }
   chip.hidden = false;
+  // A forest gets the 🌲 prefix + a pin toggle; parks/other shapes don't.
+  const isForest = forestsAll.some((f) => _forestKey(f) === _forestKey(selectedShape));
+  const pinned = isForest && isForestPinned(selectedShape);
   chip.innerHTML =
-    `<span class="shape-chip-name">${esc(selectedShape.name)}</span>` +
+    `<span class="shape-chip-name">${isForest ? "🌲 " : ""}${esc(selectedShape.name)}</span>` +
+    (isForest
+      ? `<button type="button" class="shape-chip-pin${pinned ? " on" : ""}" ` +
+        `title="${pinned ? "Pinned — tap to unpin" : "Pin this forest"}" aria-label="Pin forest">📌</button>`
+      : "") +
     `<button type="button" class="shape-chip-score btn">Score this view</button>` +
     `<button type="button" class="shape-chip-x" title="Clear selection" aria-label="Clear selection">✕</button>`;
+  if (isForest) {
+    chip.querySelector(".shape-chip-pin").onclick = () => {
+      toggleForestPin(selectedShape);
+      renderShapeChip();
+    };
+  }
   chip.querySelector(".shape-chip-x").onclick = clearShape;
   chip.querySelector(".shape-chip-score").onclick = scoreThisView;
   updateShapeScoreBtn();
+  updateForestBar(); // a shape is selected -> hide the search bar
 }
 
 // Reflect the in-flight state on the chip's Score button. No cap gating —
@@ -2948,14 +2973,12 @@ function setupTabs() {
       document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
       tab.classList.add("active");
       const which = tab.dataset.tab;
-      $("explore-section").hidden = which !== "explore";
-      $("score-section").hidden = which !== "score";
-      $("trips-section").hidden = which !== "trips";
       $("saved-section-tab").hidden = which !== "saved";
+      $("trips-section").hidden = which !== "trips";
+      $("map-settings").hidden = which !== "tune";
       if (which === "trips") loadTrips();
-      else exitTripPlot(); // back to Score/Saved: restore the normal map
+      else exitTripPlot(); // back to Saved/Tune: restore the normal map
       if (which === "saved") openSavedTab();
-      if (which === "explore") renderForestList();
     };
   });
   buildCollSwatches();
