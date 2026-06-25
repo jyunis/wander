@@ -1970,7 +1970,6 @@ function renderShapeChip() {
   const pinned = isForest && isForestPinned(selectedShape);
   chip.innerHTML =
     `<span class="shape-chip-name">${isForest ? "🌲 " : ""}${esc(selectedShape.name)}</span>` +
-    (isForest ? `<span class="shape-chip-stats" id="shape-chip-stats"></span>` : "") +
     (isForest
       ? `<button type="button" class="shape-chip-pin${pinned ? " on" : ""}" ` +
         `title="${pinned ? "Pinned — tap to unpin" : "Pin this forest"}" aria-label="Pin forest">📌</button>`
@@ -1982,46 +1981,11 @@ function renderShapeChip() {
       toggleForestPin(selectedShape);
       renderShapeChip();
     };
-    fillChipStats(selectedShape); // dispersed / campground / MVUM counts (cached)
   }
   chip.querySelector(".shape-chip-x").onclick = clearShape;
   chip.querySelector(".shape-chip-score").onclick = scoreThisView;
   updateShapeScoreBtn();
   updateForestBar(); // a shape is selected -> hide the search bar
-}
-
-// On-tap forest counts shown inline in the chip (display-only, TLC-20). Cached
-// per forest so re-renders (pin toggle, score state) don't refetch.
-const _forestSummaryCache = {};
-function renderChipStats(s) {
-  const el = $("shape-chip-stats");
-  if (!el || !s || s.error) return;
-  el.innerHTML =
-    `<span class="cstat" title="dispersed sites mapped inside this forest">⛺ ${s.dispersed}</span>` +
-    `<span class="cstat" title="established campgrounds inside this forest">🏕️ ${s.campgrounds}</span>` +
-    (s.has_mvum ? `<span class="forest-mvum" title="Motor Vehicle Use Map available">MVUM</span>` : "");
-}
-async function fillChipStats(shape) {
-  const key = _forestKey(shape);
-  if (_forestSummaryCache[key]) {
-    renderChipStats(_forestSummaryCache[key]);
-    return;
-  }
-  let s;
-  try {
-    s = await (
-      await fetch(
-        `/forests/summary?layer=${encodeURIComponent(shape.layer)}&name=${encodeURIComponent(shape.name)}`
-      )
-    ).json();
-  } catch {
-    return;
-  }
-  if (!s || s.error) return;
-  _forestSummaryCache[key] = s;
-  // Only paint if this forest is still the selected one (guard against a race
-  // where the user entered a different forest before the fetch resolved).
-  if (selectedShape && _forestKey(selectedShape) === key) renderChipStats(s);
 }
 
 // Reflect the in-flight state on the chip's Score button. No cap gating —
