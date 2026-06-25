@@ -226,7 +226,6 @@ async function init() {
     if (e.key === "Enter") gotoCoords();
   });
   $("goto-input").addEventListener("input", clearGotoResults);
-  $("drop-pin").onclick = toggleDropPin;
   $("score-btn").onclick = runScore;
   ["layer-pins", "layer-dots", "layer-heat", "layer-roads", "layer-trails", "layer-saved"].forEach(
     (id) => {
@@ -348,6 +347,7 @@ function setupMap() {
   L.control.zoom({ position: "topright" }).addTo(map);
   addBasemapControl(); // small on-map style picker (synced with the panel select)
   addMeasureControl(); // 📏 distance ruler (independent of the scoring tools)
+  addDropPinControl(); // 📍 mark + save an arbitrary spot (a map tool, not scoring)
   setBasemap(DEFAULT_BASEMAP);
   // Candidate-dot canvas: its OWN pane BELOW the land pane. The canvas spans the
   // whole viewport and captures pointer events across it, so if it sat above the
@@ -559,6 +559,32 @@ function addMeasureControl() {
 
 function setMeasureBtnActive(on) {
   const btn = $MEASURE_BTN();
+  if (btn) {
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+}
+
+// 📍 Drop-a-pin lives with the map tools (top-right, under the ruler), not in
+// the scoring drawer — it's a general "mark + save a spot" tool, not scoring.
+const $DROPPIN_BTN = () => document.querySelector(".drop-pin-toggle");
+
+function addDropPinControl() {
+  const ctrl = L.control({ position: "topright" });
+  ctrl.onAdd = () => {
+    const div = L.DomUtil.create("div", "drop-pin-ctrl leaflet-control");
+    div.innerHTML =
+      `<button type="button" class="drop-pin-toggle" title="Drop a pin (mark & save a spot)" ` +
+      `aria-label="Drop a pin" aria-pressed="false">📍</button>`;
+    L.DomEvent.disableClickPropagation(div);
+    div.querySelector(".drop-pin-toggle").onclick = toggleDropPin;
+    return div;
+  };
+  ctrl.addTo(map);
+}
+
+function setDropPinBtnActive(on) {
+  const btn = $DROPPIN_BTN();
   if (btn) {
     btn.classList.toggle("active", on);
     btn.setAttribute("aria-pressed", on ? "true" : "false");
@@ -811,7 +837,7 @@ function toggleDropPin() {
   if (pinPlacing) return cancelDropPin();
   finishMeasure(); // finish any in-progress ruler (tools are mutually exclusive)
   pinPlacing = true;
-  $("drop-pin").classList.add("active");
+  setDropPinBtnActive(true);
   map.getContainer().style.cursor = "crosshair";
   setStatus("Tap the map to drop a pin.");
   if (window.matchMedia("(max-width: 640px)").matches) setNav(false); // reveal the map
@@ -821,7 +847,7 @@ function toggleDropPin() {
 
 function cancelDropPin() {
   pinPlacing = false;
-  $("drop-pin").classList.remove("active");
+  setDropPinBtnActive(false);
   map.getContainer().style.cursor = "";
   setStatus("");
   map.off("click", onPinClick);

@@ -125,7 +125,6 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .btn.x, .x { background: none; border: none; color: var(--muted); cursor: pointer;
              font-size: 18px; float: right; line-height: 1; }
 .btn.active { border-color: var(--accent); color: var(--ink); background: #313942; }
-.pin-btn { width: 100%; margin-top: 8px; }
 
 .hint { font-size: 12px; color: var(--muted); margin: 8px 0; }
 .goto-row { margin-top: 6px; }
@@ -756,6 +755,13 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
   line-height: 1; box-shadow: 0 1px 5px rgba(0, 0, 0, 0.4); }
 .measure-toggle:hover { border-color: #2bb3ff; }
 .measure-toggle.active { border-color: #2bb3ff; color: #2bb3ff; background: #313942; }
+/* On-map drop-a-pin (📍) tool — same footprint as the ruler, green accent. */
+.drop-pin-toggle { display: flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; background: var(--panel); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 6px; cursor: pointer; font-size: 15px;
+  line-height: 1; box-shadow: 0 1px 5px rgba(0, 0, 0, 0.4); }
+.drop-pin-toggle:hover { border-color: var(--accent); }
+.drop-pin-toggle.active { border-color: var(--accent); color: var(--accent); background: #313942; }
 /* Brief attention pulse when a shape is (re)selected. */
 @keyframes shapePulse {
   0% { stroke-opacity: 0.2; fill-opacity: 0.32; }
