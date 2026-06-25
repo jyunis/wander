@@ -811,8 +811,9 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
    under the ☰ button. */
 .shape-chip, .measure-chip, .run-chip { max-width: calc(100vw - 116px); }
 /* The centered forest-bar must clear the top-left hamburger + top-right zoom
-   too, or it sits over the ☰ button. */
-.forest-bar { width: calc(100vw - 116px); }
+   too, or it sits over the ☰ button. max-width (not width) so the base
+   width:min(92vw,360px) still caps it at 360px on a wide desktop. */
+.forest-bar { max-width: calc(100vw - 116px); }
 #panel header { padding-top: calc(14px + env(safe-area-inset-top, 0px)); }
 #panel { padding-bottom: env(safe-area-inset-bottom, 0px); }
 .sheet { bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
