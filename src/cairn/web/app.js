@@ -2,7 +2,7 @@
 
 // --- state -----------------------------------------------------------------
 let CONFIG = null;
-let map, drawnItems, heatLayer, pinLayer, candidatesLayer, roadsLayer, canvasRenderer, gotoMarker;
+let map, drawnItems, heatLayer, pinLayer, candidatesLayer, roadsLayer, trailsLayer, canvasRenderer, gotoMarker;
 let nearbyCgLayer; // ephemeral markers: the campgrounds near the open scored site
 let coverageLayer; // session-only fog: faint shading of views already scored (M3)
 let tripLayer; // markers for the currently plotted trip's members
@@ -143,6 +143,7 @@ const OWNERSHIP_MIN_ZOOM = 11;
 // threshold gates forest-shape discovery taps: at/above it you're working with
 // roads, so a missed road tap shouldn't yank the map out to the whole forest.
 const ROADS_MIN_ZOOM = 13;
+const TRAILS_MIN_ZOOM = 13; // hiking-trails overlay (live OSM/Overpass) renders at z13+
 
 let overlayDefs = []; // from GET /overlays
 let mvumOverlays = []; // from GET /mvum: [{key, name, bounds:[s,w,n,e], url}]
@@ -226,9 +227,11 @@ async function init() {
   $("goto-input").addEventListener("input", clearGotoResults);
   $("drop-pin").onclick = toggleDropPin;
   $("score-btn").onclick = runScore;
-  ["layer-pins", "layer-dots", "layer-heat", "layer-roads", "layer-saved"].forEach((id) => {
-    $(id).onchange = updateLayerVisibility;
-  });
+  ["layer-pins", "layer-dots", "layer-heat", "layer-roads", "layer-trails", "layer-saved"].forEach(
+    (id) => {
+      $(id).onchange = updateLayerVisibility;
+    }
+  );
   $("saved-layer-coll").onchange = renderSavedMarkers; // re-filter the saved layer
   $("min-score").oninput = (e) => {
     minScore = parseFloat(e.target.value);
@@ -382,7 +385,9 @@ function setupMap() {
   map.on("moveend", updateCapRect); // keep the "scoreable area" box current
   map.on("moveend", refreshActiveOverlays);
   map.on("moveend", scheduleRoads); // viewport roads overlay follows the map
+  map.on("moveend", scheduleTrails); // viewport trails overlay follows the map
   map.on("zoomend", restyleRoadsForZoom); // scale road weight to the new zoom
+  map.on("zoomend", restyleTrailsForZoom);
   map.on("moveend", updateShapeScoreBtn); // re-evaluate the boundary-score cap gate
   // Keep info windows from opening hidden behind the bottom sheet.
   map.on("popupopen", (e) => {
@@ -405,6 +410,7 @@ function setupMap() {
   // on by default (the "Roads" checkbox is checked), since satellite imagery
   // shows no forest roads. updateLayerVisibility adds it once a run loads.
   roadsLayer = new L.LayerGroup();
+  trailsLayer = new L.LayerGroup(); // hiking trails (OSM/Overpass), display-only, opt-in
   candidatesLayer = new L.LayerGroup().addTo(map);
   pinLayer = new L.LayerGroup().addTo(map);
   nearbyCgLayer = new L.LayerGroup().addTo(map);
@@ -1148,6 +1154,94 @@ function restyleRoadsForZoom() {
   }
 }
 
+// --- Trails overlay (opt-in): hiking paths + named hiking routes (e.g. the
+// North Country Trail) from OSM, drawn over ANY basemap. Viewport-driven like
+// roads, but a LIVE Overpass fetch (cached server-side) — so it's debounced
+// more and best-effort (a fetch failure just leaves it empty). Display-only.
+let _trailsBounds = null;
+let _trailsTimer = null;
+let _trailsGj = null;
+
+function scheduleTrails() {
+  clearTimeout(_trailsTimer);
+  _trailsTimer = setTimeout(loadTrailsForView, 500); // a touch slower than roads (live fetch)
+}
+
+async function loadTrailsForView() {
+  if (!$("layer-trails") || !$("layer-trails").checked) return;
+  if (map.getZoom() < TRAILS_MIN_ZOOM) {
+    trailsLayer.clearLayers();
+    _trailsBounds = null;
+    return;
+  }
+  const view = map.getBounds();
+  if (_trailsBounds && _trailsBounds.contains(view) && trailsLayer.getLayers().length) return;
+  const padded = view.pad(0.3);
+  const bbox = [padded.getWest(), padded.getSouth(), padded.getEast(), padded.getNorth()].join(",");
+  let gj;
+  try {
+    gj = await (await fetch(`/trails?bbox=${bbox}`)).json();
+  } catch {
+    return; // best-effort, display-only
+  }
+  if (!$("layer-trails").checked) return; // toggled off mid-fetch
+  renderTrails(gj);
+  _trailsBounds = padded;
+}
+
+function trailWeight() {
+  return Math.min(2 + (map.getZoom() - TRAILS_MIN_ZOOM) * 0.7, 6);
+}
+
+function renderTrails(gj) {
+  _trailsGj = gj;
+  trailsLayer.clearLayers();
+  const w = trailWeight();
+  // Collect the longest segment per named route so each name gets ONE on-map
+  // label (not one per OSM member way) — legible, like the old baked label.
+  const labelBest = new Map(); // name -> {len, latlng}
+  (gj.features || []).forEach((f) => {
+    const p = f.properties || {};
+    const route = p.kind === "hiking_route";
+    const color = route ? "#d9534f" : "#c97b4a"; // named routes red, generic paths brown
+    trailsLayer.addLayer(
+      L.geoJSON(f, {
+        interactive: false,
+        style: {
+          color,
+          weight: route ? w + 0.5 : w,
+          opacity: 0.7,
+          dashArray: "2 5",
+          lineCap: "round",
+        },
+      })
+    );
+    const label = p.name || (route ? "Hiking route" : "Trail");
+    const hit = L.geoJSON(f, { style: { color: "#000", weight: w + 12, opacity: 0 } });
+    hit.bindTooltip(label, { sticky: true });
+    trailsLayer.addLayer(hit);
+    if (route && p.name) {
+      const c = f.geometry.coordinates;
+      if (c.length >= 2 && (!labelBest.has(p.name) || c.length > labelBest.get(p.name).len)) {
+        const mid = c[Math.floor(c.length / 2)];
+        labelBest.set(p.name, { len: c.length, latlng: [mid[1], mid[0]] });
+      }
+    }
+  });
+  labelBest.forEach((v, name) => {
+    L.tooltip({ permanent: true, direction: "center", className: "trail-label", interactive: false })
+      .setLatLng(v.latlng)
+      .setContent(esc(name))
+      .addTo(trailsLayer);
+  });
+}
+
+function restyleTrailsForZoom() {
+  if (_trailsGj && $("layer-trails") && $("layer-trails").checked && map.getZoom() >= TRAILS_MIN_ZOOM) {
+    renderTrails(_trailsGj);
+  }
+}
+
 function roadPopup(p, mv, label) {
   const rows = [];
   if (p.name && p.ref && p.name !== label) rows.push(esc(p.name));
@@ -1290,6 +1384,8 @@ function updateLayerVisibility() {
   toggleLayer(heatLayer, $("layer-heat").checked);
   toggleLayer(roadsLayer, $("layer-roads").checked);
   if ($("layer-roads").checked) scheduleRoads(); // fetch the view when turned on
+  toggleLayer(trailsLayer, $("layer-trails").checked);
+  if ($("layer-trails").checked) scheduleTrails();
   renderSavedMarkers(); // saved layer (clears itself when its checkbox is off)
 }
 
@@ -3284,7 +3380,7 @@ function clearMapForTrip() {
   clearShape(); // drop any forest/park discovery highlight
   clearMeasure(); // drop any distance ruler
   if ($("results-chip")) $("results-chip").hidden = true; // hide transient score chip
-  [pinLayer, candidatesLayer, heatLayer, roadsLayer, drawnItems].forEach((l) => {
+  [pinLayer, candidatesLayer, heatLayer, roadsLayer, trailsLayer, drawnItems].forEach((l) => {
     if (l && map.hasLayer(l)) map.removeLayer(l);
   });
   if (gotoMarker) {

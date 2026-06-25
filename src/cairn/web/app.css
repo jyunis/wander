@@ -657,6 +657,13 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 #map-chips { position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
   z-index: 1300; display: flex; flex-direction: column; align-items: center; gap: 8px;
   pointer-events: none; }
+/* On-map name label for a named hiking route (e.g. North Country Trail) —
+   a transparent text label with a white halo, no tooltip box/arrow. */
+.leaflet-tooltip.trail-label { background: transparent; border: none; box-shadow: none;
+  color: #e05a4f; font-weight: 600; font-size: 11px; padding: 0; white-space: nowrap;
+  text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff; }
+.leaflet-tooltip.trail-label::before { display: none; }
+
 .shape-chip, .measure-chip, .run-chip { pointer-events: auto; display: flex; align-items: center;
   gap: 8px; max-width: min(94vw, 470px); padding: 6px 8px 6px 12px; background: var(--panel);
   color: var(--ink); border: 1px solid var(--accent); border-radius: 18px;
