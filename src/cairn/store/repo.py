@@ -858,6 +858,11 @@ class Store:
 
         Keyed on (osm_type, osm_id, feature_class) so re-ingest is a no-op on
         content match (TLC-11). One commit per chunk (TLC-14).
+
+        (Oversized geometries are bounded earlier, at WKT build — see
+        `ingest.osm.element_to_wkt` — because the relation geometries OSM hands
+        back are topologically invalid, so an in-DB ST_Intersection clip returns
+        NULL; clipping the raw coordinates avoids GEOS entirely.)
         """
         if not rows:
             return

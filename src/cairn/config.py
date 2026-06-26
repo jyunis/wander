@@ -182,6 +182,17 @@ class Settings(BaseSettings):
     # --- Memory invariants (TLC-13 / TLC-14) -------------------------------
     tile_lru_cap: int = 16
     ingest_chunk_size: int = 5000
+    # Oversized area geometries (e.g. the full Lake Superior relation, ~219k
+    # vertices) are clipped at ingest to the score bbox expanded by this buffer.
+    # Every distance feature has a finite search radius (water 600m, forest 200m,
+    # solitude/building 3000m), so a buffer >= the largest radius keeps every
+    # in-radius distance byte-identical while collapsing a continent-spanning
+    # polygon to its local shoreline — turning a per-candidate O(219k-vertex)
+    # ST_Distance into O(local). Clipping only kicks in above the vertex
+    # threshold, so ordinary features are stored untouched. Purely a perf
+    # measure — never changes a computed distance within the search radius.
+    ingest_clip_buffer_m: float = 3500.0  # >= max distance-feature search radius
+    ingest_clip_vertex_threshold: int = 2000
 
     # --- Terrain -----------------------------------------------------------
     terrarium_zoom: int = 12

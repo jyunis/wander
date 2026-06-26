@@ -124,7 +124,10 @@ class RunService:
             # 2-4: ensure OSM extract + chunked ingest.
             osm = await self._overpass.fetch(b)
             counts = await ingest_osm(
-                self._store, osm.elements, chunk_size=self._s.ingest_chunk_size
+                self._store, osm.elements, chunk_size=self._s.ingest_chunk_size,
+                clip_bbox=b,
+                clip_buffer_m=self._s.ingest_clip_buffer_m,
+                clip_vertex_threshold=self._s.ingest_clip_vertex_threshold,
             )
 
             # 4b: USFS MVUM forest roads (fills OSM's forest-road gaps). Best
