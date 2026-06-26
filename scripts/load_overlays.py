@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import os
 import re
 import sqlite3
@@ -47,6 +48,14 @@ try:
 except ModuleNotFoundError:  # pragma: no cover
     shapefile = None
     shape = None
+
+# `h3` is only needed by the cell-coverage loader (FCC BDC mobile hexes). Guarded
+# like pyshp/shapely so the module still imports for tests where it's absent (run
+# that loader with `--with h3`).
+try:
+    import h3
+except ModuleNotFoundError:  # pragma: no cover
+    h3 = None
 
 DB = os.environ.get("OVERLAYS_DB", "/data/overlays.db")
 UA = {"User-Agent": "cairn-overlays-loader (+http://cairn.home.arpa)"}
@@ -1105,6 +1114,303 @@ def load_amenities(con, states) -> int:
     return total
 
 
+# --- cell coverage (FCC BDC mobile broadband, display-only — TLC-3) ----------
+# A polygon overlay of cellular coverage so a camper can tell "truly no signal"
+# (stay-away if you need to be reachable) from "some signal, maybe not great"
+# from "solid/fast." NEVER scored (TLC-3) — purely the Land panel. Source: the
+# FCC National Broadband Map / Broadband Data Collection (BDC) mobile coverage,
+# published as H3 res-9 hexagons per state × technology (carrier-reported, known
+# to be optimistic — the UI says so). The download-listing API is anti-bot
+# (401), and the data refreshes only ~twice a year, so files are staged manually
+# under CELL_DIR (one-time chore) and this loader ingests them locally.
+#
+# REPRESENTATION: a single graded-quality layer. For one carrier we read three
+# files — 4G LTE (5/1), 5G-NR 7/1, 5G-NR 35/3 — and grade each res-7 hex by its
+# best available service: FAST (>= 50% of children have 35/3 5G), SOLID (>= 50%
+# have any 4G/5G), PATCHY (some but < 50%), or NONE (a real gap, unpainted).
+#
+# PERF (the #500 lesson): we DON'T dissolve into state-spanning multipolygons (a
+# single huge bbox defeats the R*Tree). Each covered res-9 hex is aggregated up
+# to its res-7 parent and emitted as one small, uniform hexagon row — display-only
+# coarsening that keeps every feature's bbox tiny so the R*Tree always prunes.
+CELL_COVERAGE_LAYER = "cell_coverage"
+CELL_SRC_RES = 9  # FCC BDC publishes coverage as res-9 hexes
+CELL_HEX_RES = 7  # aggregated up to res-7 parents (~5 km²; tune coarser if busy)
+# A res-7 cell is graded by how many of its 49 res-9 children report coverage.
+# "Solid" demands a clear majority (>= 2/3), not a bare half: FCC overstates
+# coverage in terrain — a Whitewater valley hex reads ~50% covered on paper yet
+# is near-dead on the ground (the "covered" half is the bluff tops, not the
+# campable valley floor) — so a bare-50% "Solid" was too generous. The 50–66%
+# band now honestly reads "Patchy" (some signal, depends where you stand). "Fast"
+# keeps a 50% bar, but on the already-strict 35/3 5G subset. Zero covered children
+# stays a real gap ("none").
+CELL_SOLID_FRAC = 2 / 3  # any-coverage fraction for "Solid"
+CELL_FAST_FRAC = 0.5  # fast-5G (35/3) fraction for "Fast"
+_CELL_CHILDREN = 7 ** (CELL_SRC_RES - CELL_HEX_RES)  # 49 res-9 cells per res-7 parent
+_CELL_SOLID_MIN = max(1, math.ceil(CELL_SOLID_FRAC * _CELL_CHILDREN))  # 33
+_CELL_FAST_MIN = max(1, math.ceil(CELL_FAST_FRAC * _CELL_CHILDREN))  # 25
+# The graded coverage-quality tiers (best first), rendered as a sequential ramp.
+CELL_TIERS = ("Fast", "Solid", "Patchy")
+CELL_DIR = os.environ.get("FCC_BDC_DIR") or os.path.join(os.path.dirname(DB), "fcc-bdc")
+# MN + WI + MI + SD union envelope (w, s, e, n). FCC files are per-FIPS and
+# independent of the STATES registry (which lacks MI), so we clip to this box —
+# bounding a nationwide "by provider" download to the four states we cover.
+CELL_STATES_BBOX = (-104.1, 41.6, -82.3, 49.5)
+
+
+def _cell_carrier(brand: str | None) -> str | None:
+    """Normalize an FCC provider brand to one of the four nationwide carriers we
+    surface, or None to drop it (regional carriers/MVNOs — 'does MY carrier
+    work' only makes sense for the big four). Pure + tolerant of brand variants
+    ('AT&T Mobility', 'Verizon Wireless', 'New Cingular Wireless', …)."""
+    if not brand:
+        return None
+    low = str(brand).strip().lower()
+    flat = re.sub(r"[^a-z0-9]", "", low)
+    if "verizon" in flat:
+        return "Verizon"
+    if "tmobile" in flat:
+        return "T-Mobile"
+    if "uscellular" in flat or "unitedstatescellular" in flat:
+        return "UScellular"
+    if "at&t" in low or "cingular" in low or flat.startswith("att"):
+        return "AT&T"
+    return None
+
+
+def _cell_source(filename: str) -> str | None:
+    """Which coverage bucket a BDC file feeds, from its name:
+      - ``"fast"``  — 5G-NR 35/3 (work-grade); feeds both the any-coverage and
+        the fast tallies,
+      - ``"any"``   — 4G LTE, or 5G-NR 7/1 / tier-less 5G (basic data); feeds the
+        any-coverage tally only,
+      - ``None``    — skip (e.g. a 3G file).
+    The quality grade per hex is derived from these tallies (see
+    `_coverage_tier`)."""
+    low = filename.lower()
+    if "4glte" in low or "4g_lte" in low:
+        return "any"
+    if "5gnr" in low or "5g_nr" in low or "5g-nr" in low:
+        m = re.search(r"5g_?nr_?(\d+_\d+)", low)
+        return "fast" if (m and m.group(1) == "35_3") else "any"
+    return None
+
+
+def _find_field(fields: list[str], *needles: str) -> int | None:
+    """Index of the first field whose (lowercased) name contains any needle."""
+    for i, f in enumerate(fields):
+        fl = f.lower()
+        if any(nd in fl for nd in needles):
+            return i
+    return None
+
+
+def _res9_cell(value: str) -> str | None:
+    """A source H3 index string -> the cell itself if it's a valid cell at least
+    as fine as CELL_HEX_RES (so it has a res-7 parent we can count it toward), or
+    None so a stray column value can't crash a load."""
+    try:
+        if h3.is_valid_cell(value) and h3.get_resolution(value) >= CELL_HEX_RES:
+            return value
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
+def _coverage_tier(any_count: int, fast_count: int) -> str | None:
+    """Grade one res-7 hex from its covered-children tallies: 'Fast' (>= 50% of
+    children have fast 5G), 'Solid' (>= 2/3 have any coverage), 'Patchy' (some but
+    below the Solid bar), or None (no covered children — a real gap). Pure +
+    deterministic; the ordinal that turns FCC optimism into honest grades."""
+    if fast_count >= _CELL_FAST_MIN:
+        return "Fast"
+    if any_count >= _CELL_SOLID_MIN:
+        return "Solid"
+    if any_count >= 1:
+        return "Patchy"
+    return None
+
+
+def _classify_parents(any_cells: set[str], fast_cells: set[str]) -> dict[str, str]:
+    """Map each covered res-7 parent to its quality tier (`_coverage_tier`), by
+    counting how many of its res-9 children fall in the any-coverage set and the
+    fast set. Pure + deterministic. `fast_cells` ⊆ `any_cells`."""
+    any_counts: dict[str, int] = {}
+    fast_counts: dict[str, int] = {}
+    for c in any_cells:
+        p = h3.cell_to_parent(c, CELL_HEX_RES)
+        any_counts[p] = any_counts.get(p, 0) + 1
+    for c in fast_cells:
+        p = h3.cell_to_parent(c, CELL_HEX_RES)
+        fast_counts[p] = fast_counts.get(p, 0) + 1
+    out = {}
+    for p, a in any_counts.items():
+        tier = _coverage_tier(a, fast_counts.get(p, 0))
+        if tier is not None:
+            out[p] = tier
+    return out
+
+
+def _hex_polygon_wkt(cell: str) -> str:
+    """WKT POLYGON for an H3 cell boundary (lon/lat ring, closed)."""
+    ring = [(lng, lat) for (lat, lng) in h3.cell_to_boundary(cell)]
+    ring.append(ring[0])
+    return "POLYGON((" + ",".join(f"{x} {y}" for x, y in ring) + "))"
+
+
+def _iter_cell_records(path: str):
+    """Yield (brand, res9_cell) for every covered hex in one FCC mobile file
+    (shapefile base path or .gpkg). Uses an H3-index column when present (fast,
+    geometry-free); otherwise falls back to each hex's centroid -> res-9 cell.
+    Parent aggregation + the coverage threshold happen in the caller. Records
+    outside CELL_STATES_BBOX are dropped."""
+    w, s, e, n = CELL_STATES_BBOX
+    if path.lower().endswith(".gpkg"):
+        g = connect(path)
+        try:
+            tables = [
+                r[0] for r in g.execute(
+                    "SELECT table_name FROM gpkg_contents WHERE data_type='features'"
+                ).fetchall()
+            ]
+        except sqlite3.OperationalError:
+            tables = []
+        for tbl in tables:
+            cols = [r[1] for r in g.execute(f"PRAGMA table_info('{tbl}')").fetchall()]
+            bi = _find_field(cols, "brand", "holding", "operator", "provider_n", "company")
+            hi = _find_field(cols, "h3", "hex")
+            geo = _find_field(cols, "geom", "shape", "geometry")
+            bcol = cols[bi] if bi is not None else "NULL"
+            if hi is not None:
+                for brand, hexid in g.execute(f'SELECT "{bcol}", "{cols[hi]}" FROM "{tbl}"'):
+                    cell = _res9_cell(hexid)
+                    if cell is not None:
+                        yield brand, cell
+            elif geo is not None:
+                gc = cols[geo]
+                for brand, lon, lat in g.execute(
+                    f'SELECT "{bcol}", X(Centroid(GeomFromGPB("{gc}"))), '
+                    f'Y(Centroid(GeomFromGPB("{gc}"))) FROM "{tbl}"'
+                ):
+                    if lon is None or not (w <= lon <= e and s <= lat <= n):
+                        continue
+                    yield brand, h3.latlng_to_cell(lat, lon, CELL_SRC_RES)
+        g.close()
+        return
+    # Shapefile.
+    rdr = shapefile.Reader(path)
+    flds = [f[0] for f in rdr.fields[1:]]
+    bi = _find_field(flds, "brand", "holding", "operator", "provider_n", "company")
+    hi = _find_field(flds, "h3", "hex")
+    for sr in rdr.iterShapeRecords():
+        brand = sr.record[bi] if bi is not None else None
+        if hi is not None:
+            cell = _res9_cell(sr.record[hi])
+            if cell is not None:
+                yield brand, cell
+            continue
+        geom = sr.shape.__geo_interface__
+        if not geom or not geom.get("coordinates"):
+            continue
+        c = shape(geom).centroid
+        if not (w <= c.x <= e and s <= c.y <= n):
+            continue
+        yield brand, h3.latlng_to_cell(c.y, c.x, CELL_SRC_RES)
+
+
+def _cell_files(directory: str) -> list[str]:
+    """Shapefile bases (.shp) + .gpkg under `directory`, after extracting any
+    .zip in place. Files whose name marks 3G are skipped (we keep 4G LTE + 5G)."""
+    if not os.path.isdir(directory):
+        return []
+    for fn in sorted(os.listdir(directory)):
+        if fn.lower().endswith(".zip"):
+            try:
+                zipfile.ZipFile(os.path.join(directory, fn)).extractall(directory)
+            except zipfile.BadZipFile:
+                print(f"[cell_coverage] bad zip skipped: {fn}", flush=True)
+    out = []
+    for root, _dirs, files in os.walk(directory):
+        for fn in sorted(files):
+            low = fn.lower()
+            if re.search(r"(^|[_-])3g([_-]|\.)", low):  # skip 3G maps
+                continue
+            if low.endswith(".gpkg"):
+                out.append(os.path.join(root, fn))
+            elif low.endswith(".shp"):
+                out.append(os.path.join(root, fn[:-4]))
+    return out
+
+
+def load_cell_coverage(con) -> int:
+    """The `cell_coverage` polygon layer: a graded coverage-quality map (res-7
+    hexes) from the FCC BDC mobile files staged under CELL_DIR. Each hex is tiered
+    Fast / Solid / Patchy by how solidly its sub-cells are covered (see
+    `_coverage_tier`); uncovered hexes are simply absent (a real gap). Guarded to
+    the four nationwide carriers. Display-only (TLC-3), NEVER scored. Skips cleanly
+    (returns 0) if no files are staged."""
+    if h3 is None:
+        print("[cell_coverage] h3 not installed — run with `--with h3`; skipping", flush=True)
+        return 0
+    files = _cell_files(CELL_DIR)
+    if not files:
+        print(f"[cell_coverage] no FCC files in {CELL_DIR} — skipping", flush=True)
+        return 0
+    print(f"[cell_coverage] {len(files)} file(s) in {CELL_DIR}", flush=True)
+    # Two res-9 tallies feed the grade: every covered cell (any 4G/5G) and the
+    # fast (5G 35/3) subset. Carrier (row brand or filename) is a GUARD — only the
+    # four nationwide carriers count, so a stray regional file can't leak in.
+    any_cells: set[str] = set()
+    fast_cells: set[str] = set()
+    carriers: set[str] = set()
+    for path in files:
+        src = _cell_source(os.path.basename(path))
+        if src is None:
+            print(f"[cell_coverage]   {os.path.basename(path)}: skipped (not 4G/5G)", flush=True)
+            continue
+        file_carrier = _cell_carrier(os.path.basename(path))  # None for id-only names
+        kept = 0
+        try:
+            for brand, cell in _iter_cell_records(path):
+                carrier = _cell_carrier(brand) or file_carrier
+                if carrier is None:
+                    continue  # not one of the four nationwide carriers — drop
+                carriers.add(carrier)
+                any_cells.add(cell)
+                if src == "fast":
+                    fast_cells.add(cell)
+                kept += 1
+        except Exception as exc:  # best-effort per file (bad/foreign schema)
+            print(f"[cell_coverage]   {os.path.basename(path)} SKIPPED: {exc}", flush=True)
+            continue
+        print(
+            f"[cell_coverage]   {os.path.basename(path)} [{src}]: {kept} covered res-9 hexes",
+            flush=True,
+        )
+    tiers = _classify_parents(any_cells, fast_cells)  # res-7 parent -> Fast/Solid/Patchy
+    clear_layer(con, CELL_COVERAGE_LAYER)
+    w, s, e, n = CELL_STATES_BBOX
+    by_tier: dict[str, list] = {t: [] for t in CELL_TIERS}
+    for cell, tier in tiers.items():
+        lat, lon = h3.cell_to_latlng(cell)  # drop parents outside the 4-state box
+        if not (w <= lon <= e and s <= lat <= n):
+            continue
+        by_tier[tier].append((tier, None, _hex_polygon_wkt(cell), 4326))
+    total = 0
+    for tier in CELL_TIERS:  # best-first so the ramp draws light over dark cleanly
+        rows = by_tier[tier]
+        for i in range(0, len(rows), 2000):
+            _insert(con, CELL_COVERAGE_LAYER, rows[i : i + 2000])
+        total += len(rows)
+        print(f"[cell_coverage]   {tier}: {len(rows)} hexes", flush=True)
+    print(
+        f"[cell_coverage] carriers: {sorted(carriers) or 'none'}; "
+        f"any={len(any_cells)} fast={len(fast_cells)} res-9; total hexes: {total}",
+        flush=True,
+    )
+    return total
+
+
 # WI DNR managed-property layer: all DNR-owned properties (parks, forests, rec
 # areas, wildlife areas, …) keyed by PROP_NAME — there's no per-type service, so
 # parks vs forests are selected by name. (data-wi-dnr.opendata.arcgis.com backs
@@ -1241,6 +1547,10 @@ def main() -> None:
     # (so run forests first if reloading just this layer).
     if not only or AMENITY_LAYER in only:
         total += load_amenities(con, states)
+    # Cell coverage — FCC BDC mobile hexes staged under CELL_DIR (independent of
+    # the STATES registry; covers MN/WI/MI/SD). Skips cleanly if none staged.
+    if not only or CELL_COVERAGE_LAYER in only:
+        total += load_cell_coverage(con)
     print("--- overlay_features (polygons) ---", flush=True)
     for lyr, c in con.execute(
         "SELECT layer, COUNT(*) FROM overlay_features GROUP BY layer ORDER BY layer"

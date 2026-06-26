@@ -130,6 +130,19 @@ def test_engine_never_references_resupply_data_tlc3():
         )
 
 
+def test_engine_never_references_cell_coverage_tlc3():
+    # TLC-3: cell coverage (the `cell_coverage` overlay layer, FCC BDC mobile) is
+    # display-only — "can I get signal at this site," never a scoring input. Guard
+    # the engine against importing/referencing it so proximity-to-signal can't
+    # quietly become a scoring shortcut. Code-shaped tokens only.
+    forbidden = re.compile(r"cell_coverage|load_cell_coverage|CELL_COVERAGE")
+    for path in ENGINE_DIR.glob("*.py"):
+        source = _strip_comments(path.read_text(encoding="utf-8"))
+        assert forbidden.search(source) is None, (
+            f"{path.name} references display-only cell-coverage data (TLC-3 violation)"
+        )
+
+
 def test_no_nondeterminism_primitives_in_engine_sources():
     checked_any = False
     for name in MODULES:

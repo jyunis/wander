@@ -40,6 +40,18 @@ def _build_overlays_db(path: str) -> None:
         "('state_park','State Park','Far Park', "
         "CastToMulti(GeomFromText('POLYGON((5 5,5.01 5,5.01 5.01,5 5.01,5 5))',4326)))"
     )
+    # Cell-coverage polygon layer (display-only): two quality tiers as
+    # category-tagged hexes near origin, plus a far Patchy hex to prove bbox clip.
+    for cat, poly in [
+        ("Solid", "POLYGON((0 0,0.008 0,0.008 0.008,0 0.008,0 0))"),
+        ("Fast", "POLYGON((0.002 0.002,0.01 0.002,0.01 0.01,0.002 0.01,0.002 0.002))"),
+        ("Patchy", "POLYGON((6 6,6.01 6,6.01 6.01,6 6.01,6 6))"),
+    ]:
+        con.execute(
+            "INSERT INTO overlay_features(layer, category, name, geom) "
+            f"VALUES ('cell_coverage', ?, NULL, CastToMulti(GeomFromText('{poly}',4326)))",
+            (cat,),
+        )
     # Point layer (campgrounds) lives in overlay_points, with a reservation url.
     con.execute(
         "CREATE TABLE overlay_points ("
@@ -401,9 +413,24 @@ async def test_layers_report_categories(overlay_settings):
     by_id = {layer["id"]: layer for layer in layers}
     assert "ownership" in by_id and "state_park" in by_id
     assert "Tax Forfeit" in by_id["ownership"]["categories"]
-    # LAYER_ORDER is campground, national_forest, state_forest, state_park,
-    # ownership; only present layers show, in that order.
-    assert [layer["id"] for layer in layers] == ["campground", "state_park", "ownership"]
+    # cell_coverage reports its quality tiers as legend categories.
+    assert by_id["cell_coverage"]["geom_type"] == "polygon"
+    assert by_id["cell_coverage"]["categories"] == ["Fast", "Patchy", "Solid"]
+    # LAYER_ORDER ends ..., ownership, cell_coverage; only present layers show,
+    # in that order.
+    assert [layer["id"] for layer in layers] == [
+        "campground", "state_park", "ownership", "cell_coverage"
+    ]
+    await s.close()
+
+
+async def test_cell_coverage_query_clips_and_carries_category(overlay_settings):
+    s = await OverlayStore.open(overlay_settings)
+    fc = await s.query("cell_coverage", Bbox(0, 0, 0.01, 0.01))
+    assert fc["geom_type"] == "polygon"
+    cats = sorted(f["properties"]["category"] for f in fc["features"])
+    assert cats == ["Fast", "Solid"]  # both near-origin hexes; the far Patchy one clipped out
+    assert all(f["geometry"]["type"] in ("Polygon", "MultiPolygon") for f in fc["features"])
     await s.close()
 
 
