@@ -238,11 +238,6 @@ async function init() {
 
   $("draw-bbox").onclick = startDraw;
   $("use-view").onclick = useCurrentView;
-  $("goto-btn").onclick = gotoCoords;
-  $("goto-input").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") gotoCoords();
-  });
-  $("goto-input").addEventListener("input", clearGotoResults);
   $("score-btn").onclick = runScore;
   ["layer-pins", "layer-dots", "layer-heat", "layer-roads", "layer-trails", "layer-saved"].forEach(
     (id) => {
@@ -743,51 +738,6 @@ function parseLatLon(s) {
   return [lat, lon];
 }
 
-async function gotoCoords() {
-  const input = $("goto-input");
-  const raw = (input.value || "").trim();
-  if (!raw) return;
-  input.classList.remove("bad");
-  clearGotoResults();
-
-  // Fast path: a pasted "lat, lon" jumps immediately, no network.
-  const ll = parseLatLon(raw);
-  if (ll) {
-    dropGotoMarker(ll[0], ll[1], `${ll[0].toFixed(6)}, ${ll[1].toFixed(6)}`, 15);
-    return;
-  }
-
-  // Otherwise treat it as a place name and geocode (Nominatim, via the API).
-  // Bias toward the current view so "state park" near you ranks first.
-  const b = map.getBounds();
-  const viewbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].join(",");
-  input.classList.add("loading");
-  setStatus(`Searching “${raw}”…`);
-  try {
-    const r = await fetch(
-      `/geocode?q=${encodeURIComponent(raw)}&viewbox=${encodeURIComponent(viewbox)}`
-    );
-    const data = await r.json();
-    const results = data.results || [];
-    if (!results.length) {
-      input.classList.add("bad");
-      setStatus(`No place found for “${raw}”.`, "err");
-      return;
-    }
-    setStatus("");
-    if (results.length === 1) {
-      gotoHit(results[0]); // unambiguous — jump straight through
-    } else {
-      renderGotoResults(results); // ambiguous — let the user pick the right one
-    }
-  } catch {
-    input.classList.add("bad");
-    setStatus("Geocoding failed — check the connection.", "err");
-  } finally {
-    input.classList.remove("loading");
-  }
-}
-
 // Jump the map to one geocode hit: fit its extent if it has a bbox, else a
 // fixed zoom. Drops the cyan goto marker labeled with the full place name.
 function gotoHit(hit) {
@@ -802,34 +752,6 @@ function gotoHit(hit) {
   }
   dropGotoMarker(hit.lat, hit.lon, hit.display_name || "", null);
   if (isMobile()) setNav(false); // reveal the map after picking
-}
-
-// Render the candidate list under the search box so an ambiguous query
-// ("Needles Highway" — SD vs CA) can be disambiguated by its full label.
-function renderGotoResults(results) {
-  const host = $("goto-results");
-  host.innerHTML = "";
-  for (const hit of results) {
-    const item = document.createElement("button");
-    item.type = "button";
-    item.className = "goto-result";
-    item.textContent =
-      hit.display_name || `${hit.lat.toFixed(4)}, ${hit.lon.toFixed(4)}`;
-    item.title = item.textContent;
-    item.onclick = () => {
-      clearGotoResults();
-      gotoHit(hit);
-    };
-    host.appendChild(item);
-  }
-  host.hidden = false;
-}
-
-function clearGotoResults() {
-  const host = $("goto-results");
-  if (!host) return;
-  host.innerHTML = "";
-  host.hidden = true;
 }
 
 function dropGotoMarker(lat, lon, label, zoom) {
@@ -1555,6 +1477,7 @@ function wireExplore() {
   input.addEventListener("focus", openForestMenu);
   input.addEventListener("input", () => {
     $("fbar-clear").hidden = !input.value;
+    _fbarPlaces = null; // the query changed — drop any cached geocode results
     openForestMenu();
   });
   input.addEventListener("keydown", (e) => {
@@ -1622,17 +1545,39 @@ function fbarRowHtml(f, pinned) {
   );
 }
 
-// Render the forest-bar dropdown: Recent & pinned + Nearby when idle, a
-// name-filtered (nearby-sorted) list while typing.
+// General map search (geocode + coords) is folded into the forest bar as a
+// forest-FIRST omnibox: forests stay the primary, durable result and are never
+// displaced; coordinates and geocoded places live in their own sections so the
+// forest typeahead isn't muddied. Picking a forest ENTERS it (context); picking
+// a coord/place just PANS the map (transient navigation). _fbarPlaces caches the
+// last on-demand geocode for the current query (display-only — TLC-3).
+let _fbarPlaces = null; // { q, results } | null
+let _fbarSearching = false;
+
+// Render the forest-bar dropdown. Idle: Recent & pinned + Nearby. Typing:
+// [Coordinates] (if it parses as lat,lon) + [Forests] (typeahead) + [Places]
+// (an opt-in "Search the map" row that fetches Nominatim on click).
 const FBAR_NEARBY_MAX = 8;
 function renderForestMenu() {
   const menu = $("fbar-menu");
   if (!menu) return;
-  const q = ($("fbar-input").value || "").trim().toLowerCase();
+  const raw = ($("fbar-input").value || "").trim();
+  const q = raw.toLowerCase();
   const byKey = new Map(forestsAll.map((f) => [_forestKey(f), f]));
   let html = "";
 
-  if (!q) {
+  // 1. Coordinates — a pasted "lat, lon" gets an instant, no-network Go-to row.
+  const ll = raw ? parseLatLon(raw) : null;
+  if (ll) {
+    html +=
+      `<div class="fbar-group-h">Coordinates</div>` +
+      `<button class="fbar-row" data-action="coord" data-lat="${ll[0]}" data-lon="${ll[1]}">` +
+      `<div class="fbar-row-main"><div class="fbar-row-name">📍 Go to ${ll[0].toFixed(5)}, ${ll[1].toFixed(5)}</div>` +
+      `<div class="fbar-row-sub">jump the map here</div></div></button>`;
+  }
+
+  // 2. Forests — the durable result; always first, never displaced by places.
+  if (!raw) {
     const seen = new Set();
     const featured = [];
     for (const k of [...forestMarks.pinned, ...forestMarks.recent]) {
@@ -1658,23 +1603,133 @@ function renderForestMenu() {
     const list = forestsAll
       .filter((f) => f.name.toLowerCase().includes(q))
       .sort((a, b) => _forestDist(a) - _forestDist(b));
-    html = list.length
-      ? list.map((f) => fbarRowHtml(f, isForestPinned(f))).join("")
-      : `<div class="fbar-empty">No forests match “${esc(q)}”.</div>`;
+    if (list.length) {
+      html +=
+        `<div class="fbar-group-h">Forests</div>` +
+        list.map((f) => fbarRowHtml(f, isForestPinned(f))).join("");
+    } else if (!ll) {
+      html += `<div class="fbar-empty">No forests match “${esc(raw)}”.</div>`;
+    }
   }
-  menu.innerHTML = html || `<div class="fbar-empty">No forests loaded.</div>`;
 
+  // 3. Places — opt-in geocode for a text query (skipped for pure coords).
+  if (raw && !ll) {
+    if (_fbarPlaces && _fbarPlaces.q === q) {
+      html += `<div class="fbar-group-h">Places</div>`;
+      html += _fbarPlaces.results.length
+        ? _fbarPlaces.results
+            .map(
+              (h, i) =>
+                `<button class="fbar-row" data-action="place" data-idx="${i}">` +
+                `<div class="fbar-row-main"><div class="fbar-row-name">📍 ${esc(_placeName(h))}</div>` +
+                `<div class="fbar-row-sub">${esc(_placeCtx(h))}</div></div></button>`
+            )
+            .join("")
+        : `<div class="fbar-empty">No places found for “${esc(raw)}”.</div>`;
+    } else if (_fbarSearching) {
+      html += `<div class="fbar-group-h">Places</div><div class="fbar-empty">Searching…</div>`;
+    } else {
+      html +=
+        `<button class="fbar-row fbar-search" data-action="search">` +
+        `<div class="fbar-row-main"><div class="fbar-row-name">🔍 Search the map for “${esc(raw)}”</div></div></button>`;
+    }
+  }
+
+  menu.innerHTML = html || `<div class="fbar-empty">No forests loaded.</div>`;
   menu.querySelectorAll(".fbar-row").forEach((row) => {
-    row.onclick = () => {
-      const f = byKey.get(row.dataset.key);
-      if (!f) return;
-      $("fbar-input").value = "";
-      $("fbar-clear").hidden = true;
-      $("fbar-input").blur();
-      closeForestMenu();
-      enterForest(f);
+    // Stop the click bubbling to the document outside-click handler: the
+    // "Search the map" row re-renders the menu synchronously (→ "Searching…"),
+    // which detaches this row mid-click; the bubbled click would then look like
+    // an outside click (forest-bar no longer contains the detached target) and
+    // wrongly close the menu before the PLACES results can show.
+    row.onclick = (e) => {
+      e.stopPropagation();
+      _onFbarRow(row, byKey);
     };
   });
+}
+
+// Short label + context for a Nominatim hit ("Tofte, Cook County, Minnesota,…"
+// -> name "Tofte", context "Cook County · Minnesota").
+function _placeName(h) {
+  const dn = h.display_name || `${(+h.lat).toFixed(4)}, ${(+h.lon).toFixed(4)}`;
+  return dn.split(",")[0].trim() || dn;
+}
+function _placeCtx(h) {
+  return (h.display_name || "")
+    .split(",")
+    .slice(1)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 2)
+    .join(" · ");
+}
+
+function _resetFbar() {
+  const input = $("fbar-input");
+  if (input) {
+    input.value = "";
+    input.blur();
+  }
+  if ($("fbar-clear")) $("fbar-clear").hidden = true;
+  _fbarPlaces = null;
+  _fbarSearching = false;
+  closeForestMenu();
+}
+
+function _onFbarRow(row, byKey) {
+  const action = row.dataset.action;
+  if (action === "coord") {
+    const lat = parseFloat(row.dataset.lat);
+    const lon = parseFloat(row.dataset.lon);
+    _resetFbar();
+    dropGotoMarker(lat, lon, `${lat.toFixed(6)}, ${lon.toFixed(6)}`, 15);
+    if (isMobile()) setNav(false);
+  } else if (action === "place") {
+    const hit = _fbarPlaces && _fbarPlaces.results[+row.dataset.idx];
+    if (!hit) return;
+    _resetFbar();
+    gotoHit(hit); // pan/fit + cyan marker (no forest context)
+  } else if (action === "search") {
+    fbarGeocode(); // async; re-renders the Places section
+  } else {
+    const f = byKey.get(row.dataset.key);
+    if (!f) return;
+    _resetFbar();
+    enterForest(f); // forests get the full soft-context treatment
+  }
+}
+
+// On-demand Nominatim search for the current query — fired only when the user
+// clicks "Search the map" (keeps Overpass/Nominatim courtesy, TLC-5). Auto-jumps
+// an unambiguous single hit; otherwise renders the Places section to pick from.
+async function fbarGeocode() {
+  const raw = ($("fbar-input").value || "").trim();
+  if (!raw) return;
+  _fbarSearching = true;
+  _fbarPlaces = null;
+  renderForestMenu(); // show "Searching…"
+  const b = map.getBounds();
+  const viewbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].join(",");
+  let results = [];
+  try {
+    const r = await fetch(
+      `/geocode?q=${encodeURIComponent(raw)}&viewbox=${encodeURIComponent(viewbox)}`
+    );
+    results = (await r.json()).results || [];
+  } catch {
+    results = [];
+  }
+  _fbarSearching = false;
+  // The input may have changed (or cleared) while awaiting — bail if so.
+  if (($("fbar-input").value || "").trim() !== raw) return;
+  if (results.length === 1) {
+    _resetFbar();
+    gotoHit(results[0]);
+    return;
+  }
+  _fbarPlaces = { q: raw.toLowerCase(), results };
+  openForestMenu(); // ensure the dropdown is shown to reveal the PLACES results
 }
 
 async function enterForest(f) {

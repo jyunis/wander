@@ -186,11 +186,6 @@
               <button id="use-view" class="btn ghost">Use current view</button>
             </div>
             <div id="bbox-readout" class="hint">No area selected.</div>
-            <div class="row goto-row">
-              <input id="goto-input" type="text" placeholder="place name or lat, lon — e.g. Chippewa National Forest" />
-              <button id="goto-btn" class="btn ghost">Go</button>
-            </div>
-            <div id="goto-results" class="goto-results" hidden></div>
             <button id="score-btn" class="btn primary" disabled>Score this area</button>
             <div id="status" class="status"></div>
             <div id="provenance" class="provenance"></div>
@@ -214,7 +209,8 @@
       <div id="forest-bar" class="forest-bar">
         <span class="fbar-leaf">🌲</span>
         <input id="fbar-input" class="fbar-input" type="text"
-               placeholder="Find a forest…" autocomplete="off" aria-label="Find a forest" />
+               placeholder="Find a place to camp" autocomplete="off"
+               aria-label="Find a place to camp" />
         <button id="fbar-clear" class="fbar-clear" type="button" aria-label="Clear" hidden>✕</button>
         <div id="fbar-menu" class="fbar-menu" hidden></div>
       </div>

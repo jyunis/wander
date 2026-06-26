@@ -134,18 +134,6 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .btn.active { border-color: var(--accent); color: var(--ink); background: #313942; }
 
 .hint { font-size: 12px; color: var(--muted); margin: 8px 0; }
-.goto-row { margin-top: 6px; }
-.goto-row input { flex: 1; min-width: 0; background: #313942; color: var(--ink);
-  border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; font-size: 12.5px; }
-.goto-row input::placeholder { color: var(--muted); }
-.goto-row input.bad { border-color: #e8786b; }
-.goto-results { margin-top: 6px; border: 1px solid var(--line); border-radius: 7px;
-  overflow: hidden; max-height: 240px; overflow-y: auto; background: #313942; }
-.goto-result { display: block; width: 100%; text-align: left; background: none;
-  color: var(--ink); border: none; border-bottom: 1px solid var(--line);
-  padding: 8px 10px; font-size: 12px; line-height: 1.35; cursor: pointer; }
-.goto-result:last-child { border-bottom: none; }
-.goto-result:hover { background: var(--accent); color: var(--accent-ink); }
 .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .preset { font-size: 12px; padding: 4px 9px; border-radius: 12px;
           background: #313942; border: 1px solid var(--line); color: var(--muted); cursor: pointer; }
@@ -473,7 +461,6 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
    devices keep every text-entry input at 16px so Safari never zooms; desktop
    keeps the compact sizing. (range/checkbox inputs don't trigger it.) */
 @media (pointer: coarse) {
-  .goto-row input,
   .cg-rv input,
   .trip-form input[type="text"],
   .trip-dates input[type="date"],
@@ -780,6 +767,9 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
   text-overflow: ellipsis; }
 .fbar-row-sub { font-size: 11px; color: var(--muted); }
 .fbar-empty { padding: 12px 10px; color: var(--muted); font-size: 13px; }
+/* The opt-in "Search the map" row reads as a secondary action, not a result. */
+.fbar-row.fbar-search .fbar-row-name { font-weight: 500; color: var(--muted); }
+.fbar-row.fbar-search:hover .fbar-row-name { color: var(--ink); }
 
 /* On-map measure (📏) tool button — mirrors the basemap control's footprint
    so it stacks cleanly under the zoom + basemap controls (top-right). */
