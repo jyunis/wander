@@ -28,15 +28,24 @@ LAYER_TITLES: dict[str, str] = {
     "national_park": "National Park Service",
     "state_forest": "State Forest",
     "state_park": "State Parks",
+    "cell_coverage": "Cell coverage",
 }
 LAYER_ORDER = [
     "campground", "dispersed", "national_forest", "national_park",
-    "state_forest", "state_park", "ownership",
+    "state_forest", "state_park", "ownership", "cell_coverage",
 ]
 
 # Point layers live in `overlay_points` (markers); everything else is a polygon
 # layer in `overlay_features`.
 POINT_LAYERS = {"campground", "dispersed"}
+
+# Layers of small, uniform polygons (cell-coverage hexes) returned WHOLE, not
+# bbox-clipped: clipping every one with ST_Intersection is needless work when the
+# shape is a ~5 km² hex, and a coverage layer must render completely at browse
+# zooms (a capped-out hex falsely reads as "no signal"), so it gets a much higher
+# feature cap than the dense ownership-parcel default.
+NOCLIP_LAYERS = {"cell_coverage"}
+CELL_MAX_FEATURES = 60000
 
 # Layers that exist only to feed a scored-site's bottom-sheet tie-in (served via
 # a dedicated nearest-N endpoint), NOT as a browsable map overlay. `layers()`
@@ -160,6 +169,8 @@ class OverlayStore:
         b = bbox.normalized()
         frame = (b.min_lon, b.min_lat, b.max_lon, b.max_lat)
         is_point = layer in POINT_LAYERS
+        noclip = layer in NOCLIP_LAYERS
+        cap = CELL_MAX_FEATURES if noclip else self._max
         if is_point:
             sql = (
                 "SELECT category, name, url, meta, AsGeoJSON(geom) FROM overlay_points "
@@ -168,7 +179,18 @@ class OverlayStore:
                 "  AND f_geometry_column='geom' AND search_frame=BuildMbr(?, ?, ?, ?, 4326)) "
                 "LIMIT ?"
             )
-            params = (layer, *frame, self._max + 1)
+            params = (layer, *frame, cap + 1)
+        elif noclip:
+            # Small uniform hexes: return whole geometry (no ST_Intersection),
+            # bounded to the view by the R*Tree search frame.
+            sql = (
+                "SELECT category, name, NULL, NULL, AsGeoJSON(geom) "
+                "FROM overlay_features WHERE layer=? AND ROWID IN ("
+                "  SELECT ROWID FROM SpatialIndex WHERE f_table_name='overlay_features' "
+                "  AND f_geometry_column='geom' AND search_frame=BuildMbr(?, ?, ?, ?, 4326)) "
+                "LIMIT ?"
+            )
+            params = (layer, *frame, cap + 1)
         else:
             sql = (
                 "SELECT category, name, NULL, NULL, "
@@ -178,11 +200,11 @@ class OverlayStore:
                 "  AND f_geometry_column='geom' AND search_frame=BuildMbr(?, ?, ?, ?, 4326)) "
                 "LIMIT ?"
             )
-            params = (*frame, layer, *frame, self._max + 1)
+            params = (*frame, layer, *frame, cap + 1)
         rows = await (await self._db.execute(sql, params)).fetchall()
-        truncated = len(rows) > self._max
+        truncated = len(rows) > cap
         features = []
-        for category, name, url, meta, gj in rows[: self._max]:
+        for category, name, url, meta, gj in rows[:cap]:
             if not gj:
                 continue
             props = {"layer": layer, "category": category, "name": name}

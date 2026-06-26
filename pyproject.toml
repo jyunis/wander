@@ -23,6 +23,10 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.5",
     "pre-commit>=3.7",
+    # Used by the cell-coverage overlay loader's hex aggregation + its unit tests
+    # (FCC BDC mobile coverage is published as H3 res-9 hexagons). Loaders also
+    # pull it on the fly via `--with h3`; here so the standard test run has it.
+    "h3>=4.0",
 ]
 
 [project.scripts]

@@ -137,6 +137,19 @@ const CAMPGROUND_COLORS = {
 };
 // Dispersed-site marker tint (a single category; hike-in is dimmed via CSS).
 const DISPERSED_COLOR = "#c2410c";
+// Cell-coverage fill by graded quality (display-only, FCC BDC mobile) — a
+// sequential purple ramp: darker = better. No fill = no reported coverage.
+// Each hex carries a single tier, so the layer is a clean non-overlapping
+// choropleth (white gaps = stay-away-if-you-need-to-be-reachable).
+const CELL_COVERAGE_COLORS = {
+  Fast: "#54278f",
+  Solid: "#807dba",
+  Patchy: "#dadaeb",
+};
+const CELL_COVERAGE_FALLBACK = "#8a8a8a";
+// Below this zoom a whole state's hexes would blow past the feature cap; the
+// truncated-subset hint covers the rest, but we don't fetch below this.
+const CELL_MIN_ZOOM = 7;
 // Below this zoom, ownership parcels are too numerous/tiny to fetch usefully.
 const OWNERSHIP_MIN_ZOOM = 11;
 // Roads are a close-zoom detail: below this they're hidden entirely (a wide
@@ -154,6 +167,14 @@ let mvumOpacity = 0.75;
 const overlayLayers = {}; // id -> L.GeoJSON
 const overlayActive = new Set();
 const overlayTruncated = new Set(); // layers whose last fetch hit the cap
+
+// Shared canvas renderer for the cell-coverage hex layer (thousands of polygons
+// per view — SVG would crawl). Lazily created so it isn't built unless used.
+let _cellCanvas = null;
+function cellCanvas() {
+  if (!_cellCanvas) _cellCanvas = L.canvas({ pane: "land", padding: 0.3 });
+  return _cellCanvas;
+}
 
 // Land layers whose polygons are tap-to-discover: tap one -> highlight the whole
 // named shape (all disjoint parts) + zoom to fit. Ownership parcels are excluded
@@ -1870,8 +1891,14 @@ function refreshActiveOverlays() {
 }
 
 async function fetchOverlay(layerId) {
-  // Ownership parcels are too dense to fetch when zoomed out.
-  if (layerId === "ownership" && map.getZoom() < OWNERSHIP_MIN_ZOOM) {
+  // Ownership parcels (and cell-coverage hexes) are too dense to fetch zoomed out.
+  const minZoom =
+    layerId === "ownership"
+      ? OWNERSHIP_MIN_ZOOM
+      : layerId === "cell_coverage"
+        ? CELL_MIN_ZOOM
+        : 0;
+  if (minZoom && map.getZoom() < minZoom) {
     if (overlayLayers[layerId]) {
       map.removeLayer(overlayLayers[layerId]);
       delete overlayLayers[layerId];
@@ -1890,6 +1917,7 @@ async function fetchOverlay(layerId) {
   if (gj.truncated) overlayTruncated.add(layerId);
   else overlayTruncated.delete(layerId);
   renderOverlayLayer(layerId, gj);
+  updateLandHint(); // reflect the resolved truncation/zoom state (fetch is async)
 }
 
 let campgroundGj = null; // last fetched campground FeatureCollection (for re-filtering)
@@ -1902,6 +1930,9 @@ function renderOverlayLayer(layerId, gj) {
   const isDispersed = layerId === "dispersed";
   const gjLayer = L.geoJSON(gj, {
     pane: "land",
+    // Coverage is thousands of hexes per view — draw them on a canvas (one
+    // bitmap) instead of thousands of SVG paths, which would crawl on pan/zoom.
+    renderer: layerId === "cell_coverage" ? cellCanvas() : undefined,
     filter: isPoint
       ? (feat) =>
           isDispersed
@@ -2305,6 +2336,12 @@ function overlayStyle(layerId, feat) {
     const c = OWNERSHIP_COLORS[(feat.properties || {}).category] || OWNERSHIP_FALLBACK;
     return { color: c, weight: 1, fillColor: c, fillOpacity: 0.35 };
   }
+  if (layerId === "cell_coverage") {
+    const c = CELL_COVERAGE_COLORS[(feat.properties || {}).category] || CELL_COVERAGE_FALLBACK;
+    // Borderless fills; tiers don't overlap, so a firmer opacity reads cleanly
+    // over the basemap while gaps (no coverage) stay visibly empty.
+    return { color: c, weight: 0, fillColor: c, fillOpacity: 0.5 };
+  }
   const c = BOUNDARY_COLORS[layerId] || "#555";
   return { color: c, weight: 2, fillColor: c, fillOpacity: 0.08 };
 }
@@ -2324,14 +2361,29 @@ function renderLandLegend() {
   if (overlayActive.has("ownership")) addKeys(OWNERSHIP_COLORS, false);
   if (overlayActive.has("campground")) addKeys(CAMPGROUND_COLORS, true);
   if (overlayActive.has("dispersed")) addKeys({ "Dispersed site 🔥": DISPERSED_COLOR }, true);
+  if (overlayActive.has("cell_coverage")) {
+    addKeys(
+      {
+        "Fast (5G)": CELL_COVERAGE_COLORS.Fast,
+        Solid: CELL_COVERAGE_COLORS.Solid,
+        Patchy: CELL_COVERAGE_COLORS.Patchy,
+      },
+      false,
+    );
+  }
 }
 
 function updateLandHint() {
   const hint = $("land-hint");
   if (overlayActive.has("ownership") && map.getZoom() < OWNERSHIP_MIN_ZOOM) {
     hint.textContent = "Zoom in to load ownership parcels.";
+  } else if (overlayActive.has("cell_coverage") && map.getZoom() < CELL_MIN_ZOOM) {
+    hint.textContent = "Zoom in to load cell coverage.";
   } else if (overlayTruncated.size) {
     hint.textContent = "Showing a capped subset — zoom in for full detail.";
+  } else if (overlayActive.has("cell_coverage")) {
+    hint.textContent =
+      "T-Mobile coverage quality — darker = better, gaps = none. Carrier-reported, often optimistic.";
   } else {
     hint.textContent = "";
   }
