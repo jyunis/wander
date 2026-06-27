@@ -271,6 +271,12 @@ async function init() {
       if (_roadsGj) renderRoads(_roadsGj); // recolor in place — no refetch
     };
   }
+  if ($("layer-roads-mud-wx")) {
+    $("layer-roads-mud-wx").onchange = () => {
+      syncRoadsSubmode();
+      if (_roadsGj) renderRoads(_roadsGj); // re-shade by today's wetness — no refetch
+    };
+  }
   $("saved-layer-coll").onchange = renderSavedMarkers; // re-filter the saved layer
   $("min-score").oninput = (e) => {
     minScore = parseFloat(e.target.value);
@@ -1135,26 +1141,51 @@ function mudColor(tier) {
   return MUD_COLORS[tier] || "#8a8a8a"; // unbaked / no soil coverage -> muted gray
 }
 
+// P3a — dynamic recolor: shift a road's STATIC tier by the entered forest's
+// recent wetness (the P2 banner's label) so mud mode can answer "bad TODAY,"
+// not just "bad when wet." Ordinal + clamped: wet weather bumps a road toward
+// Soft, a dry spell eases it (clay is hard when dry). Coarse on purpose — the
+// static side is 3 buckets and wetness is forest-level — and display-only
+// (TLC-3): the live wetness never touches the baked tier or scoring.
+const MUD_TIER_ORDER = ["Firm", "Variable", "Soft"];
+const MUD_WET_SHIFT = { dry: -1, damp: 0, wet: 1, saturated: 2 };
+let _forestWetness = null; // current entered forest's wetness label, or null
+
+function weatherAdjustedTier(tier, wetness) {
+  const i = MUD_TIER_ORDER.indexOf(tier);
+  if (i < 0) return tier; // untiered / unknown -> unchanged (renders gray)
+  const shift = MUD_WET_SHIFT[wetness] ?? 0;
+  return MUD_TIER_ORDER[Math.max(0, Math.min(2, i + shift))];
+}
+// Whether road colors are currently weather-adjusted (needs mud mode on, the
+// sub-toggle checked, and a wetness label from an entered forest).
+function roadsWxAdjust() {
+  return roadsMudMode() && !!$("layer-roads-mud-wx")?.checked && !!_forestWetness;
+}
+
 function renderRoads(gj) {
   _roadsGj = gj;
   roadsLayer.clearLayers();
   const mud = roadsMudMode();
+  const wx = mud && roadsWxAdjust(); // recolor by static tier × today's wetness
   (gj.features || []).forEach((f) => {
     const p = f.properties || {};
     const forest = p.forest_road;
     const mv = mvumInfo(p.mvum_access);
+    // The tier actually drawn: weather-adjusted in wx mode, else the static bake.
+    const tier = wx ? weatherAdjustedTier(p.mud_tier, _forestWetness) : p.mud_tier;
     // Color: in mud mode, Firm→green / Variable→amber / Soft→red (gray where no
     // tier is baked). Otherwise: special-designation MVUM purple, forest/MVUM
     // orange, other drivable yellow. Rough → dashed (unchanged) either way.
     const color = mud
-      ? mudColor(p.mud_tier)
+      ? mudColor(tier)
       : mv && mv.special
         ? "#9b59b6"
         : forest
           ? "#ff7a00"
           : "#ffd23d";
     // Untiered roads recede in mud mode so the graded ones read clearly.
-    const opacity = mud && !p.mud_tier ? 0.22 : 0.4;
+    const opacity = mud && !tier ? 0.22 : 0.4;
     const w = roadWeight(forest);
     const label = p.ref ? `FR ${p.ref}` : p.name || "Road";
     // Visible line — non-interactive; the fat transparent hit line below catches
@@ -1290,8 +1321,17 @@ function roadPopup(p, mv, label) {
     rows.push(esc(mv.klass) + (mv.season ? ` · <b>${esc(mv.season)}</b>` : ""));
   }
   if (p.surface) rows.push("surface: " + esc(p.surface));
-  if (p.mud_tier)
+  if (p.mud_tier) {
     rows.push(`mud <i>when wet</i>: <b>${esc(p.mud_tier)}</b> <span class="mud-pop-note">(static)</span>`);
+    // P3a: when colors are weather-adjusted, show the live "today" tier too.
+    if (roadsWxAdjust()) {
+      const today = weatherAdjustedTier(p.mud_tier, _forestWetness);
+      rows.push(
+        `mud <i>today</i>: <b>${esc(today)}</b> ` +
+          `<span class="mud-pop-note">(${esc(_forestWetness)} forest)</span>`
+      );
+    }
+  }
   if (p.rough) rows.push("⚠ rough / high-clearance");
   // The MVUM tells you a road is open to DRIVING; dispersed-camping designation
   // (corridor + dates) lives only on the MVUM/Avenza — nudge the user there.
@@ -1445,6 +1485,20 @@ function syncRoadsSubmode() {
   const roadLeg = document.querySelector(".roads-legend");
   if (mudLeg) mudLeg.hidden = !mudOn;
   if (roadLeg) roadLeg.hidden = mudOn;
+  // The "× today's rain" sub-toggle needs mud mode on AND a forest wetness
+  // label (from the entered forest's precip banner) to mean anything.
+  const wxBox = $("layer-roads-mud-wx");
+  const wxLabel = $("roads-mud-wx-label");
+  const wxUsable = mudOn && !!_forestWetness;
+  if (wxBox) wxBox.disabled = !wxUsable;
+  if (wxLabel) wxLabel.classList.toggle("disabled", !wxUsable);
+  // Legend note flips between the static disclaimer and the weather-adjusted one.
+  const note = mudLeg ? mudLeg.querySelector(".mud-note") : null;
+  if (note) {
+    note.textContent = roadsWxAdjust()
+      ? `× today's rain — ${_forestWetness} (forest-level estimate)`
+      : "static — soil / slope / surface, not today's weather";
+  }
 }
 
 function toggleLayer(layer, on) {
@@ -1815,8 +1869,11 @@ let _precipForestKey = null;
 
 function hidePrecipBanner() {
   _precipForestKey = null;
+  _forestWetness = null; // leaving the forest drops the wetness used for recolor
   const b = $("precip-banner");
   if (b) { b.hidden = true; b.innerHTML = ""; b.className = "precip-banner"; }
+  syncRoadsSubmode(); // disable "× today's rain" + restore the static legend note
+  if (roadsMudMode() && $("layer-roads-mud-wx")?.checked && _roadsGj) renderRoads(_roadsGj);
 }
 
 async function loadPrecipForForest(f) {
@@ -1855,6 +1912,10 @@ function renderPrecipBanner(s) {
     `<span class="precip-amt">${inches} in / 72h</span>` +
     `<span class="precip-label">${esc(s.label)}</span>` +
     (s.season_note ? `<span class="precip-note">${esc(s.season_note)}</span>` : "");
+  // This wetness drives the optional "× today's rain" road recolor (P3a).
+  _forestWetness = s.label || null;
+  syncRoadsSubmode(); // enable the sub-toggle + refresh the legend note
+  if (roadsMudMode() && $("layer-roads-mud-wx")?.checked && _roadsGj) renderRoads(_roadsGj);
 }
 
 function exitForestDetail() {
