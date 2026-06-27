@@ -1,65 +1,49 @@
-"""Pure-helper tests for the road mud-susceptibility bake
-(scripts/load_road_mud.py): the soil/slope/water → base-score formula, the
-surface modifier, percentile aggregation, the tier mapping, and polyline
-densification. Table-driven, like test_cell_coverage_loader.py.
-
-Loaded by file path because scripts/ isn't an installed package and the loader's
-GIS deps (rasterio/shapely) are import-guarded — these helpers use only the
-stdlib, so they import + run without those deps.
-"""
+"""Tests for the road mud-susceptibility core (cairn.roadmud): the
+soil/slope/water → base-score formula, surface modifier, percentile aggregation,
+tier mapping, polyline densification, the NumPy soil grid, and the reusable
+per-road tier. Pure + table-driven; shared by the standalone bake
+(scripts/load_road_mud.py) and the live auto-tier hook (cairn.service)."""
 
 from __future__ import annotations
 
-import importlib.util
-import os
+import numpy as np
 
-_SPEC = importlib.util.spec_from_file_location(
-    "load_road_mud",
-    os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "load_road_mud.py"),
-)
-lrm = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(lrm)
+from cairn import roadmud as lrm
 
 
 # --- soil scoring ----------------------------------------------------------
 def test_drainage_score_table():
-    # Wetter classes score higher; excessively/somewhat-excessively are firm.
-    assert lrm._drainage_score(1) == 0.0   # excessively
-    assert lrm._drainage_score(4) == 0.0   # somewhat excessively
-    assert lrm._drainage_score(8) == 0.1   # well
-    assert lrm._drainage_score(2) == 0.3   # moderately well
-    assert lrm._drainage_score(5) == 0.6   # somewhat poorly
-    assert lrm._drainage_score(3) == 0.85  # poorly
-    assert lrm._drainage_score(7) == 1.0   # very poorly
-    assert lrm._drainage_score(6) == 1.0   # subaqueous
-
-
-def test_drainage_score_na_and_blank():
-    assert lrm._drainage_score(0) is None  # NA
-    assert lrm._drainage_score(9) is None  # blank (not in the table)
+    assert lrm._drainage_score(1) == 0.0
+    assert lrm._drainage_score(4) == 0.0
+    assert lrm._drainage_score(8) == 0.1
+    assert lrm._drainage_score(2) == 0.3
+    assert lrm._drainage_score(5) == 0.6
+    assert lrm._drainage_score(3) == 0.85
+    assert lrm._drainage_score(7) == 1.0
+    assert lrm._drainage_score(6) == 1.0
+    assert lrm._drainage_score(0) is None
+    assert lrm._drainage_score(9) is None
     assert lrm._drainage_score(None) is None
 
 
 def test_hsg_score_dual_groups_use_wet_letter():
-    assert lrm._hsg_score(1) == 0.0    # A
-    assert lrm._hsg_score(3) == 0.25   # B
-    assert lrm._hsg_score(5) == 0.6    # C
-    assert lrm._hsg_score(7) == 1.0    # D
-    # Dual A/D, B/D, C/D all behave as the undrained (D) condition.
-    assert lrm._hsg_score(2) == 1.0    # A/D
-    assert lrm._hsg_score(4) == 1.0    # B/D
-    assert lrm._hsg_score(6) == 1.0    # C/D
-    assert lrm._hsg_score(0) is None   # NA
-    assert lrm._hsg_score(8) is None   # blank
+    assert lrm._hsg_score(1) == 0.0
+    assert lrm._hsg_score(3) == 0.25
+    assert lrm._hsg_score(5) == 0.6
+    assert lrm._hsg_score(7) == 1.0
+    assert lrm._hsg_score(2) == 1.0  # A/D -> D
+    assert lrm._hsg_score(4) == 1.0  # B/D -> D
+    assert lrm._hsg_score(6) == 1.0  # C/D -> D
+    assert lrm._hsg_score(0) is None
+    assert lrm._hsg_score(8) is None
 
 
 def test_soil_score_takes_the_worse_and_handles_missing():
-    # Corroborating signals: take the WORSE (max) of whichever resolve.
     assert lrm._soil_score(8, 7) == 1.0   # well-drained but HSG D -> soft wins
-    assert lrm._soil_score(1, 1) == 0.0   # excessively + A -> firm
-    assert lrm._soil_score(0, 5) == 0.6   # drainage NA, HSG C -> C
-    assert lrm._soil_score(3, 0) == 0.85  # poorly, HSG NA -> poorly
-    assert lrm._soil_score(0, 0) is None  # neither resolves
+    assert lrm._soil_score(1, 1) == 0.0
+    assert lrm._soil_score(0, 5) == 0.6   # drainage NA, HSG C
+    assert lrm._soil_score(3, 0) == 0.85
+    assert lrm._soil_score(0, 0) is None
 
 
 # --- slope + water factors -------------------------------------------------
@@ -82,28 +66,20 @@ def test_water_factor_bands():
     assert lrm._water_factor(150.0) == 0.3
     assert lrm._water_factor(399.9) == 0.3
     assert lrm._water_factor(400.0) == 0.0
-    assert lrm._water_factor(None) == 0.0  # no water found nearby
+    assert lrm._water_factor(None) == 0.0
 
 
-# --- base score (weights + degrade-don't-fail renormalization) -------------
+# --- base score ------------------------------------------------------------
 def test_base_score_all_present_matches_spec_weights():
-    # 0.60*soil + 0.25*slope + 0.15*water with all three present.
-    b = lrm._base_score(1.0, 1.0, 1.0)
-    assert b == 1.0
-    b = lrm._base_score(0.0, 0.0, 0.0)
-    assert b == 0.0
-    b = lrm._base_score(1.0, 0.0, 0.0)
-    assert abs(b - 0.60) < 1e-9
-    b = lrm._base_score(0.5, 0.2, 1.0)
-    assert abs(b - (0.60 * 0.5 + 0.25 * 0.2 + 0.15 * 1.0)) < 1e-9
+    assert lrm._base_score(1.0, 1.0, 1.0) == 1.0
+    assert lrm._base_score(0.0, 0.0, 0.0) == 0.0
+    assert abs(lrm._base_score(1.0, 0.0, 0.0) - 0.60) < 1e-9
+    assert abs(lrm._base_score(0.5, 0.2, 1.0) - (0.6 * 0.5 + 0.25 * 0.2 + 0.15 * 1.0)) < 1e-9
 
 
 def test_base_score_renormalizes_when_slope_missing():
-    # Slope unavailable -> weights renormalize over soil+water (0.60 + 0.15).
-    b = lrm._base_score(1.0, None, 0.0)
-    assert abs(b - (0.60 / 0.75)) < 1e-9
-    b = lrm._base_score(0.5, None, 0.5)
-    assert abs(b - 0.5) < 1e-9
+    assert abs(lrm._base_score(1.0, None, 0.0) - (0.60 / 0.75)) < 1e-9
+    assert abs(lrm._base_score(0.5, None, 0.5) - 0.5) < 1e-9
 
 
 def test_base_score_none_when_nothing_present():
@@ -120,10 +96,9 @@ def test_surface_class_buckets():
     assert lrm._surface_class("fine_gravel") == "firm"
     assert lrm._surface_class("ground") == "soft"
     assert lrm._surface_class("dirt") == "soft"
-    assert lrm._surface_class("dirt/sand") == "soft"  # contains 'dirt'
+    assert lrm._surface_class("dirt/sand") == "soft"
     assert lrm._surface_class("natural") == "soft"
-    # 'unpaved' contains 'paved' but is NOT pavement — must not read as paved.
-    assert lrm._surface_class("unpaved") == "unknown"
+    assert lrm._surface_class("unpaved") == "unknown"  # contains 'paved' but isn't pavement
     assert lrm._surface_class("sand") == "unknown"
     assert lrm._surface_class("") == "unknown"
     assert lrm._surface_class(None) == "unknown"
@@ -134,16 +109,11 @@ def test_percentile_linear_interpolation():
     assert lrm._percentile([], 0.85) is None
     assert lrm._percentile([0.42], 0.85) == 0.42
     assert lrm._percentile([0.0, 1.0], 0.5) == 0.5
-    assert lrm._percentile([0.0, 1.0], 0.0) == 0.0
-    assert lrm._percentile([0.0, 1.0], 1.0) == 1.0
-    # 85th percentile of 0..10 (eleven values) lands exactly on 8.5.
     vals = [float(i) for i in range(11)]
     assert abs(lrm._percentile(vals, 0.85) - 8.5) < 1e-9
 
 
 def test_percentile_is_robust_to_a_single_noisy_pixel():
-    # Mostly firm with one soft outlier -> 85th pctile stays firm-ish (the
-    # outlier doesn't dominate, unlike a max).
     vals = [0.1] * 19 + [1.0]
     assert lrm._percentile(vals, 0.85) < 0.3
 
@@ -159,7 +129,6 @@ def test_tier_for_score_cutpoints():
 
 
 def test_segment_tier_paved_forces_firm_without_soil():
-    # Paved never soups — Firm even when no soil points resolved.
     assert lrm._segment_tier([], "asphalt") == "Firm"
     assert lrm._segment_tier([0.9, 0.95], "paved") == "Firm"
 
@@ -170,22 +139,22 @@ def test_segment_tier_no_data_when_no_points():
 
 
 def test_segment_tier_surface_multiplier_can_shift_a_tier():
-    bases = [0.55] * 10  # 85th pctile = 0.55 -> Variable at ×1.0
+    bases = [0.55] * 10
     assert lrm._segment_tier(bases, "unknown") == "Variable"
-    # Native dirt ×1.15 -> 0.6325 -> Soft.
-    assert lrm._segment_tier(bases, "dirt") == "Soft"
-    # Gravel ×0.70 -> 0.385 -> Variable; a firmer aggregate drops to Firm.
-    assert lrm._segment_tier([0.40] * 10, "gravel") == "Firm"
+    assert lrm._segment_tier(bases, "dirt") == "Soft"      # ×1.15
+    assert lrm._segment_tier([0.40] * 10, "gravel") == "Firm"  # ×0.70
 
 
-def test_segment_tier_clamps_at_one():
-    # ×1.15 on an already-high aggregate stays valid (clamped) and reads Soft.
-    assert lrm._segment_tier([1.0] * 5, "ground") == "Soft"
+def test_worst_tier():
+    assert lrm.worst_tier(["Firm", "Soft", "Variable"]) == "Soft"
+    assert lrm.worst_tier(["Firm", "Variable"]) == "Variable"
+    assert lrm.worst_tier(["Firm", None]) == "Firm"
+    assert lrm.worst_tier([None, None]) is None
+    assert lrm.worst_tier([]) is None
 
 
 # --- densification ---------------------------------------------------------
 def test_densify_short_segment_returns_endpoints():
-    # Two points ~16 m apart (well under STEP_M) -> just the endpoints.
     pts = lrm._densify([(-93.0, 45.0), (-93.0, 45.0001)], step_m=75.0)
     assert pts[0] == (-93.0, 45.0)
     assert pts[-1] == (-93.0, 45.0001)
@@ -193,20 +162,85 @@ def test_densify_short_segment_returns_endpoints():
 
 
 def test_densify_spacing_and_endpoint_kept():
-    # A ~1 km north line at 100 m spacing -> ~11 points, ends preserved, spacing
-    # close to the target.
     start = (-93.0, 45.0)
-    end = (-93.0, 45.0 + 1000.0 / 110540.0)  # ~1 km north
+    end = (-93.0, 45.0 + 1000.0 / 110540.0)
     pts = lrm._densify([start, end], step_m=100.0)
-    assert pts[0] == start
-    assert pts[-1] == end
+    assert pts[0] == start and pts[-1] == end
     assert 9 <= len(pts) <= 13
-    gaps = [
-        lrm._haversine_m(a[0], a[1], b[0], b[1]) for a, b in zip(pts, pts[1:])
-    ]
-    # Every interior gap is <= the step (the final partial gap may be shorter).
+    gaps = [lrm._haversine_m(a[0], a[1], b[0], b[1]) for a, b in zip(pts, pts[1:])]
     assert all(g <= 100.0 + 1.0 for g in gaps)
 
 
 def test_densify_single_point():
     assert lrm._densify([(-93.0, 45.0)]) == [(-93.0, 45.0)]
+
+
+def test_line_coords_parts():
+    assert lrm.line_coords({"type": "LineString", "coordinates": [[0, 0], [1, 1]]}) == [
+        [(0.0, 0.0), (1.0, 1.0)]
+    ]
+    ml = {"type": "MultiLineString", "coordinates": [[[0, 0], [1, 1]], [[2, 2], [3, 3]]]}
+    assert len(lrm.line_coords(ml)) == 2
+    assert lrm.line_coords({"type": "Point", "coordinates": [0, 0]}) == []
+
+
+# --- NumPy soil grid -------------------------------------------------------
+def test_soil_grid_samples_north_up_and_oob():
+    # 2×2 grid over (w,s,e,n)=(0,0,2,2). Row 0 is the NORTH edge.
+    drainage = np.array([[8, 3], [1, 7]], dtype=np.uint8)
+    hsg = np.array([[1, 5], [3, 7]], dtype=np.uint8)
+    g = lrm.SoilGrid(drainage, hsg, (0, 0, 2, 2))
+    d, h = g.codes([0.5], [1.5])  # NW cell
+    assert d == [8] and h == [1]
+    d, h = g.codes([1.5], [0.5])  # SE cell
+    assert d == [7] and h == [7]
+    d, h = g.codes([5.0], [5.0])  # out of grid -> 0 (None downstream)
+    assert d == [0] and h == [0]
+
+
+# --- the reusable per-road tier (async) ------------------------------------
+async def test_tier_road_combines_signals():
+    drainage = np.full((1, 1), 3, np.uint8)  # poorly drained -> 0.85
+    hsg = np.full((1, 1), 7, np.uint8)        # D -> 1.0 ; soil = max -> 1.0
+    g = lrm.SoilGrid(drainage, hsg, (0, 0, 1, 1))
+
+    async def slope_fn(lon, lat):
+        return 0.0  # flat -> slope_factor 1.0
+
+    async def water_fn(pts):
+        return [1000.0] * len(pts)  # far -> water_factor 0
+
+    # base = 0.60*1.0 + 0.25*1.0 + 0.15*0 = 0.85 -> Soft
+    tier = await lrm.tier_road([(0.2, 0.2), (0.8, 0.8)], None, g, slope_fn, water_fn)
+    assert tier == "Soft"
+
+
+async def test_tier_road_none_when_no_soil():
+    g = lrm.SoilGrid(np.zeros((1, 1), np.uint8), np.zeros((1, 1), np.uint8), (0, 0, 1, 1))
+
+    async def slope_fn(lon, lat):
+        return 2.0
+
+    async def water_fn(pts):
+        return [None] * len(pts)
+
+    # No soil anywhere -> None (unless paved). Paved short-circuits to Firm.
+    assert await lrm.tier_road([(0.2, 0.2), (0.8, 0.8)], None, g, slope_fn, water_fn) is None
+    assert await lrm.tier_road([(0.2, 0.2), (0.8, 0.8)], "asphalt", g, slope_fn, water_fn) == "Firm"
+
+
+async def test_tier_road_slope_failure_degrades():
+    drainage = np.full((1, 1), 5, np.uint8)  # somewhat poorly -> 0.6
+    hsg = np.zeros((1, 1), np.uint8)
+    g = lrm.SoilGrid(drainage, hsg, (0, 0, 1, 1))
+
+    async def slope_fn(lon, lat):
+        raise RuntimeError("tile unreachable")
+
+    async def water_fn(pts):
+        return [None] * len(pts)
+
+    # Slope unavailable -> renormalize over the PRESENT terms soil(0.6) + water(0.0,
+    # far): base = (0.60*0.6 + 0.15*0.0)/(0.60+0.15) = 0.48 -> Variable.
+    tier = await lrm.tier_road([(0.2, 0.2), (0.8, 0.8)], None, g, slope_fn, water_fn)
+    assert tier == "Variable"

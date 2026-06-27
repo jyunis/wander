@@ -51,6 +51,7 @@ from cairn.errors import (
 )
 from cairn.export import trip_slug, trip_to_gpx, trip_to_kml
 from cairn.logging import configure
+from cairn.roadmud import SOIL_GRID_FILENAME, SoilGrid
 from cairn.service import RunService
 from cairn.store import Store
 from cairn.store.overlays import DISCLAIMER as OVERLAY_DISCLAIMER
@@ -97,6 +98,9 @@ async def lifespan(app: FastAPI):
     usedirect = UseDirectClient(settings) if settings.usedirect_enabled else None
     usedirect_map = _load_usedirect_map() if settings.usedirect_enabled else {}
     precip = PrecipClient(settings) if settings.precip_enabled else None
+    # Road mud-susceptibility soil grid (display-only, TLC-3): enables the live
+    # post-score auto-tier. Absent until the bake builds it -> auto-tier off.
+    soil_grid = SoilGrid.load(str(settings.data_dir / "issr800" / SOIL_GRID_FILENAME))
     app.state.settings = settings
     app.state.store = store
     app.state.overlays = overlays
@@ -109,11 +113,12 @@ async def lifespan(app: FastAPI):
     app.state.usedirect_map = usedirect_map
     app.state.precip = precip
     app.state.service = RunService(
-        store, settings, overpass=overpass, mvum=mvum, structures=structures
+        store, settings, overpass=overpass, mvum=mvum, structures=structures,
+        soil_grid=soil_grid,
     )
     log.info(
         "cairn %s ready on %s:%s "
-        "(mvum=%s structures=%s overlays=%s availability=%s usedirect=%s/%d)",
+        "(mvum=%s structures=%s overlays=%s availability=%s usedirect=%s/%d mud_autotier=%s)",
         __version__,
         settings.host,
         settings.port,
@@ -123,6 +128,7 @@ async def lifespan(app: FastAPI):
         "on" if availability else "off",
         "on" if usedirect else "off",
         len(usedirect_map),
+        "on" if soil_grid else "off",
     )
     try:
         yield

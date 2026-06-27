@@ -9,6 +9,8 @@ the TLC-1 purity rule constrains only the engine's scoring/normalization.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import time
 
@@ -33,6 +35,8 @@ from cairn.errors import (
 from cairn.ingest.mvum import ingest_mvum
 from cairn.ingest.osm import ingest_osm
 from cairn.ingest.usa_structures import ingest_structures
+from cairn.roadmud import _segment_tier as segment_tier
+from cairn.roadmud import line_coords, tier_road, worst_tier
 from cairn.store import Store
 from cairn.store.types import Bbox
 
@@ -63,6 +67,7 @@ class RunService:
         terrain_factory=TerrainSampler,
         mvum=None,
         structures=None,
+        soil_grid=None,
     ) -> None:
         self._store = store
         self._s = settings
@@ -70,6 +75,12 @@ class RunService:
         self._terrain_factory = terrain_factory
         self._mvum = mvum  # USFS forest roads; None => OSM-only
         self._structures = structures  # USA Structures buildings; None => OSM-only
+        # Road mud-susceptibility auto-tier (display-only, TLC-3): a SoilGrid (or
+        # None to disable) + a lock so overlapping scores don't run dup passes,
+        # and a set holding the fire-and-forget tasks so they aren't GC'd.
+        self._soil_grid = soil_grid
+        self._tier_lock = asyncio.Lock()
+        self._tier_tasks: set = set()
 
     async def score_view(
         self, bbox: Bbox, weights: dict[str, float],
@@ -100,7 +111,12 @@ class RunService:
             run = await self._store.get_run(run_id)
             if run.status != "done":
                 raise RunFailed(run.failure_reason or "scoring failed")
-            return await self._store.get_run_geojson(run_id)
+            result = await self._store.get_run_geojson(run_id)
+            # Display-only follow-up (TLC-3): tier any roads this score just
+            # ingested so the mud overlay isn't stale until the next full bake.
+            # Fire-and-forget — never blocks or fails the score response.
+            self._schedule_auto_tier(b)
+            return result
         finally:
             await self._store.delete_run(run_id)  # scratch — nothing persists
 
@@ -281,6 +297,68 @@ class RunService:
         except Exception as exc:  # unexpected — still surface, never swallow
             log.exception("run %d crashed", run_id)
             await self._store.fail_run(run_id, f"InternalError: {exc}")
+
+    # --- road mud-susceptibility auto-tier (display-only — TLC-3) -----------
+
+    def _schedule_auto_tier(self, b: Bbox) -> None:
+        """Fire-and-forget the post-score tiering pass (no-op if disabled).
+        Tracks the task so it isn't garbage-collected mid-flight."""
+        if self._soil_grid is None:
+            return
+        task = asyncio.create_task(self._tier_new_roads(b))
+        self._tier_tasks.add(task)
+        task.add_done_callback(self._tier_tasks.discard)
+
+    def _water_fn(self, coords):
+        """An async water_fn(points)->[dist_m|None] for one road part, sourcing
+        nearest-water distance from SpatiaLite (no shapely in the app)."""
+
+        async def water_fn(points):
+            return [await self._store.water_distance(lon, lat) for lon, lat in points]
+
+        return water_fn
+
+    async def _tier_new_roads(self, b: Bbox) -> None:
+        """Tier the drivable roads in `b` that carry no mud_tier yet, using the
+        soil grid + a fresh terrain sampler + SpatiaLite water. Best-effort and
+        lock-serialized; a failure just leaves those roads gray until a re-bake."""
+        async with self._tier_lock:
+            try:
+                rows = await self._store.untiered_drivable_in_bbox(b)
+                if not rows:
+                    return
+                terrain = self._terrain_factory(self._s, zoom=self._s.terrarium_zoom)
+                out: list[tuple[int, str]] = []
+                try:
+                    for rid, tags_json, gj in rows:
+                        try:
+                            tags = json.loads(tags_json) if tags_json else {}
+                        except (ValueError, TypeError):
+                            tags = {}
+                        surface = tags.get("surface")
+                        parts = (
+                            [p for p in line_coords(json.loads(gj)) if len(p) >= 2] if gj else []
+                        )
+                        if not parts:
+                            tier = segment_tier([], surface)
+                        else:
+                            tiers = [
+                                await tier_road(
+                                    coords, surface, self._soil_grid,
+                                    terrain.slope_deg, self._water_fn(coords),
+                                )
+                                for coords in parts
+                            ]
+                            tier = worst_tier(tiers) if any(tiers) else None
+                        if tier is not None:
+                            out.append((rid, tier))
+                finally:
+                    await terrain.aclose()
+                if out:
+                    written = await self._store.set_road_mud_tiers(out)
+                    log.info("auto-tiered %d new road(s) in scored bbox", written)
+            except Exception:  # display-only; never let it bubble
+                log.warning("auto-tier pass failed (non-fatal)", exc_info=True)
 
 
 def _inject_termini(

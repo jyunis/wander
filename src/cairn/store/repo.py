@@ -942,6 +942,61 @@ class Store:
                 out[int(osm_id)] = {}
         return out
 
+    # --- road mud-susceptibility (display-only — TLC-3) --------------------
+    # The live auto-tier hook (cairn.service) tiers roads a /score just ingested
+    # so the mud overlay isn't stale until the next full bake. mud_tier is a tag
+    # on osm_features; NEVER read by the engine (guarded by the TLC-3 lint).
+
+    async def untiered_drivable_in_bbox(self, bbox: Bbox) -> list[tuple]:
+        """`(id, tags_json, geojson)` for drivable ways in `bbox` that carry no
+        mud_tier yet — the set the post-score auto-tier pass fills."""
+        b = bbox.normalized()
+        cur = await self.db.execute(
+            "SELECT id, tags_json, AsGeoJSON(geom) FROM osm_features "
+            "WHERE feature_class='drivable' AND tags_json NOT LIKE '%\"mud_tier\"%' "
+            "AND ROWID IN (SELECT ROWID FROM SpatialIndex WHERE f_table_name='osm_features' "
+            "  AND f_geometry_column='geom' AND search_frame=BuildMbr(?, ?, ?, ?, 4326))",
+            (b.min_lon, b.min_lat, b.max_lon, b.max_lat),
+        )
+        return await cur.fetchall()
+
+    async def water_distance(self, lon: float, lat: float, max_m: float = 400.0) -> float | None:
+        """Geodesic distance (m) to the nearest OSM water feature within `max_m`
+        of a point, or None if none — the auto-tier water signal (display-only)."""
+        import math as _math
+
+        rdeg = max_m / (_M_PER_DEG * max(_math.cos(_math.radians(lat)), 0.1))
+        cur = await self.db.execute(
+            "SELECT MIN(ST_Distance(MakePoint(?, ?, 4326), geom, 1)) FROM osm_features "
+            "WHERE feature_class='water' AND ROWID IN ("
+            "  SELECT ROWID FROM SpatialIndex WHERE f_table_name='osm_features' "
+            "  AND f_geometry_column='geom' AND search_frame=BuildCircleMbr(?, ?, ?, 4326))",
+            (lon, lat, lon, lat, rdeg),
+        )
+        row = await cur.fetchone()
+        return float(row[0]) if row and row[0] is not None else None
+
+    async def set_road_mud_tiers(self, rows: list[tuple[int, str]]) -> int:
+        """Write `mud_tier` into tags_json for each `(osm_features.id, tier)`.
+        One commit for the batch. Returns the count written."""
+        n = 0
+        for rid, tier in rows:
+            cur = await self.db.execute("SELECT tags_json FROM osm_features WHERE id=?", (rid,))
+            r = await cur.fetchone()
+            if not r:
+                continue
+            try:
+                tags = json.loads(r[0]) if r[0] else {}
+            except (ValueError, TypeError):
+                tags = {}
+            tags["mud_tier"] = tier
+            await self.db.execute(
+                "UPDATE osm_features SET tags_json=? WHERE id=?", (json.dumps(tags), rid)
+            )
+            n += 1
+        await self.db.commit()
+        return n
+
     async def candidates_near_mvum(self, run_id: int, radius_m: float) -> set[int]:
         """Candidate ids (this run) within `radius_m` of a USFS MVUM forest road.
 
