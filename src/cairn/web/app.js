@@ -1111,8 +1111,8 @@ function mvumInfo(access) {
 // Visible line weight scales with zoom so the overlay tracks the widening
 // satellite road instead of looking thinner the closer you get (was fixed 2-3px).
 function roadWeight(forest) {
-  const base = Math.min(3 + (map.getZoom() - ROADS_MIN_ZOOM) * 1.3, 10);
-  return forest ? base + 1 : base;
+  const base = Math.min(2 + (map.getZoom() - ROADS_MIN_ZOOM) * 1.0, 8);
+  return forest ? base + 0.75 : base;
 }
 
 let _roadsGj = null; // last rendered FeatureCollection (re-styled on zoom)
