@@ -265,6 +265,12 @@ async function init() {
       $(id).onchange = updateLayerVisibility;
     }
   );
+  if ($("layer-roads-mud")) {
+    $("layer-roads-mud").onchange = () => {
+      syncRoadsSubmode();
+      if (_roadsGj) renderRoads(_roadsGj); // recolor in place — no refetch
+    };
+  }
   $("saved-layer-coll").onchange = renderSavedMarkers; // re-filter the saved layer
   $("min-score").oninput = (e) => {
     minScore = parseFloat(e.target.value);
@@ -1117,16 +1123,38 @@ function roadWeight(forest) {
 
 let _roadsGj = null; // last rendered FeatureCollection (re-styled on zoom)
 
+// Road mud-susceptibility sub-mode (display-only, TLC-3): recolor roads by how
+// soupy they get WHEN it's wet — a STATIC estimate baked from soil drainage,
+// slope, surface and water proximity (scripts/load_road_mud.py), NOT today's
+// weather. Off by default; only meaningful while the Roads layer is on.
+const MUD_COLORS = { Firm: "#2e9e5b", Variable: "#e6a700", Soft: "#d8472b" };
+function roadsMudMode() {
+  return !!($("layer-roads-mud") && $("layer-roads-mud").checked && $("layer-roads").checked);
+}
+function mudColor(tier) {
+  return MUD_COLORS[tier] || "#8a8a8a"; // unbaked / no soil coverage -> muted gray
+}
+
 function renderRoads(gj) {
   _roadsGj = gj;
   roadsLayer.clearLayers();
+  const mud = roadsMudMode();
   (gj.features || []).forEach((f) => {
     const p = f.properties || {};
     const forest = p.forest_road;
     const mv = mvumInfo(p.mvum_access);
-    // Color: special-designation MVUM roads stand out (purple); other forest/
-    // MVUM roads orange; non-MVUM drivable yellow. Rough → dashed (unchanged).
-    const color = mv && mv.special ? "#9b59b6" : forest ? "#ff7a00" : "#ffd23d";
+    // Color: in mud mode, Firm→green / Variable→amber / Soft→red (gray where no
+    // tier is baked). Otherwise: special-designation MVUM purple, forest/MVUM
+    // orange, other drivable yellow. Rough → dashed (unchanged) either way.
+    const color = mud
+      ? mudColor(p.mud_tier)
+      : mv && mv.special
+        ? "#9b59b6"
+        : forest
+          ? "#ff7a00"
+          : "#ffd23d";
+    // Untiered roads recede in mud mode so the graded ones read clearly.
+    const opacity = mud && !p.mud_tier ? 0.22 : 0.4;
     const w = roadWeight(forest);
     const label = p.ref ? `FR ${p.ref}` : p.name || "Road";
     // Visible line — non-interactive; the fat transparent hit line below catches
@@ -1135,7 +1163,7 @@ function renderRoads(gj) {
     roadsLayer.addLayer(
       L.geoJSON(f, {
         interactive: false,
-        style: { color, weight: w, opacity: 0.4, dashArray: p.rough ? "5 4" : null, lineCap: "round" },
+        style: { color, weight: w, opacity, dashArray: p.rough ? "5 4" : null, lineCap: "round" },
       })
     );
     const hit = L.geoJSON(f, {
@@ -1262,6 +1290,8 @@ function roadPopup(p, mv, label) {
     rows.push(esc(mv.klass) + (mv.season ? ` · <b>${esc(mv.season)}</b>` : ""));
   }
   if (p.surface) rows.push("surface: " + esc(p.surface));
+  if (p.mud_tier)
+    rows.push(`mud <i>when wet</i>: <b>${esc(p.mud_tier)}</b> <span class="mud-pop-note">(static)</span>`);
   if (p.rough) rows.push("⚠ rough / high-clearance");
   // The MVUM tells you a road is open to DRIVING; dispersed-camping designation
   // (corridor + dates) lives only on the MVUM/Avenza — nudge the user there.
@@ -1399,7 +1429,22 @@ function updateLayerVisibility() {
   if ($("layer-roads").checked) scheduleRoads(); // fetch the view when turned on
   toggleLayer(trailsLayer, $("layer-trails").checked);
   if ($("layer-trails").checked) scheduleTrails();
+  syncRoadsSubmode(); // mud sub-toggle only makes sense while Roads is on
   renderSavedMarkers(); // saved layer (clears itself when its checkbox is off)
+}
+
+// Keep the mud sub-toggle + its legend in step with the Roads layer: disable it
+// when Roads is off, and swap the road legend for the mud legend while mud mode
+// is active (the orange/yellow key is meaningless then).
+function syncRoadsSubmode() {
+  const roadsOn = $("layer-roads").checked;
+  const mudBox = $("layer-roads-mud");
+  if (mudBox) mudBox.disabled = !roadsOn;
+  const mudOn = roadsMudMode();
+  const mudLeg = $("roads-mud-legend");
+  const roadLeg = document.querySelector(".roads-legend");
+  if (mudLeg) mudLeg.hidden = !mudOn;
+  if (roadLeg) roadLeg.hidden = mudOn;
 }
 
 function toggleLayer(layer, on) {

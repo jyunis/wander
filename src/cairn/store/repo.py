@@ -1292,6 +1292,10 @@ def _roads_features(ways: list, tags_by_id: dict[int, dict]) -> list[dict]:
                     # the MVUM. Never scored (TLC-3).
                     "mvum_access": tags.get("mvum_access"),
                     "surface": tags.get("surface"),
+                    # Static road mud-susceptibility tier (Firm/Variable/Soft),
+                    # baked by scripts/load_road_mud.py. Display-only (TLC-3) —
+                    # never scored; absent where the bake hasn't run / no soil.
+                    "mud_tier": tags.get("mud_tier"),
                 },
             }
         )
