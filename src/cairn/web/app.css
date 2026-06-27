@@ -184,7 +184,7 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .rd-swatch.rd-firm { border-color: #2e9e5b; }
 .rd-swatch.rd-variable { border-color: #e6a700; }
 .rd-swatch.rd-soft { border-color: #d8472b; }
-.rd-swatch.rd-nodata { border-color: #8a8a8a; }
+.rd-swatch.rd-nodata { border-color: #b3b9bf; }
 .mud-note { flex-basis: 100%; font-size: 10px; color: var(--muted); opacity: 0.85; margin-top: 1px; }
 /* `.legend { display: flex }` would otherwise override the UA [hidden] rule, so
    the hidden attribute alone wouldn't hide a legend — qualify it to win. */

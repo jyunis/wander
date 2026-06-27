@@ -1138,7 +1138,10 @@ function roadsMudMode() {
   return !!($("layer-roads-mud") && $("layer-roads-mud").checked && $("layer-roads").checked);
 }
 function mudColor(tier) {
-  return MUD_COLORS[tier] || "#8a8a8a"; // unbaked / no soil coverage -> muted gray
+  // Untiered roads (not yet baked — e.g. just ingested by a score run — or no
+  // soil coverage) get a clearly-visible neutral gray: they're still ROADS, just
+  // mud-unknown, and must not read as "no road" (was too faint at 0.22 opacity).
+  return MUD_COLORS[tier] || "#b3b9bf";
 }
 
 // P3a — dynamic recolor: shift a road's STATIC tier by the entered forest's
@@ -1184,8 +1187,10 @@ function renderRoads(gj) {
         : forest
           ? "#ff7a00"
           : "#ffd23d";
-    // Untiered roads recede in mud mode so the graded ones read clearly.
-    const opacity = mud && !tier ? 0.22 : 0.4;
+    // Untiered roads still draw at full road opacity (gray) — they're roads we
+    // just haven't mud-assessed yet, not absent roads. (Earlier 0.22 made a
+    // freshly-scored, not-yet-baked area look empty in mud mode.)
+    const opacity = 0.4;
     const w = roadWeight(forest);
     const label = p.ref ? `FR ${p.ref}` : p.name || "Road";
     // Visible line — non-interactive; the fat transparent hit line below catches
