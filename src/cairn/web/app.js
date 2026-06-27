@@ -1804,10 +1804,62 @@ async function enterForest(f) {
   if (isMobile()) setNav(false); // reveal the map
   selectShape(f.layer, f.name); // fit-zoom + highlight + active chip (hides the bar)
   enableBrowseLayers();
+  loadPrecipForForest(f); // live recent-rain banner to pair with the static mud tier
+}
+
+// --- Recent-rain banner (P2, display-only): "is it wet NOW" to read against
+// the static road mud tier. One /precip fetch per entered forest (centroid),
+// cached server-side; never scored (TLC-3/TLC-1). Best-effort — a failure just
+// leaves the banner hidden.
+let _precipForestKey = null;
+
+function hidePrecipBanner() {
+  _precipForestKey = null;
+  const b = $("precip-banner");
+  if (b) { b.hidden = true; b.innerHTML = ""; b.className = "precip-banner"; }
+}
+
+async function loadPrecipForForest(f) {
+  const b = $("precip-banner");
+  if (!b) return;
+  if (!f || !Array.isArray(f.bbox)) { hidePrecipBanner(); return; }
+  const key = _forestKey(f);
+  _precipForestKey = key;
+  const lon = (f.bbox[0] + f.bbox[2]) / 2;
+  const lat = (f.bbox[1] + f.bbox[3]) / 2;
+  b.hidden = false;
+  b.className = "precip-banner loading";
+  b.innerHTML = `<span class="precip-ico">💧</span><span class="precip-text">checking recent rain…</span>`;
+  let s;
+  try {
+    s = await (await fetch(`/precip?lat=${lat}&lon=${lon}`)).json();
+  } catch {
+    if (_precipForestKey === key) hidePrecipBanner();
+    return;
+  }
+  if (_precipForestKey !== key) return; // a newer forest was entered mid-fetch
+  if (!s || s.error || !s.label) { hidePrecipBanner(); return; }
+  renderPrecipBanner(s);
+}
+
+function renderPrecipBanner(s) {
+  const b = $("precip-banner");
+  if (!b) return;
+  const inches = Math.round((s.recent_in || 0) * 100) / 100;
+  b.className = `precip-banner wet-${s.label}`;
+  b.title =
+    `Recent rainfall near this forest (Open-Meteo, as of ${s.as_of || "?"}). ` +
+    `Live context for the static road mud tier — not a forecast, and never scored.`;
+  b.innerHTML =
+    `<span class="precip-ico">💧</span>` +
+    `<span class="precip-amt">${inches} in / 72h</span>` +
+    `<span class="precip-label">${esc(s.label)}</span>` +
+    (s.season_note ? `<span class="precip-note">${esc(s.season_note)}</span>` : "");
 }
 
 function exitForestDetail() {
   forestActive = null;
+  hidePrecipBanner(); // leaving the forest drops its recent-rain banner
   forestScopeOn = false; // un-scope Saved (decision #2)
   clearViewResults(); // leaving the forest clears any transient score (TLC-15)
   clearCoverage(); // and its coverage fog (TLC-19, session-scoped to the forest)
@@ -2062,6 +2114,7 @@ function forestHoles(geom) {
 }
 
 async function selectShape(layer, name) {
+  hidePrecipBanner(); // drop any prior forest's banner; enterForest re-shows it
   let shape;
   try {
     const r = await fetch(`/overlays/${layer}/shape?name=${encodeURIComponent(name)}`);

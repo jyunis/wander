@@ -158,6 +158,19 @@ def test_engine_never_references_road_mud_tlc3():
         )
 
 
+def test_engine_never_references_precip():
+    # TLC-3 AND TLC-1: recent precipitation (the road-mud "is it wet now" banner,
+    # cairn.clients.precip) is display-only — and being a clock reading, it would
+    # also destroy engine determinism (TLC-1). Barred from scoring twice over.
+    # Guard the engine against importing/referencing it. Code-shaped tokens only.
+    forbidden = re.compile(r"recent_rain|PrecipClient|cairn\.clients\.precip|precip_summary")
+    for path in ENGINE_DIR.glob("*.py"):
+        source = _strip_comments(path.read_text(encoding="utf-8"))
+        assert forbidden.search(source) is None, (
+            f"{path.name} references display-only recent-precip data (TLC-3/TLC-1 violation)"
+        )
+
+
 def test_no_nondeterminism_primitives_in_engine_sources():
     checked_any = False
     for name in MODULES:

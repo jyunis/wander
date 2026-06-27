@@ -142,6 +142,23 @@ class AvailabilityBadResponse(AvailabilityError):
     that could not be parsed."""
 
 
+# --- Precip (Open-Meteo recent-rainfall, display-only — TLC-3/TLC-1) ------
+
+
+class PrecipError(CairnError):
+    """Base for recent-precip (road-mud wetness banner) failures. Display-only
+    (TLC-3) AND clock-dependent (TLC-1): never a scoring input. Non-fatal — the
+    banner just doesn't show when the source is unreachable."""
+
+
+class PrecipUnreachable(PrecipError):
+    """Could not reach the Open-Meteo forecast service."""
+
+
+class PrecipBadResponse(PrecipError):
+    """Open-Meteo returned a non-2xx after retries, or unparseable content."""
+
+
 class AvailabilityNotReservable(AvailabilityError):
     """The campground has no reservable inventory (recreation.gov 404s its
     availability grid) — i.e. it's first-come, first-served. Not a failure: the

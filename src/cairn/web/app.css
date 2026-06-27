@@ -731,6 +731,26 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
   cursor: pointer; white-space: nowrap; }
 .measure-chip-done:hover { filter: brightness(1.08); }
 .shape-chip[hidden], .measure-chip[hidden], .run-chip[hidden] { display: none; }
+/* Road-mud recent-rain banner — sits under the forest shape-chip. Live wetness
+   to pair (by eye) with the static Firm/Variable/Soft road tier. */
+.precip-banner { pointer-events: auto; display: flex; align-items: center; gap: 7px;
+  max-width: min(94vw, 470px); padding: 4px 11px; background: var(--panel); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 2px 12px rgba(0,0,0,0.45);
+  font-size: 12px; }
+.precip-banner[hidden] { display: none; }
+.precip-banner.loading { color: var(--muted); }
+.precip-ico { flex: none; }
+.precip-amt { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.precip-label { flex: none; font-weight: 700; text-transform: uppercase; font-size: 10px;
+  letter-spacing: 0.04em; padding: 1px 6px; border-radius: 9px; }
+.precip-note { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.precip-banner.wet-dry .precip-label { background: #2e4233; color: #8fd6a6; }
+.precip-banner.wet-damp .precip-label { background: #1f3a4a; color: #6fc3e8; }
+.precip-banner.wet-wet .precip-label { background: #4a3a16; color: #e6b84d; }
+.precip-banner.wet-saturated .precip-label { background: #4a1f18; color: #f0897b; }
+.precip-banner.wet-wet { border-color: #6b541f; }
+.precip-banner.wet-saturated { border-color: #7a3329; }
 .shape-chip-name { font-weight: 600; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; }
 .shape-chip-score { flex: none; padding: 5px 10px; font-size: 12px; font-weight: 600;
