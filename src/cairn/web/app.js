@@ -128,6 +128,7 @@ const BOUNDARY_COLORS = {
   national_park: "#7b4ea3",
   state_forest: "#6b8e23",
   state_park: "#b5651d",
+  wilderness: "#10b3c4", // vehicle-excluded; drawn with a heavier dashed outline
 };
 // Campground marker tint by managing tier.
 const CAMPGROUND_COLORS = {
@@ -2505,6 +2506,12 @@ function overlayStyle(layerId, feat) {
     // Borderless fills; tiers don't overlap, so a firmer opacity reads cleanly
     // over the basemap while gaps (no coverage) stay visibly empty.
     return { color: c, weight: 0, fillColor: c, fillOpacity: 0.5 };
+  }
+  if (layerId === "wilderness") {
+    // A hard "you can't tow in here" boundary — heavier dashed outline so it
+    // reads as a restriction, not just another land tint.
+    const c = BOUNDARY_COLORS.wilderness;
+    return { color: c, weight: 2.5, fillColor: c, fillOpacity: 0.1, dashArray: "6 4" };
   }
   const c = BOUNDARY_COLORS[layerId] || "#555";
   return { color: c, weight: 2, fillColor: c, fillOpacity: 0.08 };

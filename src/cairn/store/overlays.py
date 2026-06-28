@@ -26,12 +26,13 @@ LAYER_TITLES: dict[str, str] = {
     "ownership": "Public land ownership",
     "national_forest": "National Forest",
     "national_park": "National Park Service",
+    "wilderness": "Wilderness (no vehicles)",
     "state_forest": "State Forest",
     "state_park": "State Parks",
     "cell_coverage": "Cell coverage",
 }
 LAYER_ORDER = [
-    "campground", "dispersed", "national_forest", "national_park",
+    "campground", "dispersed", "national_forest", "national_park", "wilderness",
     "state_forest", "state_park", "ownership", "cell_coverage",
 ]
 

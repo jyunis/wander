@@ -551,6 +551,9 @@ PADUS_URL = (
     "https://services.arcgis.com/v01gqwM5QqNysAAi/arcgis/rest/services/"
     "Manager_Name/FeatureServer/0/query"
 )
+# Same FeatureServer without the /query suffix — the generic ArcGIS loader
+# appends /query itself (used for the `wilderness` layer, Des_Tp='WA').
+PADUS_FS = PADUS_URL.rsplit("/query", 1)[0]
 # PAD-US Own_Type code -> our ownership category. PUBLIC fee only: PVT (private),
 # UNK (unknown), DESG (a designation overlapping fee, not ownership) and TRIB
 # (tribal — NOT open-access, must not read as public) are deliberately excluded
@@ -1538,6 +1541,16 @@ def main() -> None:
             max(b[2] for b in bbs), max(b[3] for b in bbs),
         )
         total += load_usfs(con, union)
+
+    # Designated Wilderness (PAD-US Des_Tp='WA') across the configured states —
+    # the Boundary Waters Canoe Area Wilderness (Superior NF), Black Elk (Black
+    # Hills), the FWS refuge wildernesses, etc. Display-only context (TLC-3): a
+    # vehicle-EXCLUDED boundary (paddle/hike-in only) — you can't tow a teardrop
+    # in, so it's exactly where NOT to plan a drive-in site.
+    if not only or "wilderness" in only:
+        clear_layer(con, "wilderness")
+        where = "Des_Tp='WA' AND State_Nm IN (" + ",".join(f"'{s}'" for s in states) + ")"
+        total += load_arcgis_features(con, "wilderness", PADUS_FS, where, "Unit_Nm")
 
     if not only or CAMPGROUND_LAYER in only:
         total += load_campgrounds(con, states)
