@@ -164,6 +164,17 @@ class Settings(BaseSettings):
     # build_usedirect_map.py) — unmapped markers degrade to link-out.
     usedirect_enabled: bool = True
     usedirect_grid_url: str = "https://mnrdr.usedirect.com/minnesotardr/rdr/search/grid"
+    # Recent-precipitation banner for the road-mud feature (P2, display-only —
+    # TLC-3; clock-dependent so also TLC-1, never scored). Open-Meteo forecast,
+    # keyless, near-real-time. One fetch per forest centroid, cached a few hours
+    # in the disposable cache (LIVE data -> short TTL, never the long overlay
+    # cache). Disable to drop the wetness banner; the static mud tier is
+    # unaffected.
+    precip_enabled: bool = True
+    precip_url: str = "https://api.open-meteo.com/v1/forecast"
+    precip_past_days: int = 7  # daily precip window fetched (<= 92)
+    precip_cache_dir: Path | None = None
+    precip_cache_ttl_s: int = 6 * 3600  # live-ish; refreshes a few times a day
 
     # --- Caps (TLC-4) ------------------------------------------------------
     max_bbox_area_km2: float = 2500.0
@@ -239,6 +250,8 @@ class Settings(BaseSettings):
         if self.availability_cache_dir is None:
             # Disposable/derivable (TLC-7), backup-excluded like tiles/osm-cache.
             self.availability_cache_dir = self.data_dir / "availability-cache"
+        if self.precip_cache_dir is None:
+            self.precip_cache_dir = self.data_dir / "precip-cache"
         return self
 
     def ui_config(self) -> dict:

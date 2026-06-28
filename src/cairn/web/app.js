@@ -265,6 +265,18 @@ async function init() {
       $(id).onchange = updateLayerVisibility;
     }
   );
+  if ($("layer-roads-mud")) {
+    $("layer-roads-mud").onchange = () => {
+      syncRoadsSubmode();
+      if (_roadsGj) renderRoads(_roadsGj); // recolor in place — no refetch
+    };
+  }
+  if ($("layer-roads-mud-wx")) {
+    $("layer-roads-mud-wx").onchange = () => {
+      syncRoadsSubmode();
+      if (_roadsGj) renderRoads(_roadsGj); // re-shade by today's wetness — no refetch
+    };
+  }
   $("saved-layer-coll").onchange = renderSavedMarkers; // re-filter the saved layer
   $("min-score").oninput = (e) => {
     minScore = parseFloat(e.target.value);
@@ -1117,16 +1129,68 @@ function roadWeight(forest) {
 
 let _roadsGj = null; // last rendered FeatureCollection (re-styled on zoom)
 
+// Road mud-susceptibility sub-mode (display-only, TLC-3): recolor roads by how
+// soupy they get WHEN it's wet — a STATIC estimate baked from soil drainage,
+// slope, surface and water proximity (scripts/load_road_mud.py), NOT today's
+// weather. Off by default; only meaningful while the Roads layer is on.
+const MUD_COLORS = { Firm: "#2e9e5b", Variable: "#e6a700", Soft: "#d8472b" };
+function roadsMudMode() {
+  return !!($("layer-roads-mud") && $("layer-roads-mud").checked && $("layer-roads").checked);
+}
+function mudColor(tier) {
+  // Untiered roads (not yet baked — e.g. just ingested by a score run — or no
+  // soil coverage) get a clearly-visible neutral gray: they're still ROADS, just
+  // mud-unknown, and must not read as "no road" (was too faint at 0.22 opacity).
+  return MUD_COLORS[tier] || "#b3b9bf";
+}
+
+// P3a — dynamic recolor: shift a road's STATIC tier by the entered forest's
+// recent wetness (the P2 banner's label) so mud mode can answer "bad TODAY,"
+// not just "bad when wet." Ordinal + clamped: wet weather bumps a road toward
+// Soft, a dry spell eases it (clay is hard when dry). Coarse on purpose — the
+// static side is 3 buckets and wetness is forest-level — and display-only
+// (TLC-3): the live wetness never touches the baked tier or scoring.
+const MUD_TIER_ORDER = ["Firm", "Variable", "Soft"];
+const MUD_WET_SHIFT = { dry: -1, damp: 0, wet: 1, saturated: 2 };
+let _forestWetness = null; // current entered forest's wetness label, or null
+
+function weatherAdjustedTier(tier, wetness) {
+  const i = MUD_TIER_ORDER.indexOf(tier);
+  if (i < 0) return tier; // untiered / unknown -> unchanged (renders gray)
+  const shift = MUD_WET_SHIFT[wetness] ?? 0;
+  return MUD_TIER_ORDER[Math.max(0, Math.min(2, i + shift))];
+}
+// Whether road colors are currently weather-adjusted (needs mud mode on, the
+// sub-toggle checked, and a wetness label from an entered forest).
+function roadsWxAdjust() {
+  return roadsMudMode() && !!$("layer-roads-mud-wx")?.checked && !!_forestWetness;
+}
+
 function renderRoads(gj) {
   _roadsGj = gj;
   roadsLayer.clearLayers();
+  const mud = roadsMudMode();
+  const wx = mud && roadsWxAdjust(); // recolor by static tier × today's wetness
   (gj.features || []).forEach((f) => {
     const p = f.properties || {};
     const forest = p.forest_road;
     const mv = mvumInfo(p.mvum_access);
-    // Color: special-designation MVUM roads stand out (purple); other forest/
-    // MVUM roads orange; non-MVUM drivable yellow. Rough → dashed (unchanged).
-    const color = mv && mv.special ? "#9b59b6" : forest ? "#ff7a00" : "#ffd23d";
+    // The tier actually drawn: weather-adjusted in wx mode, else the static bake.
+    const tier = wx ? weatherAdjustedTier(p.mud_tier, _forestWetness) : p.mud_tier;
+    // Color: in mud mode, Firm→green / Variable→amber / Soft→red (gray where no
+    // tier is baked). Otherwise: special-designation MVUM purple, forest/MVUM
+    // orange, other drivable yellow. Rough → dashed (unchanged) either way.
+    const color = mud
+      ? mudColor(tier)
+      : mv && mv.special
+        ? "#9b59b6"
+        : forest
+          ? "#ff7a00"
+          : "#ffd23d";
+    // Untiered roads still draw at full road opacity (gray) — they're roads we
+    // just haven't mud-assessed yet, not absent roads. (Earlier 0.22 made a
+    // freshly-scored, not-yet-baked area look empty in mud mode.)
+    const opacity = 0.4;
     const w = roadWeight(forest);
     const label = p.ref ? `FR ${p.ref}` : p.name || "Road";
     // Visible line — non-interactive; the fat transparent hit line below catches
@@ -1135,7 +1199,7 @@ function renderRoads(gj) {
     roadsLayer.addLayer(
       L.geoJSON(f, {
         interactive: false,
-        style: { color, weight: w, opacity: 0.4, dashArray: p.rough ? "5 4" : null, lineCap: "round" },
+        style: { color, weight: w, opacity, dashArray: p.rough ? "5 4" : null, lineCap: "round" },
       })
     );
     const hit = L.geoJSON(f, {
@@ -1262,6 +1326,17 @@ function roadPopup(p, mv, label) {
     rows.push(esc(mv.klass) + (mv.season ? ` · <b>${esc(mv.season)}</b>` : ""));
   }
   if (p.surface) rows.push("surface: " + esc(p.surface));
+  if (p.mud_tier) {
+    rows.push(`mud <i>when wet</i>: <b>${esc(p.mud_tier)}</b> <span class="mud-pop-note">(static)</span>`);
+    // P3a: when colors are weather-adjusted, show the live "today" tier too.
+    if (roadsWxAdjust()) {
+      const today = weatherAdjustedTier(p.mud_tier, _forestWetness);
+      rows.push(
+        `mud <i>today</i>: <b>${esc(today)}</b> ` +
+          `<span class="mud-pop-note">(${esc(_forestWetness)} forest)</span>`
+      );
+    }
+  }
   if (p.rough) rows.push("⚠ rough / high-clearance");
   // The MVUM tells you a road is open to DRIVING; dispersed-camping designation
   // (corridor + dates) lives only on the MVUM/Avenza — nudge the user there.
@@ -1399,7 +1474,36 @@ function updateLayerVisibility() {
   if ($("layer-roads").checked) scheduleRoads(); // fetch the view when turned on
   toggleLayer(trailsLayer, $("layer-trails").checked);
   if ($("layer-trails").checked) scheduleTrails();
+  syncRoadsSubmode(); // mud sub-toggle only makes sense while Roads is on
   renderSavedMarkers(); // saved layer (clears itself when its checkbox is off)
+}
+
+// Keep the mud sub-toggle + its legend in step with the Roads layer: disable it
+// when Roads is off, and swap the road legend for the mud legend while mud mode
+// is active (the orange/yellow key is meaningless then).
+function syncRoadsSubmode() {
+  const roadsOn = $("layer-roads").checked;
+  const mudBox = $("layer-roads-mud");
+  if (mudBox) mudBox.disabled = !roadsOn;
+  const mudOn = roadsMudMode();
+  const mudLeg = $("roads-mud-legend");
+  const roadLeg = document.querySelector(".roads-legend");
+  if (mudLeg) mudLeg.hidden = !mudOn;
+  if (roadLeg) roadLeg.hidden = mudOn;
+  // The "× today's rain" sub-toggle needs mud mode on AND a forest wetness
+  // label (from the entered forest's precip banner) to mean anything.
+  const wxBox = $("layer-roads-mud-wx");
+  const wxLabel = $("roads-mud-wx-label");
+  const wxUsable = mudOn && !!_forestWetness;
+  if (wxBox) wxBox.disabled = !wxUsable;
+  if (wxLabel) wxLabel.classList.toggle("disabled", !wxUsable);
+  // Legend note flips between the static disclaimer and the weather-adjusted one.
+  const note = mudLeg ? mudLeg.querySelector(".mud-note") : null;
+  if (note) {
+    note.textContent = roadsWxAdjust()
+      ? `× today's rain — ${_forestWetness} (forest-level estimate)`
+      : "static — soil / slope / surface, not today's weather";
+  }
 }
 
 function toggleLayer(layer, on) {
@@ -1759,10 +1863,69 @@ async function enterForest(f) {
   if (isMobile()) setNav(false); // reveal the map
   selectShape(f.layer, f.name); // fit-zoom + highlight + active chip (hides the bar)
   enableBrowseLayers();
+  loadPrecipForForest(f); // live recent-rain banner to pair with the static mud tier
+}
+
+// --- Recent-rain banner (P2, display-only): "is it wet NOW" to read against
+// the static road mud tier. One /precip fetch per entered forest (centroid),
+// cached server-side; never scored (TLC-3/TLC-1). Best-effort — a failure just
+// leaves the banner hidden.
+let _precipForestKey = null;
+
+function hidePrecipBanner() {
+  _precipForestKey = null;
+  _forestWetness = null; // leaving the forest drops the wetness used for recolor
+  const b = $("precip-banner");
+  if (b) { b.hidden = true; b.innerHTML = ""; b.className = "precip-banner"; }
+  syncRoadsSubmode(); // disable "× today's rain" + restore the static legend note
+  if (roadsMudMode() && $("layer-roads-mud-wx")?.checked && _roadsGj) renderRoads(_roadsGj);
+}
+
+async function loadPrecipForForest(f) {
+  const b = $("precip-banner");
+  if (!b) return;
+  if (!f || !Array.isArray(f.bbox)) { hidePrecipBanner(); return; }
+  const key = _forestKey(f);
+  _precipForestKey = key;
+  const lon = (f.bbox[0] + f.bbox[2]) / 2;
+  const lat = (f.bbox[1] + f.bbox[3]) / 2;
+  b.hidden = false;
+  b.className = "precip-banner loading";
+  b.innerHTML = `<span class="precip-ico">💧</span><span class="precip-text">checking recent rain…</span>`;
+  let s;
+  try {
+    s = await (await fetch(`/precip?lat=${lat}&lon=${lon}`)).json();
+  } catch {
+    if (_precipForestKey === key) hidePrecipBanner();
+    return;
+  }
+  if (_precipForestKey !== key) return; // a newer forest was entered mid-fetch
+  if (!s || s.error || !s.label) { hidePrecipBanner(); return; }
+  renderPrecipBanner(s);
+}
+
+function renderPrecipBanner(s) {
+  const b = $("precip-banner");
+  if (!b) return;
+  const inches = Math.round((s.recent_in || 0) * 100) / 100;
+  b.className = `precip-banner wet-${s.label}`;
+  b.title =
+    `Recent rainfall near this forest (Open-Meteo, as of ${s.as_of || "?"}). ` +
+    `Live context for the static road mud tier — not a forecast, and never scored.`;
+  b.innerHTML =
+    `<span class="precip-ico">💧</span>` +
+    `<span class="precip-amt">${inches} in / 72h</span>` +
+    `<span class="precip-label">${esc(s.label)}</span>` +
+    (s.season_note ? `<span class="precip-note">${esc(s.season_note)}</span>` : "");
+  // This wetness drives the optional "× today's rain" road recolor (P3a).
+  _forestWetness = s.label || null;
+  syncRoadsSubmode(); // enable the sub-toggle + refresh the legend note
+  if (roadsMudMode() && $("layer-roads-mud-wx")?.checked && _roadsGj) renderRoads(_roadsGj);
 }
 
 function exitForestDetail() {
   forestActive = null;
+  hidePrecipBanner(); // leaving the forest drops its recent-rain banner
   forestScopeOn = false; // un-scope Saved (decision #2)
   clearViewResults(); // leaving the forest clears any transient score (TLC-15)
   clearCoverage(); // and its coverage fog (TLC-19, session-scoped to the forest)
@@ -2017,6 +2180,7 @@ function forestHoles(geom) {
 }
 
 async function selectShape(layer, name) {
+  hidePrecipBanner(); // drop any prior forest's banner; enterForest re-shows it
   let shape;
   try {
     const r = await fetch(`/overlays/${layer}/shape?name=${encodeURIComponent(name)}`);

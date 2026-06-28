@@ -14,7 +14,7 @@ PATCH/DELETE /collections/{id}, POST /collections/{id}/places,
 GET/POST /trips, GET/PATCH/DELETE /trips/{id}, POST /trips/{id}/members,
 DELETE /trips/{id}/members/{saved_id}, GET /trips/{id}/export.gpx|.kml,
 GET /trips/{id}/availability,
-GET /suggest-name, GET /geocode, GET /config, GET /health, and the static UI
+GET /suggest-name, GET /precip, GET /geocode, GET /config, GET /health, and the static UI
 at / (mounted if web/ exists).
 """
 
@@ -38,12 +38,20 @@ from cairn.clients.availability import RecreationGovClient
 from cairn.clients.mvum import MvumClient
 from cairn.clients.nominatim import GeocodeClient
 from cairn.clients.overpass import OverpassClient
+from cairn.clients.precip import PrecipClient
 from cairn.clients.usa_structures import StructuresClient
 from cairn.clients.usedirect import UseDirectClient
 from cairn.config import get_settings
-from cairn.errors import GeocodeError, RunFailed, RunNotFound, ValidationError
+from cairn.errors import (
+    GeocodeError,
+    PrecipError,
+    RunFailed,
+    RunNotFound,
+    ValidationError,
+)
 from cairn.export import trip_slug, trip_to_gpx, trip_to_kml
 from cairn.logging import configure
+from cairn.roadmud import SOIL_GRID_FILENAME, SoilGrid
 from cairn.service import RunService
 from cairn.store import Store
 from cairn.store.overlays import DISCLAIMER as OVERLAY_DISCLAIMER
@@ -89,6 +97,10 @@ async def lifespan(app: FastAPI):
     )
     usedirect = UseDirectClient(settings) if settings.usedirect_enabled else None
     usedirect_map = _load_usedirect_map() if settings.usedirect_enabled else {}
+    precip = PrecipClient(settings) if settings.precip_enabled else None
+    # Road mud-susceptibility soil grid (display-only, TLC-3): enables the live
+    # post-score auto-tier. Absent until the bake builds it -> auto-tier off.
+    soil_grid = SoilGrid.load(str(settings.data_dir / "issr800" / SOIL_GRID_FILENAME))
     app.state.settings = settings
     app.state.store = store
     app.state.overlays = overlays
@@ -99,12 +111,14 @@ async def lifespan(app: FastAPI):
     app.state.availability = availability
     app.state.usedirect = usedirect
     app.state.usedirect_map = usedirect_map
+    app.state.precip = precip
     app.state.service = RunService(
-        store, settings, overpass=overpass, mvum=mvum, structures=structures
+        store, settings, overpass=overpass, mvum=mvum, structures=structures,
+        soil_grid=soil_grid,
     )
     log.info(
         "cairn %s ready on %s:%s "
-        "(mvum=%s structures=%s overlays=%s availability=%s usedirect=%s/%d)",
+        "(mvum=%s structures=%s overlays=%s availability=%s usedirect=%s/%d mud_autotier=%s)",
         __version__,
         settings.host,
         settings.port,
@@ -114,6 +128,7 @@ async def lifespan(app: FastAPI):
         "on" if availability else "off",
         "on" if usedirect else "off",
         len(usedirect_map),
+        "on" if soil_grid else "off",
     )
     try:
         yield
@@ -129,6 +144,8 @@ async def lifespan(app: FastAPI):
             await availability.aclose()
         if usedirect is not None:
             await usedirect.aclose()
+        if precip is not None:
+            await precip.aclose()
         await overlays.close()
         await store.close()
 
@@ -785,6 +802,24 @@ async def nearby_resupply(request: Request, lat: float, lon: float) -> dict:
     Teardrop logistics on a scored site's sheet; never feeds scoring."""
     overlays: OverlayStore = request.app.state.overlays
     return await overlays.nearest_amenities(lat, lon)
+
+
+@app.get("/precip")
+async def precip(request: Request, lat: float, lon: float) -> dict:
+    """Recent-rainfall summary near a point (display-only — TLC-3; clock-dependent
+    so also TLC-1, never scored). Feeds the road-mud "is it wet now" banner that
+    a reader pairs with the static Firm/Variable/Soft tier. Returns `{as_of,
+    window_h, recent_in, weighted_in, label, season_note, daily, source}`. 404 if
+    disabled; 502 if Open-Meteo is unreachable (the banner just stays hidden)."""
+    client: PrecipClient | None = request.app.state.precip
+    if client is None:
+        return JSONResponse(status_code=404, content={"error": "PrecipDisabled"})
+    try:
+        return await client.recent_rain(lat, lon)
+    except PrecipError as exc:
+        return JSONResponse(
+            status_code=502, content={"error": type(exc).__name__, "detail": str(exc)}
+        )
 
 
 @app.get("/geocode")

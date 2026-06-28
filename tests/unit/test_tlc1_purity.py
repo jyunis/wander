@@ -143,6 +143,34 @@ def test_engine_never_references_cell_coverage_tlc3():
         )
 
 
+def test_engine_never_references_road_mud_tlc3():
+    # TLC-3: road mud-susceptibility (the `mud_tier` attribute baked onto drivable
+    # roads by scripts/load_road_mud.py) is display-only — "will this road soup
+    # when it's wet," never a scoring input. Guard the engine against referencing
+    # it so a future change can't quietly wire road-mud into scoring. Token kept
+    # distinct from generic tag access (engine/features.py legitimately reads road
+    # `tags` for road_character). Code-shaped tokens only.
+    forbidden = re.compile(r"mud_tier|mud_susceptibility|MUD_TIER|road_mud")
+    for path in ENGINE_DIR.glob("*.py"):
+        source = _strip_comments(path.read_text(encoding="utf-8"))
+        assert forbidden.search(source) is None, (
+            f"{path.name} references display-only road-mud data (TLC-3 violation)"
+        )
+
+
+def test_engine_never_references_precip():
+    # TLC-3 AND TLC-1: recent precipitation (the road-mud "is it wet now" banner,
+    # cairn.clients.precip) is display-only — and being a clock reading, it would
+    # also destroy engine determinism (TLC-1). Barred from scoring twice over.
+    # Guard the engine against importing/referencing it. Code-shaped tokens only.
+    forbidden = re.compile(r"recent_rain|PrecipClient|cairn\.clients\.precip|precip_summary")
+    for path in ENGINE_DIR.glob("*.py"):
+        source = _strip_comments(path.read_text(encoding="utf-8"))
+        assert forbidden.search(source) is None, (
+            f"{path.name} references display-only recent-precip data (TLC-3/TLC-1 violation)"
+        )
+
+
 def test_no_nondeterminism_primitives_in_engine_sources():
     checked_any = False
     for name in MODULES:
