@@ -2831,8 +2831,19 @@ function placePassesFilter(place) {
   if (outsideForestScope(place)) return false; // forest scope first (decision #2)
   if (!activeCollFilters.size) return true;
   const ids = place.collection_ids || [];
-  if (activeCollFilters.has(UNFILED) && ids.length === 0) return true;
-  return ids.some((id) => activeCollFilters.has(id));
+  // AND semantics: a place must be in EVERY selected collection. Collections
+  // here are overlapping tags (places sit in 2-3 each), so intersection is the
+  // useful narrowing — matches how the forest-scope chip already ANDs. "Unfiled"
+  // means "no collections", so it only matches an uncategorized place and never
+  // coexists with a collection id (that intersection is legitimately empty).
+  for (const key of activeCollFilters) {
+    if (key === UNFILED) {
+      if (ids.length) return false;
+    } else if (!ids.includes(key)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 // --- Saved-places map layer (toggle + collection dropdown in the Layers panel),
@@ -2907,7 +2918,17 @@ function renderCollFilterBar() {
       `<span class="cf-dot"></span>🌲 In ${esc(forestActive.name)} <span class="cf-n">${inside}</span></button>`;
   }
   const body = collections.length || unfiledCount ? chips + unfiled : "";
-  host.innerHTML = scopeChip + body;
+  // Match count: with AND semantics, selecting more chips narrows the set (and
+  // can hit zero for disjoint tags) — surface the tally so an empty result reads
+  // as intentional, not broken. Shown only once a collection filter is active.
+  let summary = "";
+  const nSel = activeCollFilters.size;
+  if (nSel) {
+    const n = savedPlaces.filter(placePassesFilter).length;
+    const label = nSel > 1 ? `${n} in all ${nSel}` : `${n} match`;
+    summary = `<span class="cf-summary${n ? "" : " cf-empty"}">${label}</span>`;
+  }
+  host.innerHTML = scopeChip + body + summary;
   const scopeEl = host.querySelector(".cf-forest");
   if (scopeEl)
     scopeEl.onclick = () => {

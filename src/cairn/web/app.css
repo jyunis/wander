@@ -341,6 +341,10 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .cf-chip.on { background: var(--cf, #5b9c5a); border-color: var(--cf, #5b9c5a); color: #10151a; }
 .cf-chip.on .cf-dot { background: #10151a; opacity: 0.45; }
 .cf-n { opacity: 0.7; font-variant-numeric: tabular-nums; }
+.cf-summary { display: inline-flex; align-items: center; font-size: 11px;
+  padding: 3px 4px; color: var(--muted); opacity: 0.75;
+  font-variant-numeric: tabular-nums; }
+.cf-summary.cf-empty { color: #d98a8a; opacity: 1; }
 
 /* Multi-select bulk-add — checkboxes + the "Add N to …" action bar. */
 .saved-top-btns { display: flex; gap: 6px; }
