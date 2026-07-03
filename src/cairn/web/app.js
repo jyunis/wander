@@ -936,6 +936,7 @@ async function executeScore(bb, opts = {}) {
     showMapToast(msg);
     return;
   }
+  exitTripPlot(); // a fresh score leaves trip-plot view + restores normal layers
   clearViewResults(); // each score replaces the last (pure ephemeral)
   const btn = opts.button;
   if (btn) btn.disabled = true;
@@ -1019,6 +1020,19 @@ function renderResultsChip(shown, distinct) {
     `<span class="run-chip-text">📊 ${distinct} site${distinct === 1 ? "" : "s"}</span>` +
     `<button type="button" class="run-chip-x" title="Clear results" aria-label="Clear results">✕</button>`;
   chip.querySelector(".run-chip-x").onclick = clearViewResults;
+}
+
+// On-map chip for a plotted trip — names the trip and offers a ✕ to take it off
+// the map (the plot now persists across tabs, so this is the explicit way out).
+function renderTripChip(trip) {
+  const chip = $("trip-chip");
+  if (!chip) return;
+  const name = (trip && trip.name) || "Trip";
+  chip.hidden = false;
+  chip.innerHTML =
+    `<span class="run-chip-text">🗺 ${esc(name)}</span>` +
+    `<button type="button" class="run-chip-x" title="Clear trip from map" aria-label="Clear trip from map">✕</button>`;
+  chip.querySelector(".run-chip-x").onclick = exitTripPlot;
 }
 
 // Pull transient results off the map (next score, forest exit, or the chip ✕).
@@ -3458,8 +3472,10 @@ function setupTabs() {
       $("trips-section").hidden = which !== "trips";
       $("map-settings").hidden = which !== "tune";
       if (which === "trips") loadTrips();
-      else exitTripPlot(); // back to Saved/Tune: restore the normal map
       if (which === "saved") openSavedTab();
+      // A plotted trip stays on the map across tab switches (Saved/Tune) — it's
+      // only dismissed by running a new score or plotting a different trip, so
+      // tapping Tune to adjust layers no longer wipes the trip you're viewing.
     };
   });
   buildCollSwatches();
@@ -3880,6 +3896,7 @@ function plotTrip() {
   // campgrounds, land overlays all hidden) so the trip reads cleanly.
   clearMapForTrip();
   if (!map.hasLayer(tripLayer)) map.addLayer(tripLayer);
+  renderTripChip(activeTrip); // on-map handle to dismiss the plot (persists across tabs)
   if (window.matchMedia("(max-width: 640px)").matches) setNav(false); // reveal the map
   if (pts.length === 1) map.setView(pts[0], 13);
   else map.fitBounds(pts, { padding: [50, 50], maxZoom: 14 });
@@ -3889,13 +3906,15 @@ function plotTrip() {
 // (just detached from the map) so exitTripPlot can restore them; land overlays
 // are removed but their toggles/overlayActive stay set, and refreshActiveOverlays
 // is suppressed while tripPlotMode is on so a pan doesn't bring them back.
+// Roads are the exception — they stay visible under the trip stops (roads are
+// fundamental orientation for an off-road trip), and keep following the map.
 function clearMapForTrip() {
   tripPlotMode = true;
   closeSite(); // also clears nearbyCgLayer + any selected marker
   clearShape(); // drop any forest/park discovery highlight
   clearMeasure(); // drop any distance ruler
   if ($("results-chip")) $("results-chip").hidden = true; // hide transient score chip
-  [pinLayer, candidatesLayer, heatLayer, roadsLayer, trailsLayer, drawnItems].forEach((l) => {
+  [pinLayer, candidatesLayer, heatLayer, trailsLayer, drawnItems].forEach((l) => {
     if (l && map.hasLayer(l)) map.removeLayer(l);
   });
   if (gotoMarker) {
@@ -3916,6 +3935,8 @@ function exitTripPlot() {
   if (!tripPlotMode) return;
   tripPlotMode = false;
   tripLayer.clearLayers();
+  const tripChip = $("trip-chip");
+  if (tripChip) { tripChip.hidden = true; tripChip.innerHTML = ""; }
   if (drawnItems && !map.hasLayer(drawnItems)) map.addLayer(drawnItems);
   updateLayerVisibility(); // restore checked result layers (pins/dots/heat/roads)
   refreshActiveOverlays(); // re-fetch any active land overlays
