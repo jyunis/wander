@@ -1176,18 +1176,25 @@ function renderRoads(gj) {
     const p = f.properties || {};
     const forest = p.forest_road;
     const mv = mvumInfo(p.mvum_access);
+    const priv = !!p.private;
     // The tier actually drawn: weather-adjusted in wx mode, else the static bake.
     const tier = wx ? weatherAdjustedTier(p.mud_tier, _forestWetness) : p.mud_tier;
     // Color: in mud mode, Firm→green / Variable→amber / Soft→red (gray where no
-    // tier is baked). Otherwise: special-designation MVUM purple, forest/MVUM
-    // orange, other drivable yellow. Rough → dashed (unchanged) either way.
+    // tier is baked) — mud dominates, private only shows via the dotted dash.
+    // Otherwise: private (no public access) brick-red, special-designation MVUM
+    // purple, forest/MVUM orange, other drivable yellow.
     const color = mud
       ? mudColor(tier)
-      : mv && mv.special
-        ? "#9b59b6"
-        : forest
-          ? "#ff7a00"
-          : "#ffd23d";
+      : priv
+        ? "#d1495b"
+        : mv && mv.special
+          ? "#9b59b6"
+          : forest
+            ? "#ff7a00"
+            : "#ffd23d";
+    // Private roads draw dotted ("1 6") in every mode so the restriction reads
+    // even under mud coloring; else rough → dashed; else solid.
+    const dashArray = priv ? "1 6" : p.rough ? "5 4" : null;
     // Untiered roads still draw at full road opacity (gray) — they're roads we
     // just haven't mud-assessed yet, not absent roads. (Earlier 0.22 made a
     // freshly-scored, not-yet-baked area look empty in mud mode.)
@@ -1200,13 +1207,16 @@ function renderRoads(gj) {
     roadsLayer.addLayer(
       L.geoJSON(f, {
         interactive: false,
-        style: { color, weight: w, opacity, dashArray: p.rough ? "5 4" : null, lineCap: "round" },
+        style: { color, weight: w, opacity, dashArray, lineCap: "round" },
       })
     );
     const hit = L.geoJSON(f, {
       style: { color: "#000", weight: w + 14, opacity: 0, lineCap: "round" },
     });
-    hit.bindTooltip(label + (mv && mv.season ? ` · ${mv.season}` : ""), { sticky: true });
+    hit.bindTooltip(
+      label + (priv ? " · 🔒 private" : "") + (mv && mv.season ? ` · ${mv.season}` : ""),
+      { sticky: true }
+    );
     hit.bindPopup(roadPopup(p, mv, label), { maxWidth: 260 });
     // Tooltip is the desktop hover-preview; on tap the popup opens, so close the
     // tooltip to avoid showing both at once.
@@ -1323,6 +1333,13 @@ function restyleTrailsForZoom() {
 function roadPopup(p, mv, label) {
   const rows = [];
   if (p.name && p.ref && p.name !== label) rows.push(esc(p.name));
+  // Private / no-public-access road (OSM access or motor_vehicle). Show the raw
+  // value when it's something other than a plain "private" so the user can judge
+  // (e.g. "permit", "customers"). Display-only — not a routing/scoring signal.
+  if (p.private) {
+    const raw = p.access && p.access !== "private" ? ` <span class="mud-pop-note">(${esc(p.access)})</span>` : "";
+    rows.push(`<span class="road-pop-private">🔒 Private — no public access</span>${raw}`);
+  }
   if (mv) {
     rows.push(esc(mv.klass) + (mv.season ? ` · <b>${esc(mv.season)}</b>` : ""));
   }

@@ -1316,6 +1316,11 @@ class Store:
         return len(rows)
 
 
+# OSM access values that mean "not open to the public" for driving — the road
+# is flagged private on the overlay (styling + popup badge). Display-only.
+_PRIVATE_ACCESS = frozenset({"private", "no", "permit", "customers"})
+
+
 def _roads_features(ways: list, tags_by_id: dict[int, dict]) -> list[dict]:
     """Build LineString Features for drivable ways + their source tags. Shared by
     the per-run and viewport roads overlays. `forest_road` (MVUM/USFS) drives the
@@ -1327,6 +1332,11 @@ def _roads_features(ways: list, tags_by_id: dict[int, dict]) -> list[dict]:
         tags = tags_by_id.get(way.osm_id, {})
         operator = (tags.get("operator") or "").lower()
         is_forest = "mvum_access" in tags or "forest service" in operator
+        # Legal access from OSM: motor_vehicle overrides the generic access tag
+        # for our (driving) purposes. Restricted values flag the road as private
+        # so the overlay can style + label it — display-only (TLC-3), never
+        # scored. `access` carries the raw value for the popup.
+        access = tags.get("motor_vehicle") or tags.get("access")
         features.append(
             {
                 "type": "Feature",
@@ -1346,6 +1356,8 @@ def _roads_features(ways: list, tags_by_id: dict[int, dict]) -> list[dict]:
                     # the roads popup so the user knows which road to confirm on
                     # the MVUM. Never scored (TLC-3).
                     "mvum_access": tags.get("mvum_access"),
+                    "access": access,
+                    "private": access in _PRIVATE_ACCESS,
                     "surface": tags.get("surface"),
                     # Static road mud-susceptibility tier (Firm/Variable/Soft),
                     # baked by scripts/load_road_mud.py. Display-only (TLC-3) —

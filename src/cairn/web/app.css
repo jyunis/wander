@@ -175,6 +175,7 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .rd-swatch.rd-forest { border-color: #ff7a00; }
 .rd-swatch.rd-special { border-color: #9b59b6; }
 .rd-swatch.rd-other  { border-color: #ffd23d; }
+.rd-swatch.rd-private { border-color: #d1495b; border-top-style: dotted; }
 .roads-legend span:not(.rd-swatch) { margin-right: 8px; }
 .roads-submode { margin: 2px 0 0 18px; display: flex; flex-direction: column; gap: 2px; }
 .roads-submode label { font-size: 12px; color: var(--muted); }
@@ -196,6 +197,7 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
 .road-pop-note { margin-top: 6px; color: var(--muted); font-size: 11px;
   border-top: 1px solid var(--line); padding-top: 5px; }
 .mud-pop-note { color: var(--muted); font-size: 10px; }
+.road-pop-private { color: #d1495b; font-weight: 600; }
 
 #land-section { margin-top: 6px; }
 .land-sub { font-size: 11px; font-weight: 400; color: var(--muted); }
