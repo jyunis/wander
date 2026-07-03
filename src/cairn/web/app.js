@@ -248,16 +248,30 @@ function readWeights() {
 
 // --- init ------------------------------------------------------------------
 async function init() {
+  // Wire the interactive chrome FIRST — synchronously, before any network wait —
+  // so the hamburger, tabs, sheet and the search box respond the instant the
+  // script runs. (Previously these were wired only after the startup fetches
+  // resolved in series, leaving a multi-second dead zone on a slow link: a
+  // hamburger tap did nothing and the typeahead was inert.)
+  wireChrome();
   CONFIG = await (await fetch("/config")).json();
   buildSliders();
   buildPresets();
   buildBasemaps();
   setupMap();
-  await initLandOverlays();
-  await initMvum();
-  await loadForests(); // Explore tab (front door)
   updateLayerVisibility(); // roads + trails default on — add the layers + load the opening view
+  openSavedTab(); // default landing tab; needs savedLayer from setupMap
+  // Everything below only adds map layers / forest suggestions as it arrives — it
+  // must NOT gate interactivity, so fire the fetches in parallel and let them
+  // populate in the background (best-effort; each guards its own failure). The
+  // typeahead shows "Loading forests…" until /forests lands.
+  initLandOverlays();
+  initMvum();
+  loadForests();
+}
 
+// DOM-only event wiring — depends on no fetched data, so it runs up front.
+function wireChrome() {
   $("draw-bbox").onclick = startDraw;
   $("use-view").onclick = useCurrentView;
   $("score-btn").onclick = runScore;
@@ -331,7 +345,7 @@ async function init() {
     }
   });
   setupTabs();
-  openSavedTab(); // Saved is the default landing tab (the panel is the library)
+  wireExplore(); // typeahead input handlers live immediately; suggestions fill in when /forests lands
 }
 
 function buildSliders() {
@@ -1573,6 +1587,7 @@ function buildLandToggles() {
 
 // --- Explore: forest-first browse (doc #34, M1) ----------------------------
 let forestsAll = []; // GET /forests: [{layer, name, area_km2, bbox, has_mvum}]
+let _forestsLoaded = false; // /forests has resolved (drives the "Loading forests…" hint)
 let forestActive = null; // {layer, name} currently entered (Explore detail view)
 
 const FOREST_RECENT_MAX = 6;
@@ -1621,9 +1636,11 @@ async function loadForests() {
   } catch {
     forestsAll = [];
   }
+  _forestsLoaded = true;
   await loadForestMarks(); // hydrate pins + recents before the first render
   wireExplore();
   updateForestBar();
+  if (_fbarOpen) renderForestMenu(); // refresh an already-open menu (drop the loading hint)
 }
 
 let _exploreWired = false;
@@ -1734,7 +1751,11 @@ function renderForestMenu() {
   }
 
   // 2. Forests — the durable result; always first, never displaced by places.
-  if (!raw) {
+  // Until /forests lands the list is empty, so say so rather than showing a
+  // blank dropdown (coords/places rows above still work meanwhile).
+  if (!_forestsLoaded && !forestsAll.length) {
+    html += `<div class="fbar-empty">Loading forests…</div>`;
+  } else if (!raw) {
     const seen = new Set();
     const featured = [];
     for (const k of [...forestMarks.pinned, ...forestMarks.recent]) {
