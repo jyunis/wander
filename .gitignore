@@ -9,6 +9,10 @@ __pycache__/
 # repo root so committed package data (src/cairn/data/) stays tracked.
 /data/
 
+# Nightly backup job's consistent SQLite snapshots — backup-host writes
+# sqlite3 .backup copies (cairn.db, overlays.db) here before restic sweeps them.
+/dump/
+
 # Secrets
 .env
 .env.local

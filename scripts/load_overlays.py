@@ -13,8 +13,10 @@ boundaries and DNR campgrounds are bespoke per state. Every source for a layer
 unions under one shared layer id, so the store/API/UI stay state-blind.
 
 The overlay store is a separate SpatiaLite file from ``cairn.db`` so the scoring
-DB stays lean, and it is fully re-derivable (disposable, excluded from restic) —
-re-running this script rebuilds each layer across all configured states.
+DB stays lean, and it is fully re-derivable — re-running this script rebuilds each
+layer across all configured states. It IS kept in the nightly backup anyway (a
+consistent sqlite3 ``.backup`` snapshot under ``dump/``), since a rebuild depends
+on the upstream DNR/USFS/RIDB sources still being live.
 
 Run in-image with network access (pyshp + shapely added on the fly):
 
