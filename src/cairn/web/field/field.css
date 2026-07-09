@@ -1,0 +1,124 @@
+/* Wander Field — the offline companion's own styles.
+   Deliberately separate from app.css: this view has to stay small and boring so
+   it survives on a phone with no signal. Dark by default (night use, battery). */
+
+:root {
+  --bg: #10151a;
+  --panel: #181f27;
+  --line: #2a3542;
+  --text: #e7edf3;
+  --muted: #8a97a3;
+  --accent: #5aa0c8;
+  --ok: #8fe0a6;
+  --bad: #f0a3a1;
+  --warn: #f0cf8f;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.4 -apple-system, system-ui, sans-serif;
+}
+
+#map { position: fixed; inset: 0; background: #0c1116; }
+
+/* --- sheet ---------------------------------------------------------------- */
+
+#sheet {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 5;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  max-height: 68vh;
+  overflow: auto;
+  transition: transform .2s;
+}
+#sheet.min { transform: translateY(calc(100% - 46px)); }
+
+.grip { display: flex; align-items: center; justify-content: space-between; margin: -2px 0 8px; }
+.grip h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .02em; }
+.grip button {
+  background: none; border: 1px solid var(--line); color: var(--muted);
+  border-radius: 8px; padding: 4px 10px; font-size: 12px;
+}
+
+section { margin: 14px 0 0; }
+section h2 {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--muted); margin: 0 0 8px; font-weight: 600;
+}
+
+#status { font-size: 15px; font-weight: 700; padding: 9px 11px; border-radius: 9px; }
+#status.ok   { background: rgba(63,156,90,.16);  color: var(--ok);   border: 1px solid rgba(63,156,90,.4); }
+#status.bad  { background: rgba(201,82,79,.16);  color: var(--bad);  border: 1px solid rgba(201,82,79,.4); }
+#status.warn { background: rgba(201,154,63,.14); color: var(--warn); border: 1px solid rgba(201,154,63,.4); }
+
+/* --- region list ---------------------------------------------------------- */
+
+.regions { display: flex; flex-direction: column; gap: 8px; }
+
+.region {
+  border: 1px solid var(--line); border-radius: 10px; padding: 10px 11px;
+  display: flex; align-items: center; gap: 10px;
+}
+.region.active { border-color: var(--accent); background: rgba(90,160,200,.08); }
+.region .meta { flex: 1; min-width: 0; }
+.region .name { font-weight: 600; }
+.region .sub { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.region .sub .dot { opacity: .5; margin: 0 5px; }
+.region .sub .cached { color: var(--ok); }
+
+.region button {
+  border: none; border-radius: 9px; padding: 9px 13px;
+  font-size: 13px; font-weight: 600; color: #0c1116; background: var(--accent);
+  min-width: 92px;
+}
+.region button.sec { background: none; color: var(--muted); border: 1px solid var(--line); min-width: 0; }
+.region button:disabled { opacity: .45; }
+
+.bar { height: 5px; background: #0c1116; border-radius: 3px; overflow: hidden; margin-top: 7px; }
+.bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .15s; }
+
+/* --- diagnostics ---------------------------------------------------------- */
+
+button.link {
+  background: none; border: none; color: var(--muted); padding: 0;
+  font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+}
+.row {
+  display: flex; justify-content: space-between; gap: 10px;
+  padding: 5px 0; border-bottom: 1px solid rgba(42,53,66,.5);
+}
+.row .k { color: var(--muted); }
+.row .v { text-align: right; font-variant-numeric: tabular-nums; }
+.v.g { color: var(--ok); } .v.r { color: var(--bad); } .v.w { color: var(--warn); }
+
+.hint { color: var(--muted); font-size: 12px; margin: 10px 0 0; }
+.hint code { background: #0c1116; padding: 1px 4px; border-radius: 4px; }
+.disclaimer { border-top: 1px solid var(--line); padding-top: 9px; }
+
+/* --- map controls --------------------------------------------------------- */
+
+.map-btns {
+  position: fixed; top: calc(8px + env(safe-area-inset-top)); right: 8px;
+  z-index: 4; display: flex; flex-direction: column; gap: 8px;
+}
+.map-btns button {
+  width: 44px; height: 44px; border-radius: 10px; border: 1px solid var(--line);
+  background: rgba(24,31,39,.9); color: #cdd7e0; font-size: 18px;
+}
+.map-btns button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+
+#offline-badge {
+  position: fixed; top: calc(8px + env(safe-area-inset-top)); left: 8px; z-index: 4;
+  background: rgba(201,154,63,.9); color: #1a1206; font-weight: 700; font-size: 11px;
+  letter-spacing: .08em; padding: 6px 9px; border-radius: 8px;
+}
+
+.maplibregl-ctrl-top-left { margin-top: env(safe-area-inset-top); }

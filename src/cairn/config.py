@@ -106,6 +106,10 @@ class Settings(BaseSettings):
     # re-derivable; the app runs fine if it's absent (no Land layers offered).
     overlays_db_path: Path | None = None
     overlay_max_features: int = 4000  # per /overlays/{layer} response cap
+    # Pre-baked offline basemap archives for Wander Field (one .pmtiles per
+    # region, built by scripts/build_region.py). Re-derivable like overlays.db;
+    # absent → the field view offers no regions to download.
+    regions_dir: Path | None = None
 
     # --- External services (public, no key — TLC-12) -----------------------
     overpass_url: str = "https://overpass-api.de/api/interpreter"
@@ -252,6 +256,8 @@ class Settings(BaseSettings):
             self.availability_cache_dir = self.data_dir / "availability-cache"
         if self.precip_cache_dir is None:
             self.precip_cache_dir = self.data_dir / "precip-cache"
+        if self.regions_dir is None:
+            self.regions_dir = self.data_dir / "regions"
         return self
 
     def ui_config(self) -> dict:

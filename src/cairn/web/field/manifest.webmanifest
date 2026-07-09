@@ -1,0 +1,16 @@
+{
+  "id": "/field/",
+  "name": "Wander Field",
+  "short_name": "Wander",
+  "description": "Offline map, live GPS, and your saved places — for where there's no signal.",
+  "start_url": "/field/",
+  "scope": "/field/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#10151a",
+  "theme_color": "#10151a",
+  "icons": [
+    { "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

@@ -14,21 +14,23 @@ PATCH/DELETE /collections/{id}, POST /collections/{id}/places,
 GET/POST /trips, GET/PATCH/DELETE /trips/{id}, POST /trips/{id}/members,
 DELETE /trips/{id}/members/{saved_id}, GET /trips/{id}/export.gpx|.kml,
 GET /trips/{id}/availability,
-GET /suggest-name, GET /precip, GET /geocode, GET /config, GET /health, and the static UI
-at / (mounted if web/ exists).
+GET /suggest-name, GET /precip, GET /geocode, GET /config, GET /health,
+GET /field/regions, GET /field/regions/{id}.pmtiles, and the static UI
+at / (mounted if web/ exists) + the offline field PWA at /field/.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import re
 from contextlib import asynccontextmanager
 from importlib.resources import files
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -50,6 +52,8 @@ from cairn.errors import (
     ValidationError,
 )
 from cairn.export import trip_slug, trip_to_gpx, trip_to_kml
+from cairn.field import SUFFIX as PMTILES_SUFFIX
+from cairn.field import RegionStore
 from cairn.logging import configure
 from cairn.roadmud import SOIL_GRID_FILENAME, SoilGrid
 from cairn.service import RunService
@@ -60,6 +64,11 @@ from cairn.store.repo import UNSET
 from cairn.store.types import Bbox
 
 log = logging.getLogger("cairn.api")
+
+# Python's mimetypes doesn't know either of these, and StaticFiles falls back to
+# text/plain for an unknown suffix — which makes iOS ignore the PWA manifest.
+mimetypes.add_type("application/manifest+json", ".webmanifest")
+mimetypes.add_type("application/octet-stream", ".pmtiles")
 
 
 def _load_usedirect_map() -> dict:
@@ -159,12 +168,19 @@ async def _revalidate_static(request: Request, call_next):
     StaticFiles ETag when unchanged) so a rebuild shows up without a hard refresh
     — instead of serving a stale cached app.js/app.css off heuristic caching."""
     response = await call_next(request)
+    # A route that set its own Cache-Control meant it (the service worker wants
+    # no-store, a raster overlay wants a long max-age) — only fill in the default
+    # for the static assets, which arrive with no policy of their own.
+    if "cache-control" in response.headers:
+        return response
     path = request.url.path
-    if path == "/" or path.endswith(".html"):
+    if path in ("/", "/field/") or path.endswith(".html"):
         # The entry HTML must never be cached: iOS Safari was serving a stale
         # index.html (ignoring no-cache revalidation), so every UI update was
         # invisible on-device. no-store forces a fresh fetch every load; the
         # HTML then points at content-hashed app.js/app.css (?v=…) for caching.
+        # (/field/ is the field PWA's entry — its service worker still serves
+        # the shell from cache when offline, so no-store costs nothing there.)
         response.headers["Cache-Control"] = "no-store"
     elif path.endswith((".js", ".css")):
         response.headers["Cache-Control"] = "no-cache"
@@ -870,8 +886,55 @@ async def health(request: Request) -> JSONResponse:
     )
 
 
+# --- Wander Field: offline companion (display-only — TLC-3) ----------------
+# "Plan online, navigate offline." A region is a pre-baked Protomaps vector
+# basemap the client downloads once, over signal, into the Cache API. Nothing
+# here is a scoring input, and a region is never a claim that anywhere inside
+# it is legal to camp.
+
+
+def _region_store(request: Request) -> RegionStore:
+    return RegionStore(Path(request.app.state.settings.regions_dir))
+
+
+@app.get("/field/regions")
+async def list_field_regions(request: Request) -> dict:
+    """Offline basemaps available to download, read off the PMTiles headers on
+    disk. Empty if none are built (scripts/build_region.py)."""
+    regions = [r.as_dict() for r in _region_store(request).list()]
+    return {"regions": regions, "disclaimer": OVERLAY_DISCLAIMER}
+
+
+@app.get(f"/field/regions/{{region_id}}{PMTILES_SUFFIX}")
+async def field_region_archive(region_id: str, request: Request):
+    """Serve a region's PMTiles archive. FileResponse honours Range requests, so
+    MapLibre can read tiles straight off this URL while still on signal; the
+    field app downloads the whole file for offline use."""
+    path = _region_store(request).path_for(region_id)
+    if path is None:
+        return JSONResponse(status_code=404, content={"error": "NotFound"})
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        # Revalidate (cheap 304 on the ETag) rather than let heuristic caching
+        # pin a rebuilt region's stale bytes.
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
 # --- static UI (FC-9) — mounted last so it doesn't shadow the API routes ---
 _WEB_DIR = Path(__file__).parent / "web"
+_FIELD_DIR = _WEB_DIR / "field"
+
+
+def _hash_files(*paths: Path) -> str:
+    import hashlib
+
+    h = hashlib.md5()
+    for p in paths:
+        if p.exists():
+            h.update(p.read_bytes())
+    return h.hexdigest()[:8]
 
 
 def _asset_token() -> str:
@@ -879,17 +942,46 @@ def _asset_token() -> str:
     version the app.js/app.css URLs so a deploy always busts the browser cache —
     iOS Safari in particular can keep serving a stale app.js even past a
     no-cache + ETag revalidation, leaving the UI half-broken."""
-    import hashlib
+    return _hash_files(_WEB_DIR / "app.js", _WEB_DIR / "app.css")
 
-    h = hashlib.md5()
-    for name in ("app.js", "app.css"):
-        p = _WEB_DIR / name
-        if p.exists():
-            h.update(p.read_bytes())
-    return h.hexdigest()[:8]
+
+def _field_token() -> str:
+    """Same idea for the field PWA — but it also drives the service worker's
+    cache name, so a deploy retires the old precached shell instead of leaving
+    an installed phone pinned to it forever."""
+    return _hash_files(
+        _FIELD_DIR / "field.js", _FIELD_DIR / "field.css", _FIELD_DIR / "index.html"
+    )
 
 
 _ASSET_TOKEN = _asset_token()
+_FIELD_TOKEN = _field_token()
+
+
+if (_FIELD_DIR / "index.html").exists():
+
+    @app.get("/field/", include_in_schema=False)
+    async def field_index() -> Response:
+        """The field PWA shell, with cache-busted asset URLs (?v=<hash>)."""
+        html = (_FIELD_DIR / "index.html").read_text()
+        html = html.replace("./field.js", f"./field.js?v={_FIELD_TOKEN}")
+        html = html.replace("./field.css", f"./field.css?v={_FIELD_TOKEN}")
+        return Response(
+            content=html, media_type="text/html", headers={"Cache-Control": "no-store"}
+        )
+
+    @app.get("/field/sw.js", include_in_schema=False)
+    async def field_sw() -> Response:
+        """The service worker, with the build token baked in. Its bytes change
+        whenever the shell changes, which is exactly what makes the browser
+        install a new worker and re-precache — a static sw.js would serve the
+        first-ever shell to an installed phone forever."""
+        js = (_FIELD_DIR / "sw.js").read_text().replace("__BUILD__", _FIELD_TOKEN)
+        return Response(
+            content=js,
+            media_type="text/javascript",
+            headers={"Cache-Control": "no-store"},
+        )
 
 
 if (_WEB_DIR / "index.html").exists():
@@ -907,5 +999,6 @@ if (_WEB_DIR / "index.html").exists():
         )
 
     # Mounted after the index route so "/" is served (versioned) by the route
-    # above; everything else (app.js, app.css, …) falls through to StaticFiles.
+    # above; everything else (app.js, app.css, the field PWA's static assets, …)
+    # falls through to StaticFiles.
     app.mount("/", StaticFiles(directory=str(_WEB_DIR), html=True), name="web")
