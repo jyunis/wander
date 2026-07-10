@@ -28,9 +28,29 @@
 
   let map = null;
   let activeRegion = null;
+  let activeSource = null; // 'offline' (from the cached blob) | 'stream' (over the wire)
   let fix = null; // last GeolocationPosition
-  let following = true;
+  // Off until there's a fix to follow. It used to start true, which did nothing
+  // (the first fix lands before the map exists) while the button read "off".
+  let following = false;
   let protocol = null;
+
+  // iOS is the only platform where an un-installed PWA gets the flimsy storage
+  // bucket, so it's the only one worth nagging. iPadOS lies and reports MacIntel.
+  const IS_IOS =
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+  const bboxPolygon = ([w, s, e, n]) => ({
+    type: 'Feature',
+    properties: {},
+    geometry: { type: 'Polygon', coordinates: [[[w, s], [e, s], [e, n], [w, n], [w, s]]] },
+  });
+
+  const insideBbox = ([w, s, e, n], lon, lat) => lon >= w && lon <= e && lat >= s && lat <= n;
+
+  const fixIsInsideRegion = () =>
+    !!fix && !!activeRegion && insideBbox(activeRegion.bbox, fix.coords.longitude, fix.coords.latitude);
 
   // --- what we've downloaded ------------------------------------------------
   //
@@ -108,13 +128,14 @@
   // undefined — MapLibre's style validation rejects `undefined` ("string
   // expected"), aborts the style load, and never registers the source. The map
   // then renders as a blank canvas with no error in the console.
-  function styleFor(sourceKey) {
+  function styleFor(sourceKey, region) {
     return {
       version: 8,
       sources: {
         pm: { type: 'vector', url: `pmtiles://${sourceKey}` },
         me: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
         meacc: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
+        bounds: { type: 'geojson', data: bboxPolygon(region.bbox) },
       },
       layers: [
         { id: 'bg', type: 'background', paint: { 'background-color': '#eae6da' } },
@@ -179,6 +200,12 @@
           id: 'boundaries', type: 'line', source: 'pm', 'source-layer': 'boundaries',
           paint: { 'line-color': '#9b86a8', 'line-width': 0.8, 'line-dasharray': [3, 2], 'line-opacity': 0.6 },
         },
+        // Where the downloaded data stops. Without this the edge of a region is
+        // indistinguishable from "the map is broken".
+        {
+          id: 'region-bounds', type: 'line', source: 'bounds',
+          paint: { 'line-color': '#2f7fd6', 'line-width': 1.5, 'line-dasharray': [4, 3], 'line-opacity': 0.55 },
+        },
         {
           id: 'me-acc-fill', type: 'fill', source: 'meacc',
           paint: { 'fill-color': '#4a90d9', 'fill-opacity': 0.14 },
@@ -208,19 +235,22 @@
     if (blob) {
       const file = new File([blob], region.id); // FileSource.getKey() === file.name
       protocol.add(new pmtiles.PMTiles(new pmtiles.FileSource(file)));
+      activeSource = 'offline';
       return region.id;
     }
     if (!navigator.onLine) return null;
     const url = new URL(region.url, location.href).href;
     protocol.add(new pmtiles.PMTiles(url));
+    activeSource = 'stream';
     return url;
   }
 
   async function showRegion(region) {
     const key = await registerSource(region);
     if (!key) return false;
-    const style = styleFor(key);
+    const style = styleFor(key, region);
     const bounds = [[region.bbox[0], region.bbox[1]], [region.bbox[2], region.bbox[3]]];
+    const switching = !activeRegion || activeRegion.id !== region.id;
 
     if (map) {
       map.setStyle(style);
@@ -240,12 +270,16 @@
       map.on('dragstart', (e) => {
         if (e.originalEvent) setFollowing(false);
       });
+      // A fix that arrived before the map existed has to be replayed, or the
+      // dot never appears for someone standing still.
       map.once('load', drawFix);
       window.fieldMap = map; // `window.map` resolves to the #map div, not this
     }
-    if (!activeRegion || activeRegion.id !== region.id) map.fitBounds(bounds, { padding: 20, duration: 0 });
+    if (switching) map.fitBounds(bounds, { padding: 20, duration: 0 });
     activeRegion = region;
     renderRegions();
+    renderChips();
+    renderStatus();
     return true;
   }
 
@@ -283,9 +317,10 @@
   }
 
   function setFollowing(on) {
-    following = on;
-    $('follow').setAttribute('aria-pressed', String(on));
-    if (on) recenter();
+    following = on && !!fix;
+    $('follow').setAttribute('aria-pressed', String(following));
+    if (following) recenter();
+    renderChips();
   }
 
   function recenter() {
@@ -293,13 +328,25 @@
     map.easeTo({ center: [fix.coords.longitude, fix.coords.latitude], zoom: Math.max(map.getZoom(), 13) });
   }
 
+  function showActiveRegion() {
+    if (!map || !activeRegion) return;
+    setFollowing(false);
+    const [w, s, e, n] = activeRegion.bbox;
+    map.fitBounds([[w, s], [e, n]], { padding: 20 });
+  }
+
   function startGPS() {
     if (!navigator.geolocation) return;
     navigator.geolocation.watchPosition(
       (pos) => {
+        const isFirst = !fix;
         fix = pos;
-        drawFix();
+        drawFix(); // no-ops until the map exists; map.once('load') replays it
         if (following) recenter();
+        // Don't fly to a first fix: it's usually your driveway, hundreds of km
+        // from the region you downloaded, and the map there is empty.
+        if (isFirst) $('follow').disabled = false;
+        renderChips();
         renderDiagnostics();
       },
       () => renderDiagnostics(),
@@ -451,13 +498,46 @@
       .join('');
   }
 
+  // The two things you can't tell by looking at a map: whether these tiles came
+  // off the device or the network, and whether you're standing inside the part
+  // of the world that was downloaded.
+  function renderChips() {
+    const host = $('chips');
+    host.innerHTML = '';
+    if (!activeRegion) return;
+
+    const src = document.createElement('div');
+    const offline = activeSource === 'offline';
+    src.className = 'chip' + (offline ? ' ok' : '');
+    src.textContent = offline ? '📴 Offline copy' : '📡 Streaming — not downloaded';
+    host.appendChild(src);
+
+    if (fix && !fixIsInsideRegion()) {
+      const warn = document.createElement('div');
+      warn.className = 'chip warn';
+      warn.innerHTML = `<span>You're outside ${activeRegion.name}</span>`;
+      const back = document.createElement('button');
+      back.textContent = 'Show map';
+      back.onclick = showActiveRegion;
+      warn.appendChild(back);
+      host.appendChild(warn);
+    }
+  }
+
   function renderStatus() {
     const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
     $('offline-badge').hidden = navigator.onLine;
     if (!('caches' in window)) return setStatus('bad', '⛔ Offline storage unavailable — this page must be served over HTTPS.');
-    if (!cachedIds.size) return setStatus('bad', '⛔ No offline map yet — connect to signal and download one below.');
-    if (!standalone) return setStatus('warn', '⚠️ Map downloaded, but not installed. Share → Add to Home Screen, then re-download — iOS gives an installed app its own, more durable storage.');
-    setStatus('ok', navigator.onLine ? '✅ Offline map ready.' : '✅ Offline — running from cache.');
+    if (!cachedIds.size) {
+      return activeRegion
+        ? setStatus('warn', "📡 Streaming this map over the network. Tap Download and it'll work with no signal.")
+        : setStatus('bad', '⛔ No offline map yet — connect to signal and download one below.');
+    }
+    // Only iOS punishes an un-installed PWA's storage; on a Mac this is noise.
+    if (IS_IOS && !standalone) {
+      return setStatus('warn', '⚠️ Map downloaded, but not installed. Share → Add to Home Screen, then re-download — iOS gives an installed app its own, more durable storage.');
+    }
+    setStatus('ok', navigator.onLine ? '✅ Offline map ready — this map works with no signal.' : '✅ Offline — running from cache.');
   }
 
   // --- boot -----------------------------------------------------------------
@@ -481,6 +561,7 @@
     cachedIds = new Set(cachedList.map((r) => r.id));
     mergeRegions();
     renderRegions();
+    renderChips();
     renderStatus();
     renderDiagnostics();
   }

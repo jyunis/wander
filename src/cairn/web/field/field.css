@@ -114,6 +114,28 @@ button.link {
   background: rgba(24,31,39,.9); color: #cdd7e0; font-size: 18px;
 }
 .map-btns button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.map-btns button:disabled { opacity: .45; }
+
+/* Answers the two questions a map can't answer by itself: are these tiles on my
+   device, and am I standing inside the piece of the world I downloaded? */
+#chips {
+  position: fixed; z-index: 4; left: 50%; transform: translateX(-50%);
+  top: calc(8px + env(safe-area-inset-top));
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  max-width: min(92vw, 420px);
+}
+.chip {
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(24,31,39,.94); border: 1px solid var(--line);
+  color: #cdd7e0; border-radius: 999px; padding: 7px 12px;
+  font-size: 12px; font-weight: 600; white-space: nowrap;
+}
+.chip.ok { color: var(--ok); border-color: rgba(63,156,90,.45); }
+.chip.warn { color: var(--warn); border-color: rgba(201,154,63,.5); }
+.chip button {
+  border: none; border-radius: 999px; padding: 4px 10px;
+  background: var(--accent); color: #0c1116; font-size: 12px; font-weight: 700;
+}
 
 #offline-badge {
   position: fixed; top: calc(8px + env(safe-area-inset-top)); left: 8px; z-index: 4;
