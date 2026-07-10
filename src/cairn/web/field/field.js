@@ -30,6 +30,8 @@
   let map = null;
   let activeRegion = null;
   let outlineData = null; // the active region's real boundary, if we have one
+  let downloading = false;
+  let upgradeDeferred = false; // a new build landed while we were downloading
   let activeSource = null; // 'offline' (from the cached blob) | 'stream' (over the wire)
   let fix = null; // last GeolocationPosition
   // Off until there's a fix to follow. It used to start true, which did nothing
@@ -435,6 +437,7 @@
     if (!navigator.onLine) return setStatus('bad', 'No connection — reconnect to download.');
     btn.disabled = true;
     bar.parentElement.hidden = false;
+    downloading = true;
     try {
       // Ask before we fill the box: persisted storage is the strongest signal
       // iOS gives us that a 30 MB archive won't be evicted under pressure.
@@ -472,10 +475,13 @@
     } catch (e) {
       setStatus('bad', 'Download failed: ' + e.message);
     } finally {
+      downloading = false;
       btn.disabled = false;
       bar.parentElement.hidden = true;
       bar.style.width = '0';
-      refresh();
+      await refresh();
+      // The worker held off upgrading us so the download could finish. It's safe now.
+      if (upgradeDeferred) location.reload();
     }
   }
 
@@ -681,8 +687,16 @@
 
   // Updates are handled entirely by the worker (see sw.js `activate`): a stale
   // page can't be trusted to upgrade itself, because the code that would do it
-  // is exactly the code it isn't running yet.
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js', { scope: './' });
+  // is exactly the code it isn't running yet. All we do is tell it when a reload
+  // would cost us a half-finished 31 MB download.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (event) => {
+      if (event.data?.type !== 'wf-upgrade-check') return;
+      if (downloading) upgradeDeferred = true;
+      event.ports?.[0]?.postMessage({ busy: downloading });
+    });
+    navigator.serviceWorker.register('./sw.js', { scope: './' });
+  }
   startGPS();
   boot();
 })();

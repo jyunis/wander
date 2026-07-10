@@ -28,6 +28,25 @@ self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(SHELL).then((c) => c.addAll(SHELL_URLS)).then(() => self.skipWaiting()));
 });
 
+// Ask a page whether it's busy. It answers on a private port; a page running an
+// older build has no listener, so we time out and treat silence as "not busy".
+function isBusy(client) {
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    const giveUp = setTimeout(() => resolve(false), 300);
+    channel.port1.onmessage = (event) => {
+      clearTimeout(giveUp);
+      resolve(!!event.data?.busy);
+    };
+    try {
+      client.postMessage({ type: 'wf-upgrade-check' }, [channel.port2]);
+    } catch {
+      clearTimeout(giveUp);
+      resolve(false);
+    }
+  });
+}
+
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     (async () => {
@@ -45,6 +64,11 @@ self.addEventListener('activate', (e) => {
       if (!stale.length) return;
       const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       for (const client of windows) {
+        // Never yank a page that is mid-download: a reload throws away however
+        // much of a 31 MB archive it had, and on a tethered phone that hurts.
+        // A page running an older build won't answer; it has no download to
+        // lose that we know of, and rescuing it is the whole point.
+        if (await isBusy(client)) continue;
         try {
           await client.navigate(client.url);
         } catch {

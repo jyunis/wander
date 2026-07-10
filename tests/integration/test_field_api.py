@@ -173,6 +173,26 @@ def test_service_worker_reloads_stale_pages_on_upgrade(client):
     assert "if (!stale.length) return;" in sw  # first install: nothing to replace
 
 
+def test_upgrade_never_interrupts_a_download(client):
+    """The worker asks before it reloads a page, and waits out a download.
+
+    `activate` reloads open windows so a stale page picks up a deploy. Doing that
+    mid-download throws away however much of a 31 MB archive the page had. A page
+    on an older build cannot answer the question — silence times out as "not
+    busy", which is right: rescuing it is the point, and it has no download we
+    know of.
+    """
+    from cairn.api import _FIELD_DIR
+
+    sw = client.get("/field/sw.js").text
+    page = (_FIELD_DIR / "field.js").read_text()
+
+    assert "wf-upgrade-check" in sw and "wf-upgrade-check" in page
+    assert "if (await isBusy(client)) continue;" in sw
+    assert "resolve(false)" in sw  # silence from an old build => proceed
+    assert "upgradeDeferred" in page  # ...and the page reloads once it's safe
+
+
 def test_field_map_layers_declare_their_geometry(client):
     """MapLibre does not filter a layer's bucket by geometry type.
 
