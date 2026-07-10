@@ -9,10 +9,12 @@
 const BUILD = '__BUILD__';
 const SHELL = `wander-field-shell-${BUILD}`;
 
+// Precache the EXACT urls index.html asks for, query string and all. Precaching
+// bare './field.js' and matching with ignoreSearch made the ?v= token inert.
 const SHELL_URLS = [
   './',
-  './field.css',
-  './field.js',
+  `./field.css?v=${BUILD}`,
+  `./field.js?v=${BUILD}`,
   './manifest.webmanifest',
   './vendor/maplibre-gl.js',
   './vendor/maplibre-gl.css',
@@ -56,8 +58,10 @@ async function networkFirst(request, fallbackUrl) {
 
 async function cacheFirst(request) {
   const cache = await caches.open(SHELL);
-  // ignoreSearch: the page requests ./field.js?v=<token>, we precached ./field.js.
-  const hit = await cache.match(request, { ignoreSearch: true });
+  // Exact match first (the versioned asset we precached). The ignoreSearch
+  // fallback is safe because each build gets its own cache, so it can only ever
+  // match this build's copy.
+  const hit = (await cache.match(request)) || (await cache.match(request, { ignoreSearch: true }));
   if (hit) return hit;
   const fresh = await fetch(request);
   if (fresh.ok) cache.put(request, fresh.clone());

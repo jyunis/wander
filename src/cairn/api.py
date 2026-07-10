@@ -948,9 +948,14 @@ def _asset_token() -> str:
 def _field_token() -> str:
     """Same idea for the field PWA — but it also drives the service worker's
     cache name, so a deploy retires the old precached shell instead of leaving
-    an installed phone pinned to it forever."""
+    an installed phone pinned to it forever. sw.js is hashed too: a change to the
+    worker alone must still move the token, or the browser sees identical bytes
+    and never installs it."""
     return _hash_files(
-        _FIELD_DIR / "field.js", _FIELD_DIR / "field.css", _FIELD_DIR / "index.html"
+        _FIELD_DIR / "field.js",
+        _FIELD_DIR / "field.css",
+        _FIELD_DIR / "index.html",
+        _FIELD_DIR / "sw.js",
     )
 
 

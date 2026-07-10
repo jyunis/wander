@@ -118,18 +118,20 @@ button.link {
 
 /* Answers the two questions a map can't answer by itself: are these tiles on my
    device, and am I standing inside the piece of the world I downloaded? */
+/* Below the zoom control + locate button, not on top of them. */
 #chips {
   position: fixed; z-index: 4; left: 50%; transform: translateX(-50%);
-  top: calc(8px + env(safe-area-inset-top));
+  top: calc(78px + env(safe-area-inset-top));
   display: flex; flex-direction: column; align-items: center; gap: 6px;
-  max-width: min(92vw, 420px);
+  max-width: min(88vw, 380px);
 }
 .chip {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 8px; max-width: 100%;
   background: rgba(24,31,39,.94); border: 1px solid var(--line);
   color: #cdd7e0; border-radius: 999px; padding: 7px 12px;
   font-size: 12px; font-weight: 600; white-space: nowrap;
 }
+.chip span { overflow: hidden; text-overflow: ellipsis; }
 .chip.ok { color: var(--ok); border-color: rgba(63,156,90,.45); }
 .chip.warn { color: var(--warn); border-color: rgba(201,154,63,.5); }
 .chip button {

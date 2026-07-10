@@ -47,6 +47,28 @@
     geometry: { type: 'Polygon', coordinates: [[[w, s], [e, s], [e, n], [w, n], [w, s]]] },
   });
 
+  // The whole world with the region punched out of it, so everywhere you have no
+  // data reads as "no data" instead of "the map is broken".
+  const maskPolygon = ([w, s, e, n]) => ({
+    type: 'Feature',
+    properties: {},
+    geometry: {
+      type: 'Polygon',
+      coordinates: [
+        [[-180, -85], [180, -85], [180, 85], [-180, 85], [-180, -85]],
+        [[w, s], [w, n], [e, n], [e, s], [w, s]], // hole, wound the other way
+      ],
+    },
+  });
+
+  // Protomaps packs lakes (polygons), rivers (lines) and label anchors (points)
+  // into ONE `water` source-layer, and MapLibre does not filter a layer's bucket
+  // by geometry type: a `fill` layer handed a LineString earcuts it into a long
+  // tapering sliver across the map, and a `line` layer strokes every lake's
+  // outline. Every basemap layer below therefore states the geometry it wants.
+  const POLYGONS = () => ['==', ['geometry-type'], 'Polygon']; // also matches MultiPolygon
+  const LINES = () => ['==', ['geometry-type'], 'LineString']; // also matches MultiLineString
+
   const insideBbox = ([w, s, e, n], lon, lat) => lon >= w && lon <= e && lat >= s && lat <= n;
 
   const fixIsInsideRegion = () =>
@@ -136,12 +158,17 @@
         me: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
         meacc: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
         bounds: { type: 'geojson', data: bboxPolygon(region.bbox) },
+        mask: { type: 'geojson', data: maskPolygon(region.bbox) },
       },
       layers: [
         { id: 'bg', type: 'background', paint: { 'background-color': '#eae6da' } },
-        { id: 'earth', type: 'fill', source: 'pm', 'source-layer': 'earth', paint: { 'fill-color': '#e6e1d3' } },
+        {
+          id: 'earth', type: 'fill', source: 'pm', 'source-layer': 'earth',
+          filter: POLYGONS(), paint: { 'fill-color': '#e6e1d3' },
+        },
         {
           id: 'landcover', type: 'fill', source: 'pm', 'source-layer': 'landcover',
+          filter: POLYGONS(),
           paint: {
             'fill-color': ['match', ['get', 'kind'],
               ['forest', 'scrub', 'wood'], '#cdddba',
@@ -153,6 +180,7 @@
         },
         {
           id: 'landuse', type: 'fill', source: 'pm', 'source-layer': 'landuse',
+          filter: POLYGONS(),
           paint: {
             'fill-color': ['match', ['get', 'kind'],
               ['park', 'national_park', 'forest', 'nature_reserve', 'protected_area'], '#c9dcb2',
@@ -161,9 +189,13 @@
             'fill-opacity': 0.5,
           },
         },
-        { id: 'water', type: 'fill', source: 'pm', 'source-layer': 'water', paint: { 'fill-color': '#9fc4de' } },
+        {
+          id: 'water', type: 'fill', source: 'pm', 'source-layer': 'water',
+          filter: POLYGONS(), paint: { 'fill-color': '#9fc4de' },
+        },
         {
           id: 'water-line', type: 'line', source: 'pm', 'source-layer': 'water',
+          filter: LINES(), // rivers and streams; NOT an outline around every lake
           paint: { 'line-color': '#9fc4de', 'line-width': ['interpolate', ['linear'], ['zoom'], 8, 0.4, 14, 1.6] },
         },
         // GOTCHA: line-dasharray takes constants or zoom stops only — it CANNOT
@@ -171,7 +203,7 @@
         // their own layer with a constant dash instead of one filtered layer.
         {
           id: 'r-path', type: 'line', source: 'pm', 'source-layer': 'roads',
-          filter: ['==', ['get', 'kind'], 'path'],
+          filter: ['all', LINES(), ['==', ['get', 'kind'], 'path']],
           paint: {
             'line-color': '#b58a5a',
             'line-width': ['interpolate', ['linear'], ['zoom'], 11, 0.5, 14, 1.6],
@@ -180,17 +212,17 @@
         },
         {
           id: 'r-minor', type: 'line', source: 'pm', 'source-layer': 'roads',
-          filter: ['match', ['get', 'kind'], ['minor_road', 'other', 'service'], true, false],
+          filter: ['all', LINES(), ['match', ['get', 'kind'], ['minor_road', 'other', 'service'], true, false]],
           paint: { 'line-color': '#c8bfb0', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 0.4, 14, 2] },
         },
         {
           id: 'r-medium', type: 'line', source: 'pm', 'source-layer': 'roads',
-          filter: ['==', ['get', 'kind'], 'medium_road'],
+          filter: ['all', LINES(), ['==', ['get', 'kind'], 'medium_road']],
           paint: { 'line-color': '#efe4cf', 'line-width': ['interpolate', ['linear'], ['zoom'], 8, 0.6, 14, 3] },
         },
         {
           id: 'r-major', type: 'line', source: 'pm', 'source-layer': 'roads',
-          filter: ['match', ['get', 'kind'], ['major_road', 'highway'], true, false],
+          filter: ['all', LINES(), ['match', ['get', 'kind'], ['major_road', 'highway'], true, false]],
           paint: {
             'line-color': ['match', ['get', 'kind'], 'highway', '#f2a95f', '#f4c983'],
             'line-width': ['interpolate', ['linear'], ['zoom'], 6, 0.8, 14, 4],
@@ -198,13 +230,18 @@
         },
         {
           id: 'boundaries', type: 'line', source: 'pm', 'source-layer': 'boundaries',
+          filter: LINES(),
           paint: { 'line-color': '#9b86a8', 'line-width': 0.8, 'line-dasharray': [3, 2], 'line-opacity': 0.6 },
         },
-        // Where the downloaded data stops. Without this the edge of a region is
+        // Where the downloaded data stops. Without these, the edge of a region is
         // indistinguishable from "the map is broken".
         {
+          id: 'region-mask', type: 'fill', source: 'mask',
+          paint: { 'fill-color': '#10151a', 'fill-opacity': 0.32 },
+        },
+        {
           id: 'region-bounds', type: 'line', source: 'bounds',
-          paint: { 'line-color': '#2f7fd6', 'line-width': 1.5, 'line-dasharray': [4, 3], 'line-opacity': 0.55 },
+          paint: { 'line-color': '#2f7fd6', 'line-width': 2, 'line-dasharray': [4, 3], 'line-opacity': 0.8 },
         },
         {
           id: 'me-acc-fill', type: 'fill', source: 'meacc',
@@ -332,7 +369,7 @@
     if (!map || !activeRegion) return;
     setFollowing(false);
     const [w, s, e, n] = activeRegion.bbox;
-    map.fitBounds([[w, s], [e, n]], { padding: 20 });
+    map.fitBounds([[w, s], [e, n]], { padding: 40 }); // room to see the boundary
   }
 
   function startGPS() {
@@ -515,7 +552,7 @@
     if (fix && !fixIsInsideRegion()) {
       const warn = document.createElement('div');
       warn.className = 'chip warn';
-      warn.innerHTML = `<span>You're outside ${activeRegion.name}</span>`;
+      warn.innerHTML = "<span>You're outside this map</span>";
       const back = document.createElement('button');
       back.textContent = 'Show map';
       back.onclick = showActiveRegion;
@@ -603,7 +640,19 @@
   window.addEventListener('online', refresh);
   window.addEventListener('offline', refresh);
 
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js', { scope: './' });
+  if ('serviceWorker' in navigator) {
+    // The page you're looking at was served by the OLD worker, so a deploy is
+    // invisible until the next load — "I updated and nothing changed." When the
+    // new worker takes over, reload once so you're actually running it.
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || reloading) return; // first install: nothing to replace
+      reloading = true;
+      location.reload();
+    });
+    navigator.serviceWorker.register('./sw.js', { scope: './' });
+  }
   startGPS();
   boot();
 })();
