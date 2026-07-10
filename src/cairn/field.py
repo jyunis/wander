@@ -48,6 +48,14 @@ _ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 
 SUFFIX = ".pmtiles"
 
+# The real boundary of the thing a region is named after (e.g. the Superior NF
+# proper), as tracked package data. A region's *downloaded area* is a rectangle
+# of tiles — that rectangle is not the forest, and saying so on the map is the
+# difference between "my map is broken" and "my download stops here". Optional:
+# a region without a shape simply draws no outline.
+_SHAPES_DIR = Path(__file__).parent / "data" / "region_shapes"
+OUTLINE_SUFFIX = ".geojson"
+
 # Editorial display names. An unlisted region falls back to its titleized id, so
 # building a new region never requires a code change to show up in the UI.
 REGION_NAMES: dict[str, str] = {
@@ -76,7 +84,7 @@ class Region:
 
     def as_dict(self) -> dict:
         """The wire shape for `GET /field/regions` (FC-9)."""
-        return {
+        payload = {
             "id": self.id,
             "name": self.name,
             "bbox": list(self.bbox),
@@ -87,11 +95,22 @@ class Region:
             "built_at": self.built_at,
             "url": f"/field/regions/{self.id}{SUFFIX}",
         }
+        if outline_path(self.id) is not None:
+            payload["outline_url"] = f"/field/regions/{self.id}/outline{OUTLINE_SUFFIX}"
+        return payload
 
 
 def valid_region_id(region_id: str) -> bool:
     """Whether `region_id` is safe to join onto `regions_dir`."""
     return bool(_ID_RE.match(region_id))
+
+
+def outline_path(region_id: str) -> Path | None:
+    """The region's real-world boundary polygon, if we ship one for it."""
+    if not valid_region_id(region_id):
+        return None
+    path = _SHAPES_DIR / f"{region_id}{OUTLINE_SUFFIX}"
+    return path if path.is_file() else None
 
 
 def read_header(path: Path) -> dict:

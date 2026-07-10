@@ -101,6 +101,11 @@ button.link {
 
 .hint { color: var(--muted); font-size: 12px; margin: 10px 0 0; }
 .hint code { background: #0c1116; padding: 1px 4px; border-radius: 4px; }
+
+.legend { line-height: 1.9; }
+.key { display: inline-block; width: 22px; vertical-align: middle; margin-right: 6px; }
+.key.box { height: 12px; border: 1.5px dashed var(--accent); border-radius: 2px; }
+.key.line { height: 0; border-top: 2px solid #5f9e5f; }
 .disclaimer { border-top: 1px solid var(--line); padding-top: 9px; }
 
 /* --- map controls --------------------------------------------------------- */

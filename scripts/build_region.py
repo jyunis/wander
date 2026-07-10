@@ -51,9 +51,21 @@ MAX_BUILD_AGE_DAYS = 5
 # z14 is the floor for useful last-mile navigation (individual forest spurs are
 # legible) and the ceiling for a phone-sized archive — MapLibre overzooms past
 # it. Keep display names in sync with cairn.field.REGION_NAMES.
+#
+# The bbox MUST CONTAIN the forest it is named after — the first cut of
+# superior-nf (-92.9,47,-89.9,48.3) clipped the forest's western and northern
+# lobes off while swallowing half of Lake Superior, which is exactly what a user
+# sees when the boundary outline runs off the edge of the download. These boxes
+# are the forest's own bounds (src/cairn/data/region_shapes/) plus a margin for
+# the approach roads, which is the last-mile part of last-mile navigation.
+#
+# It stays a RECTANGLE deliberately. `pmtiles extract` also takes a --region
+# polygon, but then tiles exist inside the bbox and not inside the shape, and the
+# client — which paints out everything outside the downloaded area — would have
+# to mask to that shape or the map would disintegrate again inside its own box.
 REGIONS: dict[str, dict] = {
-    "superior-nf": {"bbox": (-92.9, 47.0, -89.9, 48.3), "maxzoom": 14},
-    "chippewa-nf": {"bbox": (-94.9, 46.8, -93.4, 47.9), "maxzoom": 14},
+    "superior-nf": {"bbox": (-93.45, 46.70, -89.75, 48.70), "maxzoom": 14},
+    "chippewa-nf": {"bbox": (-94.90, 46.80, -93.40, 47.90), "maxzoom": 14},
 }
 
 

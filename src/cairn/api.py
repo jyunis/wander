@@ -53,7 +53,7 @@ from cairn.errors import (
 )
 from cairn.export import trip_slug, trip_to_gpx, trip_to_kml
 from cairn.field import SUFFIX as PMTILES_SUFFIX
-from cairn.field import RegionStore
+from cairn.field import RegionStore, outline_path
 from cairn.logging import configure
 from cairn.roadmud import SOIL_GRID_FILENAME, SoilGrid
 from cairn.service import RunService
@@ -903,6 +903,21 @@ async def list_field_regions(request: Request) -> dict:
     disk. Empty if none are built (scripts/build_region.py)."""
     regions = [r.as_dict() for r in _region_store(request).list()]
     return {"regions": regions, "disclaimer": OVERLAY_DISCLAIMER}
+
+
+@app.get("/field/regions/{region_id}/outline.geojson")
+async def field_region_outline(region_id: str, request: Request):
+    """The region's real boundary (e.g. the Superior NF proper). The downloaded
+    area is a rectangle of tiles; this is the thing it's named after. Display-only
+    (TLC-3) — an outline is not a claim that you may camp inside it."""
+    if _region_store(request).get(region_id) is None:
+        return JSONResponse(status_code=404, content={"error": "NotFound"})
+    path = outline_path(region_id)
+    if path is None:
+        return JSONResponse(status_code=404, content={"error": "NoOutline"})
+    return FileResponse(
+        path, media_type="application/geo+json", headers={"Cache-Control": "no-cache"}
+    )
 
 
 @app.get(f"/field/regions/{{region_id}}{PMTILES_SUFFIX}")

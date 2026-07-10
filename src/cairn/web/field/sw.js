@@ -90,12 +90,6 @@ self.addEventListener('fetch', (e) => {
   if (url.origin !== location.origin) return;
   if (!url.pathname.startsWith('/field/')) return;
 
-  // Region archives are the page's business, not ours. Two reasons to stay out
-  // of the way: the page stores them in its own cache under its own lifecycle,
-  // and the Cache API cannot answer a Range request (it would hand back a whole
-  // 200 where MapLibre asked for a 206 slice, corrupting every tile read).
-  if (url.pathname.endsWith('.pmtiles') || req.headers.has('range')) return;
-
   if (req.mode === 'navigate') {
     e.respondWith(networkFirst(req, './'));
     return;
@@ -106,5 +100,13 @@ self.addEventListener('fetch', (e) => {
     e.respondWith(networkFirst(req));
     return;
   }
+  // Everything under /field/regions/ (archives, outlines) is the page's business:
+  // it stores them in its own cache, under its own lifecycle, and deletes them
+  // together. Two more reasons to stay out of the way: the Cache API cannot
+  // answer a Range request (we'd hand back a whole 200 where MapLibre asked for a
+  // 206 slice, corrupting every tile read), and a 31 MB archive has no place in
+  // the shell cache we wipe on every deploy.
+  if (url.pathname.startsWith('/field/regions/') || req.headers.has('range')) return;
+
   e.respondWith(cacheFirst(req));
 });

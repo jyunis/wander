@@ -127,11 +127,16 @@ def test_service_worker_carries_the_build_token(client):
     assert "wander-field-shell-" in res.text
 
 
-def test_service_worker_stays_out_of_the_archive_cache(client):
-    """The Cache API cannot answer a 206. If the SW intercepted .pmtiles range
-    requests it would hand MapLibre a whole-file 200 for a tile-sized slice."""
+def test_service_worker_stays_out_of_region_data(client):
+    """Region data belongs to the page, which caches and evicts it as one unit.
+
+    The Cache API also cannot answer a 206: an intercepted Range request would
+    hand MapLibre a whole-file 200 where it asked for a tile-sized slice. And a
+    31 MB archive has no business in the shell cache, which every deploy wipes.
+    """
     sw = client.get("/field/sw.js").text
-    assert ".pmtiles" in sw and "range" in sw
+    assert "url.pathname.startsWith('/field/regions/')" in sw
+    assert "req.headers.has('range')" in sw
 
 
 def test_field_app_keeps_one_source_of_truth_for_downloaded_regions():

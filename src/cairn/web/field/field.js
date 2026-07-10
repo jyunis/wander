@@ -25,9 +25,11 @@
 
   const archiveUrl = (id) => `/field/regions/${id}.pmtiles`;
   const metaUrl = (id) => `/field/regions/${id}.meta.json`; // cache key only; never fetched
+  const outlineUrl = (id) => `/field/regions/${id}/outline.geojson`;
 
   let map = null;
   let activeRegion = null;
+  let outlineData = null; // the active region's real boundary, if we have one
   let activeSource = null; // 'offline' (from the cached blob) | 'stream' (over the wire)
   let fix = null; // last GeolocationPosition
   // Off until there's a fix to follow. It used to start true, which did nothing
@@ -47,8 +49,15 @@
     geometry: { type: 'Polygon', coordinates: [[[w, s], [e, s], [e, n], [w, n], [w, s]]] },
   });
 
-  // The whole world with the region punched out of it, so everywhere you have no
-  // data reads as "no data" instead of "the map is broken".
+  // The whole world with the downloaded rectangle punched out of it.
+  //
+  // This mask is OPAQUE on purpose. `pmtiles extract` keeps whole tiles, so an
+  // archive still contains the low-zoom tiles that cover the bbox — and those
+  // tiles span half a continent. Zoomed out you saw the entire US; zooming in,
+  // each tile that no longer intersects the bbox drops out, so the country
+  // disintegrated chunk by chunk. Every one of those pixels is outside what you
+  // downloaded. Painting them out is the difference between a map with a defined
+  // edge and a map that appears to be falling apart as you use it.
   const maskPolygon = ([w, s, e, n]) => ({
     type: 'Feature',
     properties: {},
@@ -159,6 +168,7 @@
         meacc: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
         bounds: { type: 'geojson', data: bboxPolygon(region.bbox) },
         mask: { type: 'geojson', data: maskPolygon(region.bbox) },
+        outline: { type: 'geojson', data: outlineData || { type: 'FeatureCollection', features: [] } },
       },
       layers: [
         { id: 'bg', type: 'background', paint: { 'background-color': '#eae6da' } },
@@ -233,15 +243,20 @@
           filter: LINES(),
           paint: { 'line-color': '#9b86a8', 'line-width': 0.8, 'line-dasharray': [3, 2], 'line-opacity': 0.6 },
         },
-        // Where the downloaded data stops. Without these, the edge of a region is
-        // indistinguishable from "the map is broken".
+        // Everything you did not download, painted out. See maskPolygon().
         {
           id: 'region-mask', type: 'fill', source: 'mask',
-          paint: { 'fill-color': '#10151a', 'fill-opacity': 0.32 },
+          paint: { 'fill-color': '#131a21', 'fill-opacity': 1 },
+        },
+        // The forest itself, drawn ABOVE the mask so you can see where it runs on
+        // past the edge of your download rather than wondering where it went.
+        {
+          id: 'forest-outline', type: 'line', source: 'outline',
+          paint: { 'line-color': '#5f9e5f', 'line-width': 2, 'line-opacity': 0.95 },
         },
         {
           id: 'region-bounds', type: 'line', source: 'bounds',
-          paint: { 'line-color': '#2f7fd6', 'line-width': 2, 'line-dasharray': [4, 3], 'line-opacity': 0.8 },
+          paint: { 'line-color': '#2f7fd6', 'line-width': 1.5, 'line-dasharray': [4, 3], 'line-opacity': 0.7 },
         },
         {
           id: 'me-acc-fill', type: 'fill', source: 'meacc',
@@ -282,9 +297,32 @@
     return url;
   }
 
+  // Cached beside the archive, so the forest is still drawn on a dead battery of
+  // a signal. Absent outline = no outline layer; never a hard failure.
+  async function loadOutline(region) {
+    outlineData = null;
+    if (!('caches' in window)) return;
+    const url = outlineUrl(region.id);
+    const cache = await caches.open(DATA_CACHE);
+    let res = await cache.match(url);
+    if (!res && navigator.onLine) {
+      try {
+        const fresh = await fetch(url, { cache: 'no-store' });
+        if (fresh.ok) {
+          await cache.put(url, fresh.clone());
+          res = fresh;
+        }
+      } catch { /* nothing reachable — draw the map without it */ }
+    }
+    if (res) {
+      try { outlineData = await res.json(); } catch { outlineData = null; }
+    }
+  }
+
   async function showRegion(region) {
     const key = await registerSource(region);
     if (!key) return false;
+    await loadOutline(region);
     const style = styleFor(key, region);
     const bounds = [[region.bbox[0], region.bbox[1]], [region.bbox[2], region.bbox[3]]];
     const switching = !activeRegion || activeRegion.id !== region.id;
@@ -446,6 +484,7 @@
     const cache = await caches.open(DATA_CACHE);
     await cache.delete(region.url);
     await cache.delete(metaUrl(region.id));
+    await cache.delete(outlineUrl(region.id));
     if (activeRegion?.id === region.id) activeRegion = null;
     refresh();
   }
@@ -552,7 +591,7 @@
     if (fix && !fixIsInsideRegion()) {
       const warn = document.createElement('div');
       warn.className = 'chip warn';
-      warn.innerHTML = "<span>You're outside this map</span>";
+      warn.innerHTML = "<span>Outside the downloaded area</span>";
       const back = document.createElement('button');
       back.textContent = 'Show map';
       back.onclick = showActiveRegion;
