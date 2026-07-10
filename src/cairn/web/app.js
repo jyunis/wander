@@ -268,6 +268,7 @@ async function init() {
   initLandOverlays();
   initMvum();
   loadForests();
+  initOffline();
 }
 
 // DOM-only event wiring — depends on no fetched data, so it runs up front.
@@ -889,6 +890,9 @@ function setBboxFromBounds(b) {
       ok ? "" : `<span style="color:#e8786b">(over ${CONFIG.max_bbox_area_km2} km² cap)</span>`
     }`;
   $("score-btn").disabled = !ok;
+  // The same box the scorer uses is the box you can take offline. The scoring
+  // cap and the region cap are unrelated: one bounds compute, the other bytes.
+  scheduleOfflineEstimate();
 }
 
 // --- scoring flow (roving, ephemeral — doc #34 M2) -------------------------
@@ -4474,3 +4478,209 @@ async function bulkAddSelected() {
 }
 
 init();
+
+// --- offline maps: "download this area" (Wander Field, M4) ------------------
+//
+// Plan online, navigate offline. The box you draw to score an area is the box
+// you download; the field PWA at /field/ just lists whatever archives exist on
+// the server. Pre-baked, forest-named rectangles were the wrong unit — a forest
+// is a shape you didn't draw, so a rectangle wearing its name reads as a broken
+// map. A box you drew promises nothing but itself.
+//
+// Sizing is NOT computed here: `pmtiles --dry-run` reads the planet's directory
+// and returns the real number. No bytes-per-tile constant survives two boxes
+// (Superior NF 1,939 B/tile; a dense Chicago box 17,902).
+
+let offlineLimits = null;
+let offlineEstimateTimer = null;
+let offlinePollTimer = null;
+let offlineEstimateSeq = 0;
+
+const fmtMB = (b) => (b == null ? "—" : (b / 1e6).toFixed(b < 10e6 ? 1 : 0) + " MB");
+
+function offlineBbox() {
+  if (!bbox) return null;
+  return [bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat];
+}
+
+async function initOffline() {
+  try {
+    const body = await (await fetch("/field/regions")).json();
+    offlineLimits = body.limits;
+    renderOfflineRegions(body.regions || []);
+  } catch {
+    return; // no field support on this server — leave the drawer inert
+  }
+
+  const zoom = $("offline-zoom");
+  // Higher zoom = more detail = more bytes. It's the escape hatch for a box
+  // that's too big: most of Minnesota is 129,646 tiles at z14, 8,366 at z12.
+  const labels = { 14: "Full detail (z14)", 13: "High (z13)", 12: "Medium (z12)", 11: "Low (z11)", 10: "Overview (z10)" };
+  for (let z = offlineLimits.max_zoom; z >= offlineLimits.min_zoom; z--) {
+    const opt = document.createElement("option");
+    opt.value = z;
+    opt.textContent = labels[z] || `z${z}`;
+    zoom.appendChild(opt);
+  }
+  zoom.value = String(offlineLimits.max_zoom);
+  zoom.onchange = scheduleOfflineEstimate;
+  $("offline-download").onclick = startOfflineDownload;
+  $("offline-drawer").addEventListener("toggle", () => {
+    if ($("offline-drawer").open) scheduleOfflineEstimate();
+  });
+}
+
+// Debounced: each estimate spawns a dry run that fetches planet directories.
+function scheduleOfflineEstimate() {
+  clearTimeout(offlineEstimateTimer);
+  offlineEstimateTimer = setTimeout(offlineEstimate, 350);
+}
+
+async function offlineEstimate() {
+  const el = $("offline-estimate");
+  const btn = $("offline-download");
+  const box = offlineBbox();
+  if (!offlineLimits || !el) return;
+  if (!box) {
+    el.textContent = "Draw an area to size it.";
+    btn.disabled = true;
+    return;
+  }
+  if (!$("offline-drawer").open) return; // don't dry-run a drawer nobody opened
+
+  const seq = ++offlineEstimateSeq;
+  el.textContent = "Sizing…";
+  btn.disabled = true;
+  try {
+    const zoom = $("offline-zoom").value;
+    const res = await fetch(`/field/estimate?bbox=${box.join(",")}&maxzoom=${zoom}`);
+    const body = await res.json();
+    if (seq !== offlineEstimateSeq) return; // a newer box superseded this one
+    if (!res.ok) {
+      el.textContent = body.detail || "Can't size that area.";
+      return;
+    }
+    el.innerHTML = `<b>${fmtMB(body.bytes)}</b> · ${body.tiles.toLocaleString()} tiles`;
+    if (body.over_cap) {
+      el.innerHTML += ` — over the ${fmtMB(body.max_bytes)} limit. Draw smaller, or lower the detail.`;
+      return;
+    }
+    btn.disabled = false;
+  } catch {
+    if (seq === offlineEstimateSeq) el.textContent = "Couldn't reach the sizing service.";
+  }
+}
+
+async function startOfflineDownload() {
+  const box = offlineBbox();
+  const name = $("offline-name").value.trim();
+  if (!box) return;
+  if (!name) {
+    $("offline-status").textContent = "Give the area a name first.";
+    return;
+  }
+  const btn = $("offline-download");
+  btn.disabled = true;
+  $("offline-status").textContent = "Starting…";
+
+  try {
+    const res = await fetch("/field/regions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name, bbox: box, maxzoom: Number($("offline-zoom").value) }),
+    });
+    const job = await res.json();
+    if (!res.ok) {
+      $("offline-status").textContent = job.detail || "Couldn't start the download.";
+      btn.disabled = false;
+      return;
+    }
+    pollOfflineJob(job.job_id);
+  } catch (e) {
+    $("offline-status").textContent = "Couldn't start the download: " + e.message;
+    btn.disabled = false;
+  }
+}
+
+function pollOfflineJob(jobId) {
+  const bar = $("offline-bar");
+  const fill = bar.firstElementChild;
+  bar.hidden = false;
+  clearInterval(offlinePollTimer);
+
+  offlinePollTimer = setInterval(async () => {
+    let job;
+    try {
+      job = await (await fetch(`/field/jobs/${jobId}`)).json();
+    } catch {
+      return; // transient; keep polling
+    }
+    const pct = job.estimated_bytes ? Math.min(100, (job.bytes_written / job.estimated_bytes) * 100) : 0;
+    fill.style.width = pct + "%";
+
+    if (job.state === "running") {
+      $("offline-status").textContent =
+        `Building ${job.name}… ${fmtMB(job.bytes_written)} of ~${fmtMB(job.estimated_bytes)} (${job.elapsed_s}s)`;
+      return;
+    }
+    clearInterval(offlinePollTimer);
+    bar.hidden = true;
+    fill.style.width = "0";
+    $("offline-download").disabled = false;
+
+    if (job.state === "error") {
+      $("offline-status").textContent = "Failed: " + job.error;
+      return;
+    }
+    $("offline-status").innerHTML =
+      `✅ ${esc(job.name)} is ready (${fmtMB(job.bytes_written)}). Open <a href="/field/" target="_blank" rel="noopener">Wander Field</a> and download it to your phone.`;
+    $("offline-name").value = "";
+    refreshOfflineRegions();
+  }, 1000);
+}
+
+async function refreshOfflineRegions() {
+  try {
+    const body = await (await fetch("/field/regions")).json();
+    renderOfflineRegions(body.regions || []);
+  } catch {
+    /* best-effort */
+  }
+}
+
+function renderOfflineRegions(regions) {
+  const host = $("offline-regions");
+  if (!host) return;
+  host.innerHTML = "";
+  if (!regions.length) return;
+
+  const title = document.createElement("div");
+  title.className = "hint";
+  title.textContent = "On the server:";
+  host.appendChild(title);
+
+  for (const r of regions) {
+    const row = document.createElement("div");
+    row.className = "offline-region";
+    row.innerHTML = `<span class="or-name">${esc(r.name)}</span><span class="or-size">${fmtMB(r.size_bytes)}</span>`;
+
+    const show = document.createElement("button");
+    show.className = "btn ghost tiny";
+    show.textContent = "Show";
+    show.title = "Zoom to this area";
+    show.onclick = () => map.fitBounds([[r.bbox[1], r.bbox[0]], [r.bbox[3], r.bbox[2]]]);
+
+    const del = document.createElement("button");
+    del.className = "btn ghost tiny";
+    del.textContent = "🗑";
+    del.title = `Delete ${r.name} from the server`;
+    del.onclick = async () => {
+      if (!confirm(`Delete "${r.name}" from the server? A phone that already downloaded it keeps its copy.`)) return;
+      await fetch(`/field/regions/${r.id}`, { method: "DELETE" });
+      refreshOfflineRegions();
+    };
+
+    row.append(show, del);
+    host.appendChild(row);
+  }
+}

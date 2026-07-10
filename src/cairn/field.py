@@ -23,6 +23,7 @@ built.
 
 from __future__ import annotations
 
+import json
 import re
 import struct
 from dataclasses import dataclass
@@ -147,6 +148,18 @@ class RegionStore:
     def __init__(self, regions_dir: Path) -> None:
         self._dir = regions_dir
 
+    def _name_for(self, region_id: str) -> str:
+        """A user-drawn region carries the name its author typed, in a sidecar
+        written by the builder. Otherwise the curated title, otherwise the id."""
+        sidecar = self._dir / f"{region_id}.json"
+        try:
+            name = json.loads(sidecar.read_text()).get("name")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+        except (OSError, ValueError):
+            pass
+        return REGION_NAMES.get(region_id, region_id.replace("-", " ").title())
+
     def _load(self, path: Path) -> Region | None:
         region_id = path.name[: -len(SUFFIX)]
         if not valid_region_id(region_id):
@@ -158,7 +171,7 @@ class RegionStore:
             return None
         return Region(
             id=region_id,
-            name=REGION_NAMES.get(region_id, region_id.replace("-", " ").title()),
+            name=self._name_for(region_id),
             bbox=head["bbox"],
             center=head["center"],
             min_zoom=head["min_zoom"],

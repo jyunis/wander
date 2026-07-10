@@ -55,6 +55,7 @@ from cairn.export import trip_slug, trip_to_gpx, trip_to_kml
 from cairn.field import SUFFIX as PMTILES_SUFFIX
 from cairn.field import RegionStore, outline_path
 from cairn.logging import configure
+from cairn.regionbuild import RegionBuilder, validate_request
 from cairn.roadmud import SOIL_GRID_FILENAME, SoilGrid
 from cairn.service import RunService
 from cairn.store import Store
@@ -110,6 +111,12 @@ async def lifespan(app: FastAPI):
     # Road mud-susceptibility soil grid (display-only, TLC-3): enables the live
     # post-score auto-tier. Absent until the bake builds it -> auto-tier off.
     soil_grid = SoilGrid.load(str(settings.data_dir / "issr800" / SOIL_GRID_FILENAME))
+    # Region extractor for the "download this area" picker. Sweep partials from a
+    # killed run: they're named so the registry never lists them, but they'd sit
+    # on disk forever.
+    region_builder = RegionBuilder(settings)
+    region_builder.sweep_partials()
+    app.state.region_builder = region_builder
     app.state.settings = settings
     app.state.store = store
     app.state.overlays = overlays
@@ -900,9 +907,86 @@ def _region_store(request: Request) -> RegionStore:
 @app.get("/field/regions")
 async def list_field_regions(request: Request) -> dict:
     """Offline basemaps available to download, read off the PMTiles headers on
-    disk. Empty if none are built (scripts/build_region.py)."""
+    disk. Empty if none are built. `limits` lets the picker estimate a box's size
+    with the server's constants instead of inventing its own (FC-8)."""
+    settings = request.app.state.settings
     regions = [r.as_dict() for r in _region_store(request).list()]
-    return {"regions": regions, "disclaimer": OVERLAY_DISCLAIMER}
+    return {
+        "regions": regions,
+        "limits": {
+            "max_tiles": settings.region_max_tiles,
+            "max_bytes": settings.region_max_bytes,
+            "min_zoom": settings.region_min_zoom,
+            "max_zoom": settings.region_max_zoom,
+        },
+        "disclaimer": OVERLAY_DISCLAIMER,
+    }
+
+
+@app.get("/field/estimate")
+async def estimate_field_region(request: Request, bbox: str, maxzoom: int = 14) -> dict:
+    """Exactly how big the drawn box would be, before committing to it. Asks
+    `pmtiles --dry-run`, which reads the planet's directories (~2-4 s) rather than
+    guessing from a bytes/tile constant that no two bounding boxes agree on."""
+    settings = request.app.state.settings
+    try:
+        parts = [float(x) for x in bbox.split(",")]
+        if len(parts) != 4:
+            raise ValueError
+    except ValueError:
+        raise ValidationError("bbox must be 'min_lon,min_lat,max_lon,max_lat'") from None
+
+    # Cheap checks first: never spawn a process for a box we'd refuse anyway.
+    validate_request("estimate", parts, maxzoom, settings)
+    builder: RegionBuilder = request.app.state.region_builder
+    planned = await builder.estimate(parts, maxzoom)
+    return {
+        "tiles": planned.tiles,
+        "bytes": planned.bytes,
+        "over_cap": planned.bytes > settings.region_max_bytes,
+        "max_bytes": settings.region_max_bytes,
+    }
+
+
+class RegionRequest(BaseModel):
+    """"Download this area": the box the user drew, and what to call it."""
+
+    name: str = Field(..., min_length=1, max_length=60)
+    bbox: list[float] = Field(..., min_length=4, max_length=4)
+    maxzoom: int = 14
+
+
+@app.post("/field/regions")
+async def create_field_region(req: RegionRequest, request: Request) -> JSONResponse:
+    """Start extracting a region for the drawn bbox. Returns 202 + a job to poll:
+    an extract pulls tens of MB over range requests and takes minutes, so it is a
+    background job under a wall-clock bound (TLC-4), not a request."""
+    builder: RegionBuilder = request.app.state.region_builder
+    job = await builder.start(req.name, req.bbox, req.maxzoom)
+    return JSONResponse(status_code=202, content=job.as_dict())
+
+
+@app.get("/field/jobs/{job_id}")
+async def field_job(job_id: str, request: Request):
+    builder: RegionBuilder = request.app.state.region_builder
+    job = builder.get(job_id)
+    if job is None:
+        return JSONResponse(status_code=404, content={"error": "NotFound"})
+    return job.as_dict()
+
+
+@app.delete("/field/regions/{region_id}")
+async def delete_field_region(region_id: str, request: Request) -> dict:
+    """Delete a region's archive. Always safe: regions are re-derivable, and a
+    phone that already downloaded one keeps its own copy."""
+    store = _region_store(request)
+    path = store.path_for(region_id)
+    if path is None:
+        raise RunNotFound(f"no region {region_id!r}")
+    path.unlink(missing_ok=True)
+    path.with_suffix(".json").unlink(missing_ok=True)  # the name sidecar
+    log.info("deleted region %s", region_id)
+    return {"deleted": region_id}
 
 
 @app.get("/field/regions/{region_id}/outline.geojson")
