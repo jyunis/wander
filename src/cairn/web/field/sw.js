@@ -30,14 +30,28 @@ self.addEventListener('install', (e) => {
 
 self.addEventListener('activate', (e) => {
   e.waitUntil(
-    caches
-      .keys()
-      .then((keys) =>
-        Promise.all(
-          keys.filter((k) => k.startsWith('wander-field-shell-') && k !== SHELL).map((k) => caches.delete(k)),
-        ),
-      )
-      .then(() => self.clients.claim()),
+    (async () => {
+      const keys = await caches.keys();
+      const stale = keys.filter((k) => k.startsWith('wander-field-shell-') && k !== SHELL);
+      await Promise.all(stale.map((k) => caches.delete(k)));
+      await self.clients.claim();
+
+      // An UPGRADE, not a first install. The page open right now was served by
+      // the previous worker and is running the previous build's field.js, so it
+      // cannot reload itself — whatever update-handling code we add to the page
+      // only ships in the build that the stale page isn't running. ("I deployed
+      // and reloaded and nothing changed.") The worker is the only participant
+      // that is always current, so it does the reloading.
+      if (!stale.length) return;
+      const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const client of windows) {
+        try {
+          await client.navigate(client.url);
+        } catch {
+          /* not all browsers allow it; then it's a two-load update, as before */
+        }
+      }
+    })(),
   );
 });
 

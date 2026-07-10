@@ -152,6 +152,42 @@ def test_field_app_keeps_one_source_of_truth_for_downloaded_regions():
     assert "indexedDB" not in code
 
 
+def test_service_worker_reloads_stale_pages_on_upgrade(client):
+    """The worker upgrades the page; the page cannot upgrade itself.
+
+    A page is served by the PREVIOUS worker, so it runs the previous build's JS.
+    Update-handling code added to the page therefore only ships in the build the
+    stale page isn't running — deploy, reload, and nothing changes. The worker is
+    the only participant that is always current, so `activate` reloads the open
+    windows, but only when it actually replaced an older cache (a first install
+    must not reload itself).
+    """
+    sw = client.get("/field/sw.js").text
+
+    assert "clients.matchAll" in sw and "navigate(" in sw
+    assert "if (!stale.length) return;" in sw  # first install: nothing to replace
+
+
+def test_field_map_layers_declare_their_geometry(client):
+    """MapLibre does not filter a layer's bucket by geometry type.
+
+    Protomaps packs lakes (polygons), rivers (lines) and label anchors (points)
+    into one `water` source-layer. Handed a LineString, a `fill` layer earcuts it
+    into a long sliver across the map; a `line` layer strokes every lake outline.
+    The artifact only appears mid-zoom, so it survives any test that waits for the
+    map to settle before asserting.
+    """
+    from cairn.api import _FIELD_DIR
+
+    source = (_FIELD_DIR / "field.js").read_text()
+    assert "['geometry-type'], 'Polygon'" in source
+    assert "['geometry-type'], 'LineString'" in source
+    # Every layer reading the mixed-geometry basemap source states what it wants.
+    for layer in ("water", "earth", "landcover", "landuse"):
+        block = source.split(f"id: '{layer}'", 1)[1][:400]
+        assert "filter:" in block, f"{layer} fill layer has no geometry filter"
+
+
 def test_manifest_is_served_as_a_manifest(client):
     """Python's mimetypes doesn't know .webmanifest; text/plain makes iOS ignore
     it, and the PWA never gets its own (durable) storage bucket."""

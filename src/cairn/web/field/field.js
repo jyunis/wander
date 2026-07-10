@@ -640,19 +640,10 @@
   window.addEventListener('online', refresh);
   window.addEventListener('offline', refresh);
 
-  if ('serviceWorker' in navigator) {
-    // The page you're looking at was served by the OLD worker, so a deploy is
-    // invisible until the next load — "I updated and nothing changed." When the
-    // new worker takes over, reload once so you're actually running it.
-    const hadController = !!navigator.serviceWorker.controller;
-    let reloading = false;
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (!hadController || reloading) return; // first install: nothing to replace
-      reloading = true;
-      location.reload();
-    });
-    navigator.serviceWorker.register('./sw.js', { scope: './' });
-  }
+  // Updates are handled entirely by the worker (see sw.js `activate`): a stale
+  // page can't be trusted to upgrade itself, because the code that would do it
+  // is exactly the code it isn't running yet.
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js', { scope: './' });
   startGPS();
   boot();
 })();
