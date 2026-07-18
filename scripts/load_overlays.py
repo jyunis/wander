@@ -689,13 +689,35 @@ def load_arcgis_features(con, layer, base_url, where, name_field) -> int:
 
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+# Overpass routinely 429/504s under load — a fresh full rebuild fires many
+# queries back-to-back (one per state for dispersed/campgrounds, one per region
+# for amenities). Without backoff a single transient rate-limit silently drops a
+# whole state's layer (this bit us: MN/SD/WY dispersed vanished on a rebuild).
+# Retry with linear backoff at the one choke point so every caller is resilient.
+OVERPASS_RETRIES = 4
+OVERPASS_BACKOFF_S = 20  # 20s, 40s, 60s between attempts
 
 
-def _overpass(query: str) -> dict:
+def _overpass(query: str, *, retries: int = OVERPASS_RETRIES) -> dict:
     data = urllib.parse.urlencode({"data": query}).encode()
-    req = urllib.request.Request(OVERPASS_URL, data=data, headers=UA)
-    with urllib.request.urlopen(req, timeout=180) as r:
-        return json.load(r)
+    last_exc: Exception | None = None
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(OVERPASS_URL, data=data, headers=UA)
+            with urllib.request.urlopen(req, timeout=180) as r:
+                return json.load(r)
+        except Exception as exc:  # 429/504/timeout — back off and retry
+            last_exc = exc
+            if attempt < retries - 1:
+                wait = OVERPASS_BACKOFF_S * (attempt + 1)
+                print(
+                    f"[overpass] attempt {attempt + 1}/{retries} failed: {exc} "
+                    f"— retrying in {wait}s",
+                    flush=True,
+                )
+                time.sleep(wait)
+    assert last_exc is not None
+    raise last_exc
 
 
 def _boundary_containing(con, lon: float, lat: float):
@@ -1482,6 +1504,25 @@ STATES: dict[str, dict] = {
         # Custer SP loops etc. from OSM (no SD campground GIS), categorized by the
         # state-park boundary they sit in. Federal sites still come from RIDB.
         "campground_loaders": [osm_state_park_campgrounds("US-SD")],
+    },
+    "WY": {
+        "name": "Wyoming",
+        # Whole state (104°03′W–111°03′W, 41°N–45°N), nudged out a hair: Yellowstone,
+        # Grand Teton, the Wind Rivers, the Bighorns, the Snowy Range, the Black Hills
+        # spillover. A big federal-land state (BLM + Bridger-Teton/Shoshone/Bighorn/
+        # Medicine Bow-Routt/Caribou-Targhee NFs).
+        "bbox": (-111.1, 40.9, -104.0, 45.1),
+        # Like SD: no state DNR GIS product, and WY has NO state forest system, so
+        # `ownership` (the public-land filter's data) + state parks + NPS context
+        # all come from PAD-US (national). USFS forests + RIDB campgrounds are
+        # national (auto). `state_forest` is simply empty for WY.
+        "shp_sources": [],
+        "arcgis_sources": [],
+        "padus_state": "WY",  # PAD-US State_Nm -> ownership + state_park + national_park
+        # WY has no campground GIS; state-park campgrounds come from OSM, categorized
+        # by the park boundary they sit in (meta.state='WY' -> UI links reservations
+        # to reserve.wyoming.gov). Federal sites still come from RIDB.
+        "campground_loaders": [osm_state_park_campgrounds("US-WY")],
     },
 }
 
