@@ -2464,6 +2464,10 @@ function campgroundLink(p) {
   if ((p.meta || {}).state === "SD") {
     return { href: "https://gfp.sd.gov/reservations/", label: "Reserve · SD GFP" };
   }
+  // Wyoming state-park sites (OSM-sourced) reserve via reserve.wyoming.gov.
+  if ((p.meta || {}).state === "WY") {
+    return { href: "https://reserve.wyoming.gov/", label: "Reserve · WY State Parks" };
+  }
   const isForest = p.category === "State Forest" || /state forest/i.test(p.name || "");
   return isForest
     ? { href: "https://www.dnr.state.mn.us/state_forests/index.html", label: "MN DNR State Forests" }
