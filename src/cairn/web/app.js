@@ -2529,6 +2529,11 @@ function campgroundCard(p, lat, lon) {
   const badgeRow = badgeRowHtml(badges);
   const types = (m.site_types || []).map(esc).join(" · ");
   const acts = (m.activities || []).map(esc).join(" · ");
+  const maps =
+    lat != null && lon != null
+      ? `<a class="cg-link" href="https://www.google.com/maps/search/?api=1&query=${lat},${lon}" ` +
+        `target="_blank" rel="noopener">Open in Google Maps ↗</a>`
+      : "";
 
   return (
     `<div class="cg-pop">${star}<b>${esc(p.name) || "Campground"}</b>` +
@@ -2540,6 +2545,7 @@ function campgroundCard(p, lat, lon) {
     row("cg-blurb", esc(m.blurb)) +
     `<div class="cg-actions">` +
     (href ? `<a class="cg-link" href="${esc(href)}" target="_blank" rel="noopener">${label} ↗</a>` : "") +
+    maps +
     tripBtn +
     `</div></div>`
   );
