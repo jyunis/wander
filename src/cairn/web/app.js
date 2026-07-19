@@ -158,7 +158,7 @@ const OWNERSHIP_MIN_ZOOM = 11;
 // threshold gates forest-shape discovery taps: at/above it you're working with
 // roads, so a missed road tap shouldn't yank the map out to the whole forest.
 const ROADS_MIN_ZOOM = 13;
-const TRAILS_MIN_ZOOM = 13; // hiking-trails overlay (live OSM/Overpass) renders at z13+
+const TRAILS_MIN_ZOOM = 11; // trails (local OSM in cairn.db) from z11 — a full max-scoring-area (~2500 km²) view fits here, and trails stay sparse (<~500 feats) even in dense areas, well under the overlay cap
 const TRAIL_LABEL_MAX = 6; // cap on-map trail name labels (routes + longest first)
 
 let overlayDefs = []; // from GET /overlays
