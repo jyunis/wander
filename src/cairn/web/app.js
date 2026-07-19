@@ -2474,6 +2474,26 @@ function campgroundLink(p) {
     : { href: "https://www.dnr.state.mn.us/state_parks/index.html", label: "MN DNR State Parks" };
 }
 
+// A tidy fee badge from RIDB's FacilityUseFeeDescription, which is often a full
+// HTML blob (<p>…</p> with a whole description), not a clean amount. Strip tags,
+// collapse whitespace, then reduce to the first dollar amount when present
+// (e.g. "$20/night"), else a short tag-free snippet — so the badge never spills
+// raw HTML or a paragraph. Returns "" if there's nothing usable.
+function feeBadge(raw) {
+  const txt = String(raw == null ? "" : raw)
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!txt) return "";
+  const amt = txt.match(/\$\s?\d[\d,]*(?:\.\d{1,2})?/);
+  if (amt) {
+    return "💲 " + amt[0].replace(/\s+/g, "") + (/per\s*night|\/night/i.test(txt) ? "/night" : "");
+  }
+  return "💲 " + (txt.length > 40 ? txt.slice(0, 40).trim() + "…" : txt);
+}
+
 // Rich popup card for a campground: badges + facts + blurb + the link.
 function campgroundCard(p, lat, lon) {
   const m = p.meta || {};
@@ -2490,7 +2510,10 @@ function campgroundCard(p, lat, lon) {
   const badges = [];
   if (m.sites) badges.push(`${m.sites} sites`);
   badges.push(...amenityBadges(m));
-  if (m.fee) badges.push("💲 " + String(m.fee).replace(/\s*per night/i, "/night"));
+  if (m.fee) {
+    const fb = feeBadge(m.fee);
+    if (fb) badges.push(fb);
+  }
 
   const tripBtn =
     lat != null && lon != null

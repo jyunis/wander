@@ -397,9 +397,14 @@ def _ridb_facility_row(f, key):
         return None
     blurb = re.sub(r"<[^>]+>", " ", f.get("FacilityDescription") or "")
     blurb = re.sub(r"\s+", " ", blurb).strip()
+    # FacilityUseFeeDescription is often a full HTML blob (<p>…</p> description),
+    # not a tidy amount — strip tags + collapse whitespace like the blurb, and
+    # bound it so a paragraph can't bloat the row (the UI further shortens it).
+    fee = re.sub(r"<[^>]+>", " ", f.get("FacilityUseFeeDescription") or "")
+    fee = re.sub(r"\s+", " ", fee).strip()
     meta = {
         "reservable": bool(f.get("Reservable")),
-        "fee": (f.get("FacilityUseFeeDescription") or "").strip(),
+        "fee": (fee[:120] + "…") if len(fee) > 120 else fee,
         "ada": (f.get("FacilityAdaAccess") or "").upper() == "Y",
         "phone": (f.get("FacilityPhone") or "").strip(),
         "activities": [
