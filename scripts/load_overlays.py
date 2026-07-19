@@ -383,64 +383,108 @@ def _ridb_campsite_meta(fid: str, key: str) -> dict:
     })
 
 
+def _in_any_bbox(lat, lon, bboxes) -> bool:
+    """True if (lat, lon) falls inside any (w, s, e, n) envelope."""
+    return any(w <= lon <= e and s <= lat <= n for (w, s, e, n) in bboxes)
+
+
+def _ridb_facility_row(f, key):
+    """Build the campground insert-row for one RIDB facility record (enriched with
+    a campsite aggregate), or None if it has no usable coordinates."""
+    lat, lon = f.get("FacilityLatitude"), f.get("FacilityLongitude")
+    fid = str(f.get("FacilityID", ""))
+    if not lat or not lon or not fid:
+        return None
+    blurb = re.sub(r"<[^>]+>", " ", f.get("FacilityDescription") or "")
+    blurb = re.sub(r"\s+", " ", blurb).strip()
+    # FacilityUseFeeDescription is often a full HTML blob (<p>…</p> description),
+    # not a tidy amount — strip tags + collapse whitespace like the blurb, and
+    # bound it so a paragraph can't bloat the row (the UI further shortens it).
+    fee = re.sub(r"<[^>]+>", " ", f.get("FacilityUseFeeDescription") or "")
+    fee = re.sub(r"\s+", " ", fee).strip()
+    meta = {
+        "reservable": bool(f.get("Reservable")),
+        "fee": (fee[:120] + "…") if len(fee) > 120 else fee,
+        "ada": (f.get("FacilityAdaAccess") or "").upper() == "Y",
+        "phone": (f.get("FacilityPhone") or "").strip(),
+        "activities": [
+            (a.get("ActivityName") or "").title() for a in (f.get("ACTIVITY") or [])
+        ][:6],
+        "blurb": (blurb[:220] + "…") if len(blurb) > 220 else blurb,
+    }
+    try:
+        meta.update(_ridb_campsite_meta(fid, key))
+    except Exception as exc:  # campsites best-effort; keep facility fields
+        print(f"[campground]     {fid} campsites skipped: {exc}", flush=True)
+    resv = f"https://www.recreation.gov/camping/campgrounds/{fid}"
+    m = _compact(meta)
+    m["reservable"] = bool(f.get("Reservable"))  # keep even when False (first-come)
+    return ("National / Federal", f.get("FacilityName") or "", resv, m,
+            f"POINT({lon} {lat})", 4326)
+
+
 def load_ridb_campgrounds(con, states) -> int:
-    """Recreation.gov RIDB federal campgrounds (national forest/NPS/BLM/Corps)
-    across `states` (a national dataset keyed only by the 2-letter state code).
+    """Recreation.gov RIDB federal campgrounds (national forest/NPS/BLM/Corps).
     Keyed: needs RIDB_API_KEY in the env. Skipped (returns 0) without it, so the
     state layers still load — same best-effort posture as MVUM/structures. Each
     facility is enriched with reservable/fee/ADA/phone/activities + a campsite
-    aggregate (count/types/electric/max-RV)."""
+    aggregate (count/types/electric/max-RV).
+
+    Facilities are gathered by GEOGRAPHY, not RIDB's `state=` filter: that filter
+    matches a facility's parent RecArea/org linkage, NOT its address, so it
+    silently drops real campgrounds (e.g. Sitting Bull CG in Bighorn NF — a
+    reservable WY campground whose `state=WY` linkage is absent). We page the
+    national CAMPING list and keep every facility whose COORDINATES fall in a
+    configured state's bbox, then UNION the per-state `state=` results (deduped by
+    FacilityID) so a rare mis-geocoded-but-state-linked facility isn't lost."""
     key = os.environ.get("RIDB_API_KEY")
     if not key:
         print("[campground]   RIDB skipped (no RIDB_API_KEY)", flush=True)
         return 0
+    bboxes = [STATES[s]["bbox"] for s in states]
+    facilities: dict[str, dict] = {}  # FacilityID -> record (first wins)
 
-    total = 0
-    for state in states:
-        rows, offset = [], 0
+    def collect(params: str, label: str, geofilter: bool) -> None:
+        offset, added = 0, 0
         while True:
             data = _ridb_get(
                 "https://ridb.recreation.gov/api/v1/facilities?"
-                f"activity=CAMPING&state={state}&limit=50&offset={offset}&full=true",
+                f"{params}&limit=50&offset={offset}&full=true",
                 key,
             )
             recs = data.get("RECDATA", [])
             for f in recs:
-                lat, lon = f.get("FacilityLatitude"), f.get("FacilityLongitude")
                 fid = str(f.get("FacilityID", ""))
-                if not lat or not lon or not fid:
+                if not fid or fid in facilities:
                     continue
-                blurb = re.sub(r"<[^>]+>", " ", f.get("FacilityDescription") or "")
-                blurb = re.sub(r"\s+", " ", blurb).strip()
-                meta = {
-                    "reservable": bool(f.get("Reservable")),
-                    "fee": (f.get("FacilityUseFeeDescription") or "").strip(),
-                    "ada": (f.get("FacilityAdaAccess") or "").upper() == "Y",
-                    "phone": (f.get("FacilityPhone") or "").strip(),
-                    "activities": [
-                        (a.get("ActivityName") or "").title()
-                        for a in (f.get("ACTIVITY") or [])
-                    ][:6],
-                    "blurb": (blurb[:220] + "…") if len(blurb) > 220 else blurb,
-                }
-                try:
-                    meta.update(_ridb_campsite_meta(fid, key))
-                except Exception as exc:  # campsites best-effort; keep facility fields
-                    print(f"[campground]     {fid} campsites skipped: {exc}", flush=True)
-                resv = f"https://www.recreation.gov/camping/campgrounds/{fid}"
-                m = _compact(meta)
-                m["reservable"] = bool(f.get("Reservable"))  # keep even when False (first-come)
-                rows.append(("National / Federal", f.get("FacilityName") or "", resv,
-                             m, f"POINT({lon} {lat})", 4326))
-                time.sleep(0.1)
+                if geofilter:
+                    lat, lon = f.get("FacilityLatitude"), f.get("FacilityLongitude")
+                    if not lat or not lon or not _in_any_bbox(lat, lon, bboxes):
+                        continue
+                facilities[fid] = f
+                added += 1
             total_count = data.get("METADATA", {}).get("RESULTS", {}).get("TOTAL_COUNT", 0)
             offset += len(recs)
             if not recs or offset >= total_count:
                 break
-        _insert_points(con, CAMPGROUND_LAYER, rows)
-        print(f"[campground]   RIDB federal {state}: {len(rows)}", flush=True)
-        total += len(rows)
-    return total
+        print(f"[campground]   RIDB {label}: +{added} facilities", flush=True)
+
+    # National geographic sweep (catches the state=-filter misses), then union the
+    # per-state state= results for any facility our bboxes don't cover geographically.
+    collect("activity=CAMPING", "national geo-sweep", geofilter=True)
+    for state in states:
+        collect(f"activity=CAMPING&state={state}", f"state={state}", geofilter=False)
+
+    # Enrich (campsite aggregate) + insert each unique facility exactly once.
+    rows = []
+    for f in facilities.values():
+        row = _ridb_facility_row(f, key)
+        if row is not None:
+            rows.append(row)
+        time.sleep(0.1)
+    _insert_points(con, CAMPGROUND_LAYER, rows)
+    print(f"[campground]   RIDB federal total: {len(rows)} unique facilities", flush=True)
+    return len(rows)
 
 
 CURATED_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "campgrounds_extra.csv")
