@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Wander Field">
+<meta name="theme-color" content="#10151a">
+<title>Wander Field</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icons/icon-192.png">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<link rel="stylesheet" href="./vendor/maplibre-gl.css">
+<link rel="stylesheet" href="./field.css">
+</head>
+<body>
+<div id="map"></div>
+
+<div class="map-btns">
+  <button id="follow" title="Follow my location" aria-pressed="false" disabled>◎</button>
+</div>
+
+<div id="chips"></div>
+<div id="offline-badge" hidden>OFFLINE</div>
+
+<div id="sheet">
+  <div class="grip" id="grip">
+    <h1>🧭 Wander Field</h1>
+    <button id="toggle" aria-expanded="true">hide</button>
+  </div>
+
+  <div id="status" class="warn">Checking…</div>
+
+  <section>
+    <h2>Offline maps</h2>
+    <div id="regions" class="regions"></div>
+    <p id="regions-empty" class="hint" hidden>
+      No regions built yet — run <code>scripts/build_region.py</code> on the server.
+    </p>
+    <p class="hint legend">
+      <span class="key box"></span> the area you downloaded — outside it is dark because there's no map there.
+      <br>
+      <span class="key line"></span> the forest boundary.
+    </p>
+  </section>
+
+  <section>
+    <button id="diag-toggle" class="link" aria-expanded="false">▸ Diagnostics</button>
+    <div id="diag" hidden></div>
+  </section>
+
+  <p class="hint disclaimer">
+    Reference only — does not establish legality. Check current rules before you camp.
+  </p>
+</div>
+
+<script src="./vendor/maplibre-gl.js"></script>
+<script src="./vendor/pmtiles.js"></script>
+<script src="./field.js"></script>
+</body>
+</html>

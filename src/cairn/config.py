@@ -106,6 +106,35 @@ class Settings(BaseSettings):
     # re-derivable; the app runs fine if it's absent (no Land layers offered).
     overlays_db_path: Path | None = None
     overlay_max_features: int = 4000  # per /overlays/{layer} response cap
+    # Offline basemap archives for Wander Field (one .pmtiles per region, built
+    # by scripts/build_region.py or the in-app "download this area" picker).
+    # Re-derivable like overlays.db; absent → the field view offers no regions.
+    regions_dir: Path | None = None
+
+    # --- Region builder (M4) -----------------------------------------------
+    # `pmtiles` is baked into the image, pinned + checksummed (see Dockerfile).
+    pmtiles_bin: str = "pmtiles"
+    # Protomaps publishes the planet as one range-request-able archive and keeps
+    # only the last few daily builds, so the date is probed, not pinned. Keyless.
+    protomaps_build_url: str = "https://build.protomaps.com/{date}.pmtiles"
+    region_build_max_age_days: int = 5
+    region_build_timeout_seconds: int = 1800
+    # `pmtiles extract --dry-run` reads the planet's directories and reports the
+    # exact archive size in a few seconds. It is the only honest estimate: tile
+    # size falls from ~63 kB at z6 to ~1.1 kB at z14, and varies six-fold with
+    # terrain (dense BWCA shoreline vs open water), so no bytes/tile constant
+    # survives contact with a second bounding box.
+    region_dry_run_timeout_seconds: int = 90
+    # z14 is the floor for legible forest spurs and the ceiling for a phone-sized
+    # archive (MapLibre overzooms past it).
+    region_max_zoom: int = 14
+    region_min_zoom: int = 10
+    # Coarse pre-filter, counted in TILES rather than degrees² because Web
+    # Mercator stretches high latitudes (an identical box costs ~27% more tiles
+    # in the BWCA than in south Texas). The real limit is region_max_bytes,
+    # enforced against the dry run.
+    region_max_tiles: int = 80_000
+    region_max_bytes: int = 150_000_000
 
     # --- External services (public, no key — TLC-12) -----------------------
     overpass_url: str = "https://overpass-api.de/api/interpreter"
@@ -252,6 +281,8 @@ class Settings(BaseSettings):
             self.availability_cache_dir = self.data_dir / "availability-cache"
         if self.precip_cache_dir is None:
             self.precip_cache_dir = self.data_dir / "precip-cache"
+        if self.regions_dir is None:
+            self.regions_dir = self.data_dir / "regions"
         return self
 
     def ui_config(self) -> dict:

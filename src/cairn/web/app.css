@@ -880,3 +880,46 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
   padding: 7px 12px; cursor: pointer; white-space: nowrap; font-size: 12.5px; }
 .basemap-opt:hover { background: rgba(255, 255, 255, 0.06); color: var(--ink); }
 .basemap-opt.active { color: var(--accent); font-weight: 600; }
+
+/* --- offline maps drawer ("download this area") --------------------------- */
+
+#offline-name {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--line, #2a3542);
+  background: var(--panel-2, #131a21);
+  color: inherit;
+  font: inherit;
+}
+#offline-zoom {
+  padding: 7px 6px;
+  border-radius: 8px;
+  border: 1px solid var(--line, #2a3542);
+  background: var(--panel-2, #131a21);
+  color: inherit;
+}
+#offline-estimate { margin: 6px 0 8px; }
+#offline-estimate b { color: #cdd7e0; }
+
+.offline-bar {
+  height: 6px;
+  background: #0c1116;
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 8px 0;
+}
+.offline-bar i { display: block; height: 100%; width: 0; background: #5aa0c8; transition: width .2s; }
+
+.offline-regions { margin-top: 10px; }
+.offline-region {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid rgba(42, 53, 66, .5);
+}
+.offline-region .or-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.offline-region .or-size { color: var(--muted, #8a97a3); font-variant-numeric: tabular-nums; font-size: 12px; }
+.btn.tiny { padding: 4px 8px; font-size: 12px; }

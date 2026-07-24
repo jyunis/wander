@@ -204,6 +204,29 @@
             <div id="degraded" class="degraded"></div>
           </div>
         </details>
+
+        <!-- Plan online, navigate offline. The same drawn box that scores an
+             area can be downloaded for Wander Field. A box you drew makes no
+             promise about being a forest, which is why this replaced a curated
+             list of forest-shaped rectangles. -->
+        <details id="offline-drawer" class="tune-drawer">
+          <summary><span class="tune-title">Offline maps</span><span class="tune-hint">download an area for the field</span></summary>
+          <div class="tune-body">
+            <p class="hint">
+              Draw a box (▭ above), then download it. It shows up in
+              <a href="/field/" target="_blank" rel="noopener">Wander Field</a>, which works with no signal.
+            </p>
+            <div id="offline-estimate" class="hint">Draw an area to size it.</div>
+            <div class="row">
+              <input id="offline-name" type="text" maxlength="60" placeholder="Name it, e.g. BWCA trip" />
+              <select id="offline-zoom" title="Detail level"></select>
+            </div>
+            <button id="offline-download" class="btn primary" disabled>📥 Download this area</button>
+            <div id="offline-bar" class="offline-bar" hidden><i></i></div>
+            <div id="offline-status" class="status"></div>
+            <div id="offline-regions" class="offline-regions"></div>
+          </div>
+        </details>
       </section>
       </div><!-- /#panel-scroll -->
 
