@@ -28,12 +28,13 @@ LAYER_TITLES: dict[str, str] = {
     "national_park": "National Park Service",
     "wilderness": "Wilderness (no vehicles)",
     "state_forest": "State Forest",
+    "county_forest": "County Forest",
     "state_park": "State Parks",
     "cell_coverage": "Cell coverage",
 }
 LAYER_ORDER = [
     "campground", "dispersed", "national_forest", "national_park", "wilderness",
-    "state_forest", "state_park", "ownership", "cell_coverage",
+    "state_forest", "county_forest", "state_park", "ownership", "cell_coverage",
 ]
 
 # Point layers live in `overlay_points` (markers); everything else is a polygon
@@ -62,8 +63,10 @@ AMENITY_LAYER = "amenity"
 RESUPPLY_CATEGORIES = ("fuel", "groceries", "water", "dump_station", "propane")
 
 # The dispersed-friendly zones the Explore tab browses (state parks excluded —
-# developed/reserved camping, a different mode). See doc #34.
-FOREST_LAYERS = ("national_forest", "state_forest")
+# developed/reserved camping, a different mode). County forests are in: WI's 30
+# county forests are dispersed-camping land (permit-gated), same mode as NF/SF.
+# See doc #34.
+FOREST_LAYERS = ("national_forest", "state_forest", "county_forest")
 
 # Simplification tolerance (degrees, ~110 m) for the discovery-highlight outline
 # served by `get_shape`. Coarse on purpose: even a national forest's full
