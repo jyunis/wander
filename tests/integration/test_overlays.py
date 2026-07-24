@@ -228,6 +228,48 @@ async def test_forest_summary_missing_returns_none(shape_settings):
     await s.close()
 
 
+def _build_county_forest_db(path: str) -> None:
+    """A minimal overlays DB with one county_forest row (WI's county forests are
+    county-owned dispersed-camping land, a first-class forest layer alongside
+    NF/SF)."""
+    con = sqlite3.connect(path)
+    con.enable_load_extension(True)
+    con.load_extension("mod_spatialite")
+    con.execute("SELECT InitSpatialMetaData(1)")
+    con.execute(
+        "CREATE TABLE overlay_features ("
+        "fid INTEGER PRIMARY KEY AUTOINCREMENT, layer TEXT, category TEXT, name TEXT)"
+    )
+    con.execute("SELECT AddGeometryColumn('overlay_features','geom',4326,'MULTIPOLYGON','XY')")
+    con.execute("SELECT CreateSpatialIndex('overlay_features','geom')")
+    con.execute(
+        "INSERT INTO overlay_features(layer, category, name, geom) VALUES "
+        "('county_forest', NULL, 'Douglas County Forest', "
+        "CastToMulti(GeomFromText('POLYGON((0 0,1 0,1 1,0 1,0 0))',4326)))"
+    )
+    con.commit()
+    con.close()
+
+
+async def test_county_forest_is_a_browsable_forest(tmp_path):
+    """A county_forest row is a first-class forest: it has a full outline
+    (get_shape) and appears in the Explore forest list (list_forests via
+    FOREST_LAYERS)."""
+    db = tmp_path / "overlays.db"
+    _build_county_forest_db(str(db))
+    s = await OverlayStore.open(
+        Settings(_env_file=None, data_dir=tmp_path, overlays_db_path=db)
+    )
+    shape = await s.get_shape("county_forest", "Douglas County Forest")
+    assert shape is not None
+    assert shape["properties"] == {"layer": "county_forest", "name": "Douglas County Forest"}
+    forests = await s.list_forests()
+    assert ("county_forest", "Douglas County Forest") in {
+        (f["layer"], f["name"]) for f in forests
+    }
+    await s.close()
+
+
 def test_forests_api_list_and_summary(tmp_path, monkeypatch):
     db = tmp_path / "overlays.db"
     _build_shape_db(str(db))

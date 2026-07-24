@@ -683,23 +683,25 @@ def load_padus(con, code, only=None) -> int:
     return len(own_rows) + len(park_rows) + len(nps_rows)
 
 
-def load_arcgis_features(con, layer, base_url, where, name_field) -> int:
+def load_arcgis_features(con, layer, base_url, where, name_field, oid_field="OBJECTID") -> int:
     """Append polygon features from an ArcGIS REST layer (f=geojson) into
-    `layer`. Pages by OBJECTID (works on MapServer + FeatureServer alike, and is
-    needed where a single query exceeds the server's transfer limit). Name is
-    title-cased; category is left null (boundary layers render by layer, not
-    category). Best-effort: an unreachable service appends nothing. The caller
-    clears the layer once before any source, so a mid-run failure can't drop
-    features another state already loaded into the same layer."""
+    `layer`. Pages by an integer OID field (`oid_field`, default OBJECTID; some
+    AGOL hosted layers name it `FID` instead — pass that) so a single query
+    exceeding the server's transfer limit still loads fully; works on MapServer +
+    FeatureServer alike. Name is title-cased; category is left null (boundary
+    layers render by layer, not category). Best-effort: an unreachable service
+    appends nothing. The caller clears the layer once before any source, so a
+    mid-run failure can't drop features another state already loaded into the
+    same layer."""
     nf = name_field.lower()
     print(f"[{layer}] querying ArcGIS {base_url.rsplit('/services/', 1)[-1]} …", flush=True)
     rows: list = []
     last = 0
     while True:
         params = urllib.parse.urlencode({
-            "where": f"({where}) AND OBJECTID>{last}",
-            "outFields": f"{name_field},OBJECTID",
-            "orderByFields": "OBJECTID",
+            "where": f"({where}) AND {oid_field}>{last}",
+            "outFields": f"{name_field},{oid_field}",
+            "orderByFields": oid_field,
             "resultRecordCount": 1000,
             "returnGeometry": "true",
             "outSR": 4326,
@@ -718,14 +720,23 @@ def load_arcgis_features(con, layer, base_url, where, name_field) -> int:
         for feat in feats:
             geom = feat.get("geometry")
             props = {k.lower(): v for k, v in (feat.get("properties") or {}).items()}
-            oid = props.get("objectid")
+            oid = props.get(oid_field.lower())
             if oid is not None:
                 last = max(last, int(oid))
             if not geom or not geom.get("coordinates"):
                 continue
             name = props.get(nf)
-            rows.append((None, str(name).title() if name else None, shape(geom).wkt, 4326))
-        if len(feats) < 1000 or oid is None:  # last page (or no OBJECTID to page on)
+            # Repair invalid source rings before insert: 28/30 WI county-forest
+            # polygons have ring self-intersections / nested shells, which make
+            # the app's per-bbox ST_Intersection clip in query() throw a GEOS
+            # TopologyException and silently drop the feature from the map.
+            # buffer(0) resolves those into a valid (multi)polygon; it only runs
+            # on invalid geoms, so valid ones pass through byte-for-byte.
+            g = shape(geom)
+            if not g.is_valid:
+                g = g.buffer(0)
+            rows.append((None, str(name).title() if name else None, g.wkt, 4326))
+        if len(feats) < 1000 or oid is None:  # last page (or no OID to page on)
             break
     _insert(con, layer, rows)
     print(f"[{layer}] loaded {len(rows)} features", flush=True)
@@ -765,13 +776,14 @@ def _overpass(query: str, *, retries: int = OVERPASS_RETRIES) -> dict:
 
 
 def _boundary_containing(con, lon: float, lat: float):
-    """The state_park/state_forest boundary polygon containing a point, or None
-    -> (layer, name). Categorizes an OSM campground by the land it sits on (and
-    drops private campgrounds outside state land). Needs the boundary layers
-    loaded first — main() loads them before campgrounds."""
+    """The state_park/state_forest/county_forest boundary polygon containing a
+    point, or None -> (layer, name). Categorizes an OSM campground by the land it
+    sits on (and drops private campgrounds outside public forest/park land).
+    Needs the boundary layers loaded first — main() loads them before
+    campgrounds."""
     return con.execute(
         "SELECT layer, name FROM overlay_features "
-        "WHERE layer IN ('state_park','state_forest') AND ROWID IN ("
+        "WHERE layer IN ('state_park','state_forest','county_forest') AND ROWID IN ("
         "  SELECT ROWID FROM SpatialIndex WHERE f_table_name='overlay_features' "
         "  AND f_geometry_column='geom' AND search_frame=MakePoint(?, ?, 4326)) "
         "AND ST_Contains(geom, MakePoint(?, ?, 4326)) LIMIT 1",
@@ -784,11 +796,15 @@ def osm_state_park_campgrounds(iso: str):
     WI). Pulls tourism=camp_site from OSM (Overpass) within the state, keeps the
     campground-LEVEL features — a polygon footprint (way), or a node named
     '…campground' — so individual pitches/shelters are dropped, and keeps only
-    those inside a loaded state-park/forest boundary, which also gives the
-    category. Amenities are best-effort from sparse OSM tags; the UI uses
-    meta.state to pick the right reservation fallback link."""
+    those inside a loaded state-park / state-forest / county-forest boundary,
+    which also gives the category. Amenities are best-effort from sparse OSM tags;
+    the UI uses meta.state to pick the right reservation fallback link."""
     code = iso.split("-")[-1]
-    cats = {"state_park": "State Park", "state_forest": "State Forest"}
+    cats = {
+        "state_park": "State Park",
+        "state_forest": "State Forest",
+        "county_forest": "County Forest",
+    }
     query = (
         "[out:json][timeout:120];"
         f'area["ISO3166-2"="{iso}"]->.a;'
@@ -895,13 +911,15 @@ DISPERSED_CAMPGROUND_DEDUP_M = 250.0
 
 
 def _in_forest(con, lon: float, lat: float):
-    """The national_forest / state_forest boundary containing a point -> its name,
-    or None. Dispersed camping is fundamentally an NF/state-forest thing, so this
-    is the gate that strips private land + town noise OSM tags can't catch. Needs
-    those boundary layers loaded first (main() loads them before campgrounds)."""
+    """The national_forest / state_forest / county_forest boundary containing a
+    point -> its name, or None. Dispersed camping is fundamentally a
+    national/state/county-forest thing (WI county forests allow it, permit-gated),
+    so this is the gate that strips private land + town noise OSM tags can't
+    catch. Needs those boundary layers loaded first (main() loads them before
+    campgrounds)."""
     return con.execute(
         "SELECT name FROM overlay_features "
-        "WHERE layer IN ('national_forest','state_forest') AND ROWID IN ("
+        "WHERE layer IN ('national_forest','state_forest','county_forest') AND ROWID IN ("
         "  SELECT ROWID FROM SpatialIndex WHERE f_table_name='overlay_features' "
         "  AND f_geometry_column='geom' AND search_frame=MakePoint(?, ?, 4326)) "
         "AND ST_Contains(geom, MakePoint(?, ?, 4326)) LIMIT 1",
@@ -930,8 +948,9 @@ def load_dispersed(con, states) -> int:
     one Overpass query per state area, so any configured state is covered.
 
     Two extra gates cut the OSM noise (private/town sites + dup campgrounds):
-    kept only if (1) inside a national_forest OR state_forest boundary, and (2)
-    not within DISPERSED_CAMPGROUND_DEDUP_M of a known campground. backcountry=yes
+    kept only if (1) inside a national_forest / state_forest / county_forest
+    boundary, and (2) not within DISPERSED_CAMPGROUND_DEDUP_M of a known
+    campground. backcountry=yes
     is KEPT but flagged meta.access='hike-in' (not towable by the teardrop).
     Display-only (TLC-3), NEVER scored — an existing fire ring is a lower-impact,
     safer-legal bet, not an assertion that camping is legal."""
@@ -1488,6 +1507,17 @@ def load_cell_coverage(con) -> int:
 # onto this dnrmaps service.)
 WI_MGD = "https://dnrmaps.wi.gov/arcgis/rest/services/LF_DML/LF_DNR_MGD_PROPERTY_WTM_Ext/MapServer/6"
 
+# WI DNR "Wisconsin County Forests" — the 30 County-Forest-Law properties
+# (~2.4M acres total; Douglas is the largest at ~276k). These are COUNTY-owned,
+# so they're absent from the DNR managed-property layer above (which the
+# state_park/state_forest filters read) — they need this dedicated AGOL hosted
+# layer: one dissolved MultiPolygon per county, keyed by PROP_NAME. NB its OID
+# field is `FID`, not `OBJECTID`, so the ArcGIS loader is told to page on FID.
+WI_COUNTY_FORESTS = (
+    "https://services5.arcgis.com/Ul9AyFFeFTjf08DW/arcgis/rest/services/"
+    "County_Forests/FeatureServer/0"
+)
+
 
 # --- per-state source registry ---------------------------------------------
 # Adding a state = adding a block here. Serving (store/API/UI) is state-blind;
@@ -1530,6 +1560,9 @@ STATES: dict[str, dict] = {
             ("state_park", WI_MGD,
              "PROP_NAME LIKE '%STATE PARK%' OR PROP_NAME LIKE '%RECREATION AREA%'", "PROP_NAME"),
             ("state_forest", WI_MGD, "PROP_NAME LIKE '%STATE FOREST%'", "PROP_NAME"),
+            # County forests (county-owned; the whole dedicated layer is county
+            # forests, so `1=1`). OID field is FID, not OBJECTID — 5th tuple elem.
+            ("county_forest", WI_COUNTY_FORESTS, "1=1", "PROP_NAME", "FID"),
         ],
         # WI DNR publishes NO campground GIS layer (data is GoingToCamp-only), so
         # state-park/forest campgrounds come from OSM, categorized by the

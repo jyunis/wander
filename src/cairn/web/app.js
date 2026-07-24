@@ -127,6 +127,7 @@ const BOUNDARY_COLORS = {
   national_forest: "#1f7a1f",
   national_park: "#7b4ea3",
   state_forest: "#6b8e23",
+  county_forest: "#4d9e2a", // county-owned forest; a brighter leaf green vs the darker NF / olive SF
   state_park: "#b5651d",
   wilderness: "#10b3c4", // vehicle-excluded; drawn with a heavier dashed outline
 };
@@ -135,6 +136,7 @@ const CAMPGROUND_COLORS = {
   "National / Federal": "#2e7d32",
   "State Park": "#b5651d",
   "State Forest": "#6b8e23",
+  "County Forest": "#4d9e2a",
 };
 // Dispersed-site marker tint (a single category; hike-in is dimmed via CSS).
 const DISPERSED_COLOR = "#c2410c";
@@ -180,7 +182,7 @@ function cellCanvas() {
 // Land layers whose polygons are tap-to-discover: tap one -> highlight the whole
 // named shape (all disjoint parts) + zoom to fit. Ownership parcels are excluded
 // (their "name" is a county, which would union the whole county).
-const SHAPE_LAYERS = new Set(["national_forest", "state_forest", "state_park"]);
+const SHAPE_LAYERS = new Set(["national_forest", "state_forest", "county_forest", "state_park"]);
 // Discovery fit: keep the WHOLE shape in view (so the part you tapped never
 // scrolls off), but framed tight — small padding + a maxZoom so a small park
 // doesn't slam to street level.
@@ -1709,7 +1711,7 @@ function _forestDist(f) {
 }
 
 function fbarRowHtml(f, pinned) {
-  const layerLabel = f.layer === "national_forest" ? "National Forest" : "State Forest";
+  const layerLabel = { national_forest: "National Forest", county_forest: "County Forest" }[f.layer] || "State Forest";
   const area = Math.round(f.area_km2).toLocaleString();
   return (
     `<button class="fbar-row" data-key="${esc(_forestKey(f))}">` +
