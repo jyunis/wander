@@ -2940,7 +2940,10 @@ function savedLayerColl() {
 }
 
 function savedPassesLayerFilter(place) {
-  if (outsideForestScope(place)) return false; // keep map markers in sync with the list
+  // The map layer is deliberately INDEPENDENT of the forest scope (decision #2):
+  // "Saved places" is an always-on map toggle, so entering/scoring a forest must
+  // not silently drop your saved markers off the map. (The Saved-tab LIST still
+  // narrows to inside the forest via placePassesFilter + its dismissible chip.)
   const v = savedLayerColl();
   if (v === "all") return true;
   const ids = place.collection_ids || [];
