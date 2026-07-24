@@ -155,11 +155,15 @@ const CELL_COVERAGE_FALLBACK = "#8a8a8a";
 const CELL_MIN_ZOOM = 7;
 // Below this zoom, ownership parcels are too numerous/tiny to fetch usefully.
 const OWNERSHIP_MIN_ZOOM = 11;
-// Roads are a close-zoom detail: below this they're hidden entirely (a wide
-// viewport would pull the whole region — keeps browsing cheap). The same
-// threshold gates forest-shape discovery taps: at/above it you're working with
-// roads, so a missed road tap shouldn't yank the map out to the whole forest.
-const ROADS_MIN_ZOOM = 13;
+// Roads show from this zoom. Matched to a scored view so a "Score this view"
+// (≤200 km², which sits around z11–12) draws the roads UNDER its hits — a
+// road-anchored hit was otherwise left floating with no visible road until you
+// zoomed to z13. Aligned with trails/ownership (both z11). Below it roads are
+// hidden (a wide viewport would pull the whole region — keeps browsing cheap).
+// The same threshold gates forest-shape discovery taps: at/above it you're
+// working with roads, so a missed road tap shouldn't yank the map out to the
+// whole forest (so polygon tap-to-highlight is a zoomed-out, < z11 action).
+const ROADS_MIN_ZOOM = 11;
 const TRAILS_MIN_ZOOM = 11; // trails (local OSM in cairn.db) from z11 — a full max-scoring-area (~2500 km²) view fits here, and trails stay sparse (<~500 feats) even in dense areas, well under the overlay cap
 const TRAIL_LABEL_MAX = 6; // cap on-map trail name labels (routes + longest first)
 
