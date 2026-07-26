@@ -648,6 +648,20 @@
     renderDiagnostics();
   }
 
+  // Re-pull the server catalogue (regions available to download) + re-render.
+  // Called on boot, on reconnect, and when the PWA returns to the foreground, so
+  // a region you extract in the main app shows up here without a manual reload —
+  // iOS resumes an installed PWA from memory, so boot() alone would never re-run.
+  async function syncServer() {
+    if (navigator.onLine) {
+      try {
+        const res = await fetch('/field/regions', { cache: 'no-store' });
+        if (res.ok) serverRegions = (await res.json()).regions || [];
+      } catch { /* unreachable — keep the catalogue we already hold */ }
+    }
+    await refresh();
+  }
+
   async function boot() {
     if (!('caches' in window)) {
       renderStatus();
@@ -658,11 +672,7 @@
     if (cachedList.length) await showRegion(cachedList[0]);
     renderRegions();
 
-    try {
-      const res = await fetch('/field/regions', { cache: 'no-store' });
-      if (res.ok) serverRegions = (await res.json()).regions || [];
-    } catch { /* nothing reachable — what we hold is the whole catalogue */ }
-    await refresh();
+    await syncServer();
     // Nothing downloaded but the server offered a region: show it over the wire
     // so you can look before committing 30 MB.
     if (!map && serverRegions.length && navigator.onLine) await showRegion(serverRegions[0]);
@@ -682,8 +692,14 @@
     renderDiagnostics();
   };
   $('follow').onclick = () => setFollowing(!following);
-  window.addEventListener('online', refresh);
+  window.addEventListener('online', syncServer);  // reconnected — re-pull the catalogue
   window.addEventListener('offline', refresh);
+  // iOS resumes an installed PWA without reloading it, so re-pull the catalogue
+  // whenever it returns to the foreground: a region extracted in the main app
+  // then appears here without a force-quit (no-op offline; falls back to cache).
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') syncServer();
+  });
 
   // Updates are handled entirely by the worker (see sw.js `activate`): a stale
   // page can't be trusted to upgrade itself, because the code that would do it
