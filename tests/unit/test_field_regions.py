@@ -12,7 +12,14 @@ import struct
 
 import pytest
 
-from cairn.field import InvalidPMTiles, RegionStore, read_header, valid_region_id
+from cairn.field import (
+    InvalidPMTiles,
+    RegionStore,
+    pin_feature,
+    pins_feature_collection,
+    read_header,
+    valid_region_id,
+)
 
 
 def _header(
@@ -142,3 +149,53 @@ def test_as_dict_is_the_wire_shape(tmp_path):
     assert payload["bbox"] == pytest.approx([-92.9, 47.0, -89.9, 48.3])
     assert payload["max_zoom"] == 14
     assert payload["size_bytes"] == 191
+    # Pins live beside the archive, so the URL is always advertised; whether it
+    # has any features is the endpoint's business (needs a cairn.db read the
+    # registry doesn't do), so it can't be gated on a file check like outline.
+    assert payload["pins_url"] == "/field/regions/superior-nf/pins.geojson"
+
+
+# --- Wander content on the offline map (#45 W1) ------------------------------
+
+
+def test_pin_feature_surfaces_a_scored_site_score(tmp_path):
+    """A scored site's saved payload carries its absolute total; the pin lifts it
+    to `score` so the client can color it on the same ramp the online app uses,
+    while keeping the whole payload inline for the offline card."""
+    place = {
+        "id": 7, "kind": "site", "name": "Near Mallard Lake",
+        "lat": 47.65, "lon": -91.4, "rating": 4, "note": "quiet",
+        "payload": {"total": 0.72, "rank": 3, "contributions": [{"feature": "road_score"}]},
+    }
+    feat = pin_feature(place)
+
+    assert feat["geometry"] == {"type": "Point", "coordinates": [-91.4, 47.65]}
+    props = feat["properties"]
+    assert props["kind"] == "site"
+    assert props["name"] == "Near Mallard Lake"
+    assert props["score"] == pytest.approx(0.72)
+    assert props["rating"] == 4
+    # The full payload rides along so the card reads score/contributions offline.
+    assert props["payload"]["contributions"] == [{"feature": "road_score"}]
+
+
+def test_pin_feature_has_no_score_for_a_scoreless_place():
+    """Campgrounds and hand-dropped pins have no total — no `score` key at all,
+    so the client falls back to a by-kind color instead of the ramp."""
+    for place in (
+        {"id": 1, "kind": "campground", "name": "State CG", "lat": 47.5, "lon": -91.0,
+         "rating": None, "note": None, "payload": {"url": "https://example/book"}},
+        {"id": 2, "kind": "site", "name": "Dropped", "lat": 47.5, "lon": -91.0,
+         "rating": None, "note": None, "payload": None},
+    ):
+        assert "score" not in pin_feature(place)["properties"]
+
+
+def test_pins_feature_collection_is_a_featurecollection():
+    fc = pins_feature_collection([
+        {"id": 1, "kind": "site", "name": "A", "lat": 47.5, "lon": -91.0,
+         "rating": None, "note": None, "payload": {"total": 0.6}},
+    ])
+    assert fc["type"] == "FeatureCollection"
+    assert len(fc["features"]) == 1
+    assert pins_feature_collection([]) == {"type": "FeatureCollection", "features": []}

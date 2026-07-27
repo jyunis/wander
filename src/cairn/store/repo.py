@@ -450,6 +450,22 @@ class Store:
             p["collection_ids"] = by_place.get(p["id"], [])
         return places
 
+    async def saved_places_in_bbox(
+        self, min_lon: float, min_lat: float, max_lon: float, max_lat: float
+    ) -> list[dict]:
+        """Saved places whose point falls inside a bbox (Wander Field pins — the
+        content baked onto an offline region's basemap). Lean: no collection
+        hydration, since the field pin card reads only name/score/rating/payload.
+        Each row still carries its `payload`, which snapshots the score breakdown
+        / campground meta, so the offline card needs no further fetch."""
+        cur = await self.db.execute(
+            f"SELECT {self._SAVED_COLS} FROM saved_places "
+            "WHERE lon >= ? AND lon <= ? AND lat >= ? AND lat <= ? "
+            "ORDER BY created_at DESC, id DESC",
+            (min_lon, max_lon, min_lat, max_lat),
+        )
+        return [self._saved_row(r) for r in await cur.fetchall()]
+
     async def _collection_ids_for(self, saved_id: int) -> list[int]:
         cur = await self.db.execute(
             "SELECT collection_id FROM place_collections WHERE saved_id=? "

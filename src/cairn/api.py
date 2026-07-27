@@ -53,7 +53,7 @@ from cairn.errors import (
 )
 from cairn.export import trip_slug, trip_to_gpx, trip_to_kml
 from cairn.field import SUFFIX as PMTILES_SUFFIX
-from cairn.field import RegionStore, outline_path
+from cairn.field import RegionStore, outline_path, pins_feature_collection
 from cairn.logging import configure
 from cairn.regionbuild import RegionBuilder, validate_request
 from cairn.roadmud import SOIL_GRID_FILENAME, SoilGrid
@@ -1001,6 +1001,29 @@ async def field_region_outline(region_id: str, request: Request):
         return JSONResponse(status_code=404, content={"error": "NoOutline"})
     return FileResponse(
         path, media_type="application/geo+json", headers={"Cache-Control": "no-cache"}
+    )
+
+
+@app.get("/field/regions/{region_id}/pins.geojson")
+async def field_region_pins(region_id: str, request: Request):
+    """The region's Wander content, drawn on the offline basemap (#45 W1). A
+    FeatureCollection of the saved sites/campgrounds whose point falls inside the
+    region's bbox, each carrying its snapshotted `payload` so the offline pin
+    card reads from cache with no network. The page caches this beside the
+    archive, like `outline.geojson`, so it survives offline.
+
+    Display-only (TLC-3): a pin is your saved place on a basemap, never a scoring
+    input and never a claim that it is legal to camp there. (Trip-scoped mode —
+    a region linked to a trip serving that trip's members — arrives with W2.)"""
+    region = _region_store(request).get(region_id)
+    if region is None:
+        return JSONResponse(status_code=404, content={"error": "NotFound"})
+    store: Store = request.app.state.store
+    places = await store.saved_places_in_bbox(*region.bbox)
+    return JSONResponse(
+        content=pins_feature_collection(places),
+        media_type="application/geo+json",
+        headers={"Cache-Control": "no-cache"},
     )
 
 

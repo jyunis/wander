@@ -226,3 +226,73 @@ def test_manifest_is_served_as_a_manifest(client):
 def test_field_does_not_shadow_the_main_app(client):
     assert client.get("/").status_code == 200
     assert "/app.js?v=" in client.get("/").text
+
+
+# --- Wander content on the offline map (#45 W1) ------------------------------
+# The archive fixture's superior-nf bbox is (-92.9, 47.0, -89.9, 48.3).
+
+
+def _save(client, **kw):
+    body = {"kind": "site", "lat": 47.65, "lon": -91.4, "name": None,
+            "payload": None, "note": None, "rating": None, **kw}
+    res = client.post("/saved", json=body)
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def test_pins_returns_saved_places_inside_the_region_bbox(client):
+    """A saved site inside the region shows up as a pin, with its snapshotted
+    payload inlined so the offline card needs no further fetch."""
+    _save(client, name="Near Mallard Lake", lat=47.65, lon=-91.4,
+          payload={"total": 0.72, "rank": 3}, rating=4)
+
+    fc = client.get("/field/regions/superior-nf/pins.geojson").json()
+
+    assert fc["type"] == "FeatureCollection"
+    assert len(fc["features"]) == 1
+    props = fc["features"][0]["properties"]
+    assert props["name"] == "Near Mallard Lake"
+    assert props["score"] == pytest.approx(0.72)  # lifted from payload.total
+    assert props["rating"] == 4
+    assert props["payload"]["rank"] == 3  # whole payload rides along for the card
+    assert fc["features"][0]["geometry"]["coordinates"] == pytest.approx([-91.4, 47.65])
+
+
+def test_pins_excludes_places_outside_the_bbox(client):
+    """Bbox-scoped (W1): a place beyond the downloaded rectangle is not a pin."""
+    _save(client, name="Inside", lat=47.65, lon=-91.4)
+    _save(client, name="Ohio", lat=40.0, lon=-82.0)
+
+    fc = client.get("/field/regions/superior-nf/pins.geojson").json()
+
+    assert [f["properties"]["name"] for f in fc["features"]] == ["Inside"]
+
+
+def test_pins_is_empty_when_nothing_is_saved_inside(client):
+    fc = client.get("/field/regions/superior-nf/pins.geojson").json()
+    assert fc == {"type": "FeatureCollection", "features": []}
+
+
+def test_pins_is_served_as_cacheable_geojson(client):
+    """Mirrors the outline sidecar: geo+json, revalidated so a rebuilt region's
+    pins can't be pinned stale, and cached by the page beside the archive."""
+    res = client.get("/field/regions/superior-nf/pins.geojson")
+
+    assert res.status_code == 200
+    assert res.headers["content-type"].startswith("application/geo+json")
+    assert res.headers["cache-control"] == "no-cache"
+
+
+def test_pins_for_unknown_region_is_404(client):
+    assert client.get("/field/regions/nope/pins.geojson").status_code == 404
+
+
+def test_field_pins_layer_declares_point_geometry(client):
+    """Same MapLibre trap as the basemap layers: a source's bucket isn't filtered
+    by geometry type, so the pins circle layer must say it wants Points."""
+    from cairn.api import _FIELD_DIR
+
+    source = (_FIELD_DIR / "field.js").read_text()
+    assert "['geometry-type'], 'Point'" in source
+    block = source.split("id: 'pins'", 1)[1][:400]
+    assert "filter:" in block, "pins layer has no geometry filter"

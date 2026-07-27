@@ -26,10 +26,12 @@
   const archiveUrl = (id) => `/field/regions/${id}.pmtiles`;
   const metaUrl = (id) => `/field/regions/${id}.meta.json`; // cache key only; never fetched
   const outlineUrl = (id) => `/field/regions/${id}/outline.geojson`;
+  const pinsUrl = (id) => `/field/regions/${id}/pins.geojson`;
 
   let map = null;
   let activeRegion = null;
   let outlineData = null; // the active region's real boundary, if we have one
+  let pinsData = null; // the active region's saved sites/campgrounds, if any
   let downloading = false;
   let upgradeDeferred = false; // a new build landed while we were downloading
   let activeSource = null; // 'offline' (from the cached blob) | 'stream' (over the wire)
@@ -79,6 +81,21 @@
   // outline. Every basemap layer below therefore states the geometry it wants.
   const POLYGONS = () => ['==', ['geometry-type'], 'Polygon']; // also matches MultiPolygon
   const LINES = () => ['==', ['geometry-type'], 'LineString']; // also matches MultiLineString
+  const POINTS = () => ['==', ['geometry-type'], 'Point']; // also matches MultiPoint
+
+  // A saved place's dot, colored like the online marker. Scored sites ride the
+  // same absolute red→amber→green ramp the Leaflet app uses (scoreColor():
+  // hsl(120·x,68%,47%) over totals 0.4–0.8); campgrounds, dispersed refs and
+  // dropped pins have no score, so they get a fixed hue by kind.
+  const PIN_COLOR = [
+    'case',
+    ['has', 'score'],
+    ['interpolate', ['linear'], ['get', 'score'],
+      0.4, '#c92727', 0.6, '#c9c927', 0.8, '#27c927'],
+    ['==', ['get', 'kind'], 'campground'], '#3f7a8c',
+    ['==', ['get', 'kind'], 'dispersed'], '#c97b4a',
+    '#8a8f98', // manually dropped pin / unscored site
+  ];
 
   const insideBbox = ([w, s, e, n], lon, lat) => lon >= w && lon <= e && lat >= s && lat <= n;
 
@@ -171,6 +188,7 @@
         bounds: { type: 'geojson', data: bboxPolygon(region.bbox) },
         mask: { type: 'geojson', data: maskPolygon(region.bbox) },
         outline: { type: 'geojson', data: outlineData || { type: 'FeatureCollection', features: [] } },
+        pins: { type: 'geojson', data: pinsData || { type: 'FeatureCollection', features: [] } },
       },
       layers: [
         { id: 'bg', type: 'background', paint: { 'background-color': '#eae6da' } },
@@ -260,6 +278,20 @@
           id: 'region-bounds', type: 'line', source: 'bounds',
           paint: { 'line-color': '#2f7fd6', 'line-width': 1.5, 'line-dasharray': [4, 3], 'line-opacity': 0.7 },
         },
+        // Your saved sites/campgrounds on the offline basemap (#45 W1). Drawn
+        // above the mask/outline so content inside the download reads clearly,
+        // but below the GPS dot so "you" is never hidden by a pin. Point-only:
+        // give it a geometry filter for the same reason every basemap layer does.
+        {
+          id: 'pins', type: 'circle', source: 'pins', filter: POINTS(),
+          paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 4, 14, 7],
+            'circle-color': PIN_COLOR,
+            'circle-stroke-color': '#fff',
+            'circle-stroke-width': 1.5,
+            'circle-opacity': 0.95,
+          },
+        },
         {
           id: 'me-acc-fill', type: 'fill', source: 'meacc',
           paint: { 'fill-color': '#4a90d9', 'fill-opacity': 0.14 },
@@ -321,10 +353,36 @@
     }
   }
 
+  // Your saved sites/campgrounds for this region (#45 W1). Cached beside the
+  // archive exactly like the outline, so the pins are still on the map with no
+  // signal. Absent/empty = no pins drawn; never a hard failure. The server
+  // inlines each pin's full score/campground payload, so the card reads from
+  // this one cached file — no per-pin fetch offline.
+  async function loadPins(region) {
+    pinsData = null;
+    if (!('caches' in window)) return;
+    const url = pinsUrl(region.id);
+    const cache = await caches.open(DATA_CACHE);
+    let res = await cache.match(url);
+    if (!res && navigator.onLine) {
+      try {
+        const fresh = await fetch(url, { cache: 'no-store' });
+        if (fresh.ok) {
+          await cache.put(url, fresh.clone());
+          res = fresh;
+        }
+      } catch { /* nothing reachable — draw the map without pins */ }
+    }
+    if (res) {
+      try { pinsData = await res.json(); } catch { pinsData = null; }
+    }
+  }
+
   async function showRegion(region) {
     const key = await registerSource(region);
     if (!key) return false;
     await loadOutline(region);
+    await loadPins(region);
     const style = styleFor(key, region);
     const bounds = [[region.bbox[0], region.bbox[1]], [region.bbox[2], region.bbox[3]]];
     const switching = !activeRegion || activeRegion.id !== region.id;
@@ -350,9 +408,23 @@
       // A fix that arrived before the map existed has to be replayed, or the
       // dot never appears for someone standing still.
       map.once('load', drawFix);
+      // Tap a saved pin → its offline card (built entirely from the cached
+      // payload, zero network). These layer listeners live on the map, not the
+      // style, so they survive setStyle and only fire when the layer exists.
+      map.on('click', 'pins', (e) => {
+        if (e.features && e.features[0]) openPinCard(e.features[0].properties);
+      });
+      map.on('mouseenter', 'pins', () => { map.getCanvas().style.cursor = 'pointer'; });
+      map.on('mouseleave', 'pins', () => { map.getCanvas().style.cursor = ''; });
+      // Tap the map away from any pin → dismiss the card. The pin handler above
+      // still fires first for a hit, so an open just re-opens; a miss closes.
+      map.on('click', (e) => {
+        if (!map.getLayer('pins')) return;
+        if (!map.queryRenderedFeatures(e.point, { layers: ['pins'] }).length) closePinCard();
+      });
       window.fieldMap = map; // `window.map` resolves to the #map div, not this
     }
-    if (switching) map.fitBounds(bounds, { padding: 20, duration: 0 });
+    if (switching) { map.fitBounds(bounds, { padding: 20, duration: 0 }); closePinCard(); }
     activeRegion = region;
     renderRegions();
     renderChips();
@@ -491,8 +563,98 @@
     await cache.delete(region.url);
     await cache.delete(metaUrl(region.id));
     await cache.delete(outlineUrl(region.id));
-    if (activeRegion?.id === region.id) activeRegion = null;
+    await cache.delete(pinsUrl(region.id));
+    if (activeRegion?.id === region.id) { activeRegion = null; closePinCard(); }
     refresh();
+  }
+
+  // --- pin card (M3) --------------------------------------------------------
+  //
+  // A saved place's card, built entirely from the payload the server inlined
+  // into the pin — so it opens with no signal. A scored site's payload is the
+  // whole scoring record (total + per-feature contributions); a campground's is
+  // its meta + booking url. We only read, never fetch.
+
+  const esc = (s) =>
+    String(s == null ? '' : s).replace(/[&<>"]/g, (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  // Enough of the online FEATURE_LABELS to make a contribution row readable
+  // offline; an unmapped key just shows its raw name.
+  const FEATURE_LABELS = {
+    road_score: 'Road access', dist_water_m: 'Water', dist_forest_m: 'Forest cover',
+    dist_solitude_m: 'Solitude', slope_deg: 'Flatness', dist_terminus_m: 'Road-end',
+    near_campsite: 'Known campsite',
+  };
+
+  const KIND_ICON = { campground: '🏕', dispersed: '🔥', site: '⛺' };
+
+  function pinIcon(props) {
+    if (props.kind === 'site') return props.score != null ? '⛺' : '📍';
+    return KIND_ICON[props.kind] || '📍';
+  }
+
+  // MapLibre hands back feature properties with objects JSON-stringified, so the
+  // inlined payload arrives as a string; parse it back. Primitives (score,
+  // rating) come through with their types intact.
+  function parsePayload(props) {
+    const p = props.payload;
+    if (p == null) return null;
+    if (typeof p === 'object') return p;
+    try { return JSON.parse(p); } catch { return null; }
+  }
+
+  function openPinCard(props) {
+    const card = $('pin-card');
+    if (!card) return;
+    const payload = parsePayload(props) || {};
+    const score = props.score != null ? +props.score : (payload.total != null ? +payload.total : null);
+    const rating = props.rating != null ? +props.rating : null;
+    const name = props.name || (props.kind === 'campground' ? 'Campground'
+      : props.kind === 'dispersed' ? 'Dispersed site'
+      : score != null ? 'Scored site' : 'Dropped pin');
+
+    const parts = [];
+    parts.push(`<div class="pc-head"><span class="pc-name">${pinIcon(props)} ${esc(name)}</span>` +
+      `<button class="pc-close" title="Close">×</button></div>`);
+
+    const meta = [];
+    if (score != null) meta.push(`<span class="pc-score">score ${score.toFixed(2)}</span>`);
+    if (rating) meta.push(`<span class="pc-stars">${'★'.repeat(Math.round(rating))}</span>`);
+    if (meta.length) parts.push(`<div class="pc-meta">${meta.join('<span class="dot">·</span>')}</div>`);
+
+    if (props.note) parts.push(`<div class="pc-note">${esc(props.note)}</div>`);
+
+    // Top score contributions, from the cached payload (no "why this score"
+    // fetch). Kept short — the field card is a glance, not the full breakdown.
+    const contribs = Array.isArray(payload.contributions) ? payload.contributions : [];
+    if (contribs.length) {
+      const rows = contribs
+        .slice()
+        .sort((a, b) => (b.contribution || 0) - (a.contribution || 0))
+        .slice(0, 4)
+        .map((c) => `<div class="pc-row"><span>${esc(FEATURE_LABELS[c.feature] || c.feature)}</span>` +
+          `<b>${(c.contribution || 0).toFixed(2)}</b></div>`)
+        .join('');
+      parts.push(`<div class="pc-contribs">${rows}</div>`);
+    }
+
+    // Campground fallback: link out to book (opens when you're back on signal).
+    const url = payload.url;
+    if (props.kind === 'campground' && url) {
+      parts.push(`<a class="pc-link" href="${esc(url)}" target="_blank" rel="noopener">Book / details ↗</a>`);
+    }
+
+    parts.push('<div class="pc-disc">Reference only — not a claim it’s legal to camp here.</div>');
+
+    card.innerHTML = parts.join('');
+    card.hidden = false;
+    card.querySelector('.pc-close').onclick = closePinCard;
+  }
+
+  function closePinCard() {
+    const card = $('pin-card');
+    if (card) card.hidden = true;
   }
 
   // --- rendering ------------------------------------------------------------

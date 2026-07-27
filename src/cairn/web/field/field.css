@@ -106,7 +106,46 @@ button.link {
 .key { display: inline-block; width: 22px; vertical-align: middle; margin-right: 6px; }
 .key.box { height: 12px; border: 1.5px dashed var(--accent); border-radius: 2px; }
 .key.line { height: 0; border-top: 2px solid #5f9e5f; }
+.key.dot {
+  height: 12px; width: 12px; border-radius: 50%;
+  background: #27c927; border: 1.5px solid #fff;
+}
 .disclaimer { border-top: 1px solid var(--line); padding-top: 9px; }
+
+/* --- pin card (M3) -------------------------------------------------------- */
+/* A tapped saved pin's card. Sits above the sheet (z 6 > 5) so it's a focused,
+   dismissable overlay; everything in it comes from the pin's cached payload. */
+#pin-card {
+  position: fixed; z-index: 6;
+  left: 10px; right: 10px; bottom: calc(10px + env(safe-area-inset-bottom));
+  max-width: 420px; margin: 0 auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 12px 13px calc(12px + env(safe-area-inset-bottom));
+  max-height: 60vh; overflow: auto;
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, .45);
+}
+.pc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.pc-name { font-weight: 700; font-size: 15px; }
+.pc-close {
+  flex: none; background: none; border: 1px solid var(--line); color: var(--muted);
+  border-radius: 8px; width: 30px; height: 30px; font-size: 18px; line-height: 1;
+}
+.pc-meta { margin-top: 6px; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.pc-meta .dot { opacity: .5; margin: 0 6px; }
+.pc-score { color: var(--ok); font-weight: 600; }
+.pc-stars { color: var(--warn); }
+.pc-note { margin-top: 8px; font-size: 13px; }
+.pc-contribs { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+.pc-row {
+  display: flex; justify-content: space-between; gap: 10px; font-size: 13px;
+  padding: 3px 0; border-bottom: 1px solid rgba(42, 53, 66, .5);
+}
+.pc-row b { font-variant-numeric: tabular-nums; }
+.pc-link {
+  display: inline-block; margin-top: 10px; color: #0c1116; background: var(--accent);
+  border-radius: 9px; padding: 8px 12px; font-size: 13px; font-weight: 600; text-decoration: none;
+}
+.pc-disc { margin-top: 10px; color: var(--muted); font-size: 11px; }
 
 /* --- map controls --------------------------------------------------------- */
 

@@ -95,6 +95,11 @@ class Region:
             "size_bytes": self.size_bytes,
             "built_at": self.built_at,
             "url": f"/field/regions/{self.id}{SUFFIX}",
+            # Always present, unlike outline_url. Whether a region has any content
+            # depends on a cairn.db read the registry deliberately doesn't do (it
+            # reads only bytes off disk); the endpoint is the source of truth and
+            # simply returns an empty FeatureCollection when nothing falls inside.
+            "pins_url": f"/field/regions/{self.id}/pins{OUTLINE_SUFFIX}",
         }
         if outline_path(self.id) is not None:
             payload["outline_url"] = f"/field/regions/{self.id}/outline{OUTLINE_SUFFIX}"
@@ -205,3 +210,47 @@ class RegionStore:
         if self.get(region_id) is None:
             return None
         return self._dir / f"{region_id}{SUFFIX}"
+
+
+# --- Wander content on the offline map (#45 W1 — display-only, TLC-3) --------
+# The region's own saved sites/campgrounds, served beside the archive as a
+# GeoJSON sidecar (`pins.geojson`) that the field page caches next to the bytes
+# so it survives offline — exactly like the `outline` sidecar. Each pin carries
+# its whole `payload` (the score breakdown / campground meta already snapshotted
+# in `saved_places.payload_json`), so the offline pin card needs zero network.
+
+
+def pin_feature(place: dict) -> dict:
+    """One saved place → a GeoJSON point Feature for the field map.
+
+    `place` is a `Store._saved_row` dict: id/kind/name/lat/lon/payload/note/
+    rating. A scored site's `payload` carries `total` (its absolute score); we
+    surface that as `score` so the client can color the pin on the same ramp the
+    online app uses. Campgrounds and dropped pins have no score.
+    """
+    payload = place.get("payload")
+    score = payload.get("total") if isinstance(payload, dict) else None
+    props = {
+        "id": place.get("id"),
+        "kind": place.get("kind"),
+        "name": place.get("name"),
+        "rating": place.get("rating"),
+        "note": place.get("note"),
+        "payload": payload,
+    }
+    if isinstance(score, (int, float)):
+        props["score"] = score
+    return {
+        "type": "Feature",
+        "geometry": {"type": "Point", "coordinates": [place.get("lon"), place.get("lat")]},
+        "properties": props,
+    }
+
+
+def pins_feature_collection(places: list[dict]) -> dict:
+    """A FeatureCollection of a region's Wander content (#45 W1). Pure over the
+    saved-place rows, so it unit-tests without a map or a DB."""
+    return {
+        "type": "FeatureCollection",
+        "features": [pin_feature(p) for p in places],
+    }
