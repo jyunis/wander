@@ -32,6 +32,7 @@
   let activeRegion = null;
   let outlineData = null; // the active region's real boundary, if we have one
   let pinsData = null; // the active region's saved sites/campgrounds, if any
+  let selectedPinId = null; // the pin whose card is open, for the selection ring
   let downloading = false;
   let upgradeDeferred = false; // a new build landed while we were downloading
   let activeSource = null; // 'offline' (from the cached blob) | 'stream' (over the wire)
@@ -96,6 +97,14 @@
     ['==', ['get', 'kind'], 'dispersed'], '#c97b4a',
     '#8a8f98', // manually dropped pin / unscored site
   ];
+
+  // Big enough to see against the topo and to hit with a fingertip. The real
+  // touch target is the separate invisible `pins-hit` layer (far fatter), so
+  // the visible dot can stay tasteful without being a pain to tap.
+  const PIN_RADIUS = ['interpolate', ['linear'], ['zoom'], 8, 5, 11, 7, 14, 9];
+  // Matches only the pin whose card is open (or nothing, when id is null).
+  const selectedFilter = (id) =>
+    ['all', POINTS(), ['==', ['get', 'id'], id == null ? -1 : id]];
 
   const insideBbox = ([w, s, e, n], lon, lat) => lon >= w && lon <= e && lat >= s && lat <= n;
 
@@ -281,15 +290,39 @@
         // Your saved sites/campgrounds on the offline basemap (#45 W1). Drawn
         // above the mask/outline so content inside the download reads clearly,
         // but below the GPS dot so "you" is never hidden by a pin. Point-only:
-        // give it a geometry filter for the same reason every basemap layer does.
+        // give each layer a geometry filter, like every basemap layer does.
+        //
+        // A ring under the tapped pin, so it's obvious which one the card is for.
+        {
+          id: 'pins-selected', type: 'circle', source: 'pins',
+          filter: selectedFilter(selectedPinId),
+          paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 10, 14, 15],
+            'circle-color': 'rgba(0,0,0,0)',
+            'circle-stroke-color': '#2f7fd6',
+            'circle-stroke-width': 3,
+          },
+        },
         {
           id: 'pins', type: 'circle', source: 'pins', filter: POINTS(),
           paint: {
-            'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 4, 14, 7],
+            'circle-radius': PIN_RADIUS,
             'circle-color': PIN_COLOR,
             'circle-stroke-color': '#fff',
-            'circle-stroke-width': 1.5,
-            'circle-opacity': 0.95,
+            'circle-stroke-width': 2,
+            'circle-opacity': 0.96,
+          },
+        },
+        // A fat, invisible tap target: a fingertip near a small dot still lands
+        // on it, and a near-miss no longer dismisses the card. This is the
+        // topmost pins layer, so click/hover/query hit it first; opacity:0
+        // features are still returned by queryRenderedFeatures.
+        {
+          id: 'pins-hit', type: 'circle', source: 'pins', filter: POINTS(),
+          paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 16, 14, 22],
+            'circle-color': '#000',
+            'circle-opacity': 0,
           },
         },
         {
@@ -383,9 +416,12 @@
     if (!key) return false;
     await loadOutline(region);
     await loadPins(region);
+    const switching = !activeRegion || activeRegion.id !== region.id;
+    // A card/ring from the old region has no meaning on the new one; clear it
+    // before styleFor bakes the selection filter into the fresh style.
+    if (switching) closePinCard();
     const style = styleFor(key, region);
     const bounds = [[region.bbox[0], region.bbox[1]], [region.bbox[2], region.bbox[3]]];
-    const switching = !activeRegion || activeRegion.id !== region.id;
 
     if (map) {
       map.setStyle(style);
@@ -411,20 +447,20 @@
       // Tap a saved pin → its offline card (built entirely from the cached
       // payload, zero network). These layer listeners live on the map, not the
       // style, so they survive setStyle and only fire when the layer exists.
-      map.on('click', 'pins', (e) => {
+      map.on('click', 'pins-hit', (e) => {
         if (e.features && e.features[0]) openPinCard(e.features[0].properties);
       });
-      map.on('mouseenter', 'pins', () => { map.getCanvas().style.cursor = 'pointer'; });
-      map.on('mouseleave', 'pins', () => { map.getCanvas().style.cursor = ''; });
+      map.on('mouseenter', 'pins-hit', () => { map.getCanvas().style.cursor = 'pointer'; });
+      map.on('mouseleave', 'pins-hit', () => { map.getCanvas().style.cursor = ''; });
       // Tap the map away from any pin → dismiss the card. The pin handler above
       // still fires first for a hit, so an open just re-opens; a miss closes.
       map.on('click', (e) => {
-        if (!map.getLayer('pins')) return;
-        if (!map.queryRenderedFeatures(e.point, { layers: ['pins'] }).length) closePinCard();
+        if (!map.getLayer('pins-hit')) return;
+        if (!map.queryRenderedFeatures(e.point, { layers: ['pins-hit'] }).length) closePinCard();
       });
       window.fieldMap = map; // `window.map` resolves to the #map div, not this
     }
-    if (switching) { map.fitBounds(bounds, { padding: 20, duration: 0 }); closePinCard(); }
+    if (switching) map.fitBounds(bounds, { padding: 20, duration: 0 });
     activeRegion = region;
     renderRegions();
     renderChips();
@@ -604,9 +640,18 @@
     try { return JSON.parse(p); } catch { return null; }
   }
 
+  // Move the selection ring to a pin (or clear it) without a full style reload.
+  function setSelectedPin(id) {
+    selectedPinId = id == null ? null : id;
+    if (map && map.getLayer('pins-selected')) {
+      map.setFilter('pins-selected', selectedFilter(selectedPinId));
+    }
+  }
+
   function openPinCard(props) {
     const card = $('pin-card');
     if (!card) return;
+    setSelectedPin(props.id);
     const payload = parsePayload(props) || {};
     const score = props.score != null ? +props.score : (payload.total != null ? +payload.total : null);
     const rating = props.rating != null ? +props.rating : null;
@@ -655,6 +700,7 @@
   function closePinCard() {
     const card = $('pin-card');
     if (card) card.hidden = true;
+    setSelectedPin(null);
   }
 
   // --- rendering ------------------------------------------------------------
