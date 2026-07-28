@@ -755,9 +755,12 @@
 
       const btn = document.createElement('button');
       if (cached) {
-        btn.textContent = activeRegion?.id === r.id ? 'Showing' : 'Show';
-        btn.disabled = activeRegion?.id === r.id;
-        btn.onclick = () => showRegion(r);
+        // Never a disabled dead-end: the region you're already showing gets a
+        // "Recenter" that re-frames the map, so tapping it always does something
+        // (a disabled "Showing" button reads as "the app is broken").
+        const isActive = activeRegion?.id === r.id;
+        btn.textContent = isActive ? 'Recenter' : 'Show';
+        btn.onclick = isActive ? showActiveRegion : () => showRegion(r);
       } else {
         btn.textContent = 'Download';
         btn.disabled = !navigator.onLine;
@@ -933,7 +936,18 @@
     $('diag-toggle').setAttribute('aria-expanded', String(!d.hidden));
     renderDiagnostics();
   };
-  $('follow').onclick = () => setFollowing(!following);
+  $('follow').onclick = () => {
+    if (fix) return setFollowing(!following);
+    // No position yet — common on a desktop shortcut. Don't sit there dead:
+    // explain, and actively ask for one so a granted permission starts the dot.
+    if (!navigator.geolocation) return setStatus('bad', '📍 This device has no location.');
+    setStatus('warn', '📍 Locating… allow location access to follow your position.');
+    navigator.geolocation.getCurrentPosition(
+      () => {},  // startGPS's watcher stores the fix and enables following
+      (e) => setStatus('bad', '📍 Location unavailable — ' + (e.message || 'permission denied')),
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+    );
+  };
   window.addEventListener('online', syncServer);  // reconnected — re-pull the catalogue
   window.addEventListener('offline', refresh);
   // iOS resumes an installed PWA without reloading it, so re-pull the catalogue
