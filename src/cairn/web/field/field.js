@@ -714,8 +714,23 @@
   let regions = []; // catalogue: what the server offers ∪ what we already hold
   let cachedList = [];
   let cachedIds = new Set();
+  let lastRegionsSig = null; // last-rendered list state, to skip no-op rebuilds
 
   function renderRegions() {
+    // The foreground refresh (visibilitychange → syncServer → refresh) re-runs
+    // this on EVERY return to the app. Rebuilding replaces every button node —
+    // and a tap that lands in that same moment hits a node being swapped out, so
+    // it "does nothing". Almost every foreground finds the list unchanged, so
+    // fingerprint it and bail when nothing moved: returning to the app then never
+    // eats the tap you make as you arrive.
+    const sig = JSON.stringify([
+      navigator.onLine,
+      activeRegion?.id || null,
+      regions.map((r) => [r.id, cachedIds.has(r.id), r.name, r.size_bytes, r.ts, r.min_zoom, r.max_zoom]),
+    ]);
+    if (sig === lastRegionsSig) return;
+    lastRegionsSig = sig;
+
     const host = $('regions');
     host.innerHTML = '';
     $('regions-empty').hidden = regions.length > 0;
@@ -791,7 +806,17 @@
   // The two things you can't tell by looking at a map: whether these tiles came
   // off the device or the network, and whether you're standing inside the part
   // of the world that was downloaded.
+  let lastChipsSig = null;
+
   function renderChips() {
+    // Same reason as renderRegions: this runs on every GPS tick and every
+    // foreground, and its "Show map" button shouldn't be swapped out mid-tap.
+    const sig = JSON.stringify([
+      activeRegion?.id || null, activeSource, !!fix, !!fix && fixIsInsideRegion(),
+    ]);
+    if (sig === lastChipsSig) return;
+    lastChipsSig = sig;
+
     const host = $('chips');
     host.innerHTML = '';
     if (!activeRegion) return;
@@ -860,14 +885,23 @@
   // Called on boot, on reconnect, and when the PWA returns to the foreground, so
   // a region you extract in the main app shows up here without a manual reload —
   // iOS resumes an installed PWA from memory, so boot() alone would never re-run.
+  let syncing = false;
   async function syncServer() {
-    if (navigator.onLine) {
-      try {
-        const res = await fetch('/field/regions', { cache: 'no-store' });
-        if (res.ok) serverRegions = (await res.json()).regions || [];
-      } catch { /* unreachable — keep the catalogue we already hold */ }
+    // Rapid focus flips (or online + visibility firing together) can stack
+    // several of these; one at a time is enough and keeps refresh from thrashing.
+    if (syncing) return;
+    syncing = true;
+    try {
+      if (navigator.onLine) {
+        try {
+          const res = await fetch('/field/regions', { cache: 'no-store' });
+          if (res.ok) serverRegions = (await res.json()).regions || [];
+        } catch { /* unreachable — keep the catalogue we already hold */ }
+      }
+      await refresh();
+    } finally {
+      syncing = false;
     }
-    await refresh();
   }
 
   async function boot() {
