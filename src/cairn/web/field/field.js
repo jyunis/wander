@@ -691,9 +691,10 @@
     }
 
     // Getting there is Google Maps' job, not ours (#40: last-mile follow-the-map
-    // only, never turn-by-turn). The coords are shown alongside and are copyable
-    // because THEY still work with no signal — you can key them into a handheld
-    // GPS or read them over the radio, which the maps link can't do offline.
+    // only, never turn-by-turn). This works with no signal too: the URL opens the
+    // Google Maps app, which routes on its own downloaded offline maps. The coords
+    // sit alongside and are copyable for everything Maps can't do — keying a
+    // handheld GPS, or reading a position over the radio.
     if (hasLL) {
       const ll = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
       const gmaps = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
@@ -734,17 +735,11 @@
           }
         };
       }
-      // Offline the maps link can only fail. Don't let it be a dead end: copy the
-      // coords instead and say why — that's the part that still works out here.
-      const gm = card.querySelector('.pc-gmaps');
-      if (gm) {
-        gm.addEventListener('click', (e) => {
-          if (navigator.onLine) return; // online: let it open normally
-          e.preventDefault();
-          if (llBtn) llBtn.onclick();
-          setStatus('warn', '📴 Offline — coordinates copied instead. Google Maps needs signal.');
-        });
-      }
+      // NB: never intercept this link when offline. On a phone the maps URL
+      // deep-links into the Google Maps APP, which navigates fine on its own
+      // downloaded offline maps — exactly the no-signal case this app exists
+      // for. An earlier cut "helpfully" preventDefault()ed it offline and broke
+      // the one handoff that still worked out there. Let it through, always.
     }
   }
 
