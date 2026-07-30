@@ -448,7 +448,10 @@
       // payload, zero network). These layer listeners live on the map, not the
       // style, so they survive setStyle and only fire when the layer exists.
       map.on('click', 'pins-hit', (e) => {
-        if (e.features && e.features[0]) openPinCard(e.features[0].properties);
+        if (e.features && e.features[0]) {
+          const f = e.features[0];
+          openPinCard(f.properties, f.geometry && f.geometry.coordinates);
+        }
       });
       map.on('mouseenter', 'pins-hit', () => { map.getCanvas().style.cursor = 'pointer'; });
       map.on('mouseleave', 'pins-hit', () => { map.getCanvas().style.cursor = ''; });
@@ -648,10 +651,13 @@
     }
   }
 
-  function openPinCard(props) {
+  function openPinCard(props, coords) {
     const card = $('pin-card');
     if (!card) return;
     setSelectedPin(props.id);
+    const lon = Array.isArray(coords) ? +coords[0] : null;
+    const lat = Array.isArray(coords) ? +coords[1] : null;
+    const hasLL = Number.isFinite(lat) && Number.isFinite(lon);
     const payload = parsePayload(props) || {};
     const score = props.score != null ? +props.score : (payload.total != null ? +payload.total : null);
     const rating = props.rating != null ? +props.rating : null;
@@ -684,6 +690,19 @@
       parts.push(`<div class="pc-contribs">${rows}</div>`);
     }
 
+    // Getting there is Google Maps' job, not ours (#40: last-mile follow-the-map
+    // only, never turn-by-turn). The coords are shown alongside and are copyable
+    // because THEY still work with no signal — you can key them into a handheld
+    // GPS or read them over the radio, which the maps link can't do offline.
+    if (hasLL) {
+      const ll = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+      const gmaps = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
+      parts.push(
+        `<div class="pc-coords"><button type="button" class="pc-ll" title="Copy coordinates">📍 ${esc(ll)}</button></div>` +
+        `<a class="pc-link pc-gmaps" href="${gmaps}" target="_blank" rel="noopener">Open in Google Maps ↗</a>`,
+      );
+    }
+
     // Campground fallback: link out to book (opens when you're back on signal).
     const url = payload.url;
     if (props.kind === 'campground' && url) {
@@ -695,6 +714,38 @@
     card.innerHTML = parts.join('');
     card.hidden = false;
     card.querySelector('.pc-close').onclick = closePinCard;
+
+    if (hasLL) {
+      const ll = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+      const llBtn = card.querySelector('.pc-ll');
+      if (llBtn) {
+        llBtn.onclick = async () => {
+          try {
+            await navigator.clipboard.writeText(ll);
+            llBtn.textContent = '✓ copied';
+            setTimeout(() => { llBtn.textContent = `📍 ${ll}`; }, 1400);
+          } catch {
+            // No clipboard permission — select the text so it can be copied by hand.
+            const r = document.createRange();
+            r.selectNodeContents(llBtn);
+            const sel = getSelection();
+            sel.removeAllRanges();
+            sel.addRange(r);
+          }
+        };
+      }
+      // Offline the maps link can only fail. Don't let it be a dead end: copy the
+      // coords instead and say why — that's the part that still works out here.
+      const gm = card.querySelector('.pc-gmaps');
+      if (gm) {
+        gm.addEventListener('click', (e) => {
+          if (navigator.onLine) return; // online: let it open normally
+          e.preventDefault();
+          if (llBtn) llBtn.onclick();
+          setStatus('warn', '📴 Offline — coordinates copied instead. Google Maps needs signal.');
+        });
+      }
+    }
   }
 
   function closePinCard() {

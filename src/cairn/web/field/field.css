@@ -141,10 +141,19 @@ button.link {
   padding: 3px 0; border-bottom: 1px solid rgba(42, 53, 66, .5);
 }
 .pc-row b { font-variant-numeric: tabular-nums; }
+.pc-coords { margin-top: 10px; }
+.pc-ll {
+  background: #0c1116; border: 1px solid var(--line); color: var(--muted);
+  border-radius: 8px; padding: 6px 9px; font-size: 12px;
+  font-variant-numeric: tabular-nums; font-family: inherit;
+}
 .pc-link {
   display: inline-block; margin-top: 10px; color: #0c1116; background: var(--accent);
   border-radius: 9px; padding: 8px 12px; font-size: 13px; font-weight: 600; text-decoration: none;
 }
+/* Full-width so it reads as the primary "get me there" action, and is an easy
+   target with gloves on. */
+.pc-gmaps { display: block; text-align: center; }
 .pc-disc { margin-top: 10px; color: var(--muted); font-size: 11px; }
 
 /* --- map controls --------------------------------------------------------- */
