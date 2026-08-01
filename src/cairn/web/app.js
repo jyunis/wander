@@ -4145,11 +4145,51 @@ async function openTripPickerAt(place, anchorEl) {
 }
 
 // Place the floating picker just below the anchor, clamped to the viewport.
+// Place a floating picker near its anchor, fully on screen.
+//
+// The old version clamped only the picker's TOP edge, which for an anchor low on
+// the page just pinned the top near the bottom of the viewport and let the body
+// run off the screen — the rows and the "New collection" field were unreachable
+// on a phone. So: measure the picker, prefer below the anchor, flip above when
+// it doesn't fit, and if neither side fits use the roomier one and let it
+// scroll. visualViewport (not innerHeight) is what shrinks when the on-screen
+// keyboard opens, which is exactly when this picker is being typed into.
 function positionPicker(pick, anchorEl) {
+  const M = 8; // keep this far off every viewport edge
+  const GAP = 4; // breathing room between anchor and picker
   const r = anchorEl.getBoundingClientRect();
-  const w = 212;
-  pick.style.left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8)) + "px";
-  pick.style.top = Math.min(r.bottom + 4, window.innerHeight - 8) + "px";
+  const vv = window.visualViewport;
+  const vw = vv ? vv.width : window.innerWidth;
+  const vh = vv ? vv.height : window.innerHeight;
+  const offX = vv ? vv.offsetLeft : 0;
+  const offY = vv ? vv.offsetTop : 0;
+
+  // Measure at natural size — a leftover max-height from a previous open would
+  // otherwise make it look like it fits when it doesn't.
+  pick.style.maxHeight = "";
+  pick.style.overflowY = "";
+  const pr = pick.getBoundingClientRect();
+  const w = pr.width || 212;
+
+  pick.style.left = Math.max(offX + M, Math.min(r.left, offX + vw - w - M)) + "px";
+
+  const below = offY + vh - M - (r.bottom + GAP); // room under the anchor
+  const above = r.top - GAP - (offY + M); // room over it
+  let h = pr.height;
+  let top;
+  if (h <= below) {
+    top = r.bottom + GAP;
+  } else if (h <= above) {
+    top = r.top - GAP - h; // flip above the anchor
+  } else {
+    const useAbove = above > below;
+    const room = Math.max(useAbove ? above : below, 140); // never uselessly short
+    pick.style.maxHeight = room + "px";
+    pick.style.overflowY = "auto";
+    h = Math.min(h, room);
+    top = useAbove ? r.top - GAP - h : r.bottom + GAP;
+  }
+  pick.style.top = Math.max(offY + M, Math.min(top, offY + vh - h - M)) + "px";
 }
 
 // A brief confirmation toast (top-center), auto-dismissed.
