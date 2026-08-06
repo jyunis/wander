@@ -1,0 +1,80 @@
+[
+  {
+    "code": "F1",
+    "name": "Bayfield forest near pond",
+    "lat": 46.5195851,
+    "lon": -91.5177925,
+    "stars": "4",
+    "access": "DRIVE",
+    "on_forest_road": true,
+    "county_or_hwy": false,
+    "rough": false,
+    "roads": ["217510714"],
+
+    "verified": "2026-07-24",
+    "verification": "in person — first Wander-planned trip",
+    "land_manager": "Bayfield County Forest",
+    "land_category": "County",
+    "state": "WI",
+    "saved_place_id": 100,
+
+    "coords_are": "candidate",
+    "camped_at": null,
+    "camped_offset_m": 46,
+    "camped_offset_precision": "recalled, not tracked — 'about 50 yards' from the pin",
+
+    "found": [
+      "fire ring",
+      "railroad-tie bench",
+      "overlooks a large pond",
+      "secluded"
+    ],
+    "deduction": "narrow, uphill approach — difficult with a towed trailer",
+    "towing_difficulty": true,
+    "open_question": "Where along the route the approach difficulty was is unknown. The offset is a recollection, not a track log.",
+
+    "approach": {
+      "way_id": "217510714",
+      "highway": "track",
+      "surface": null,
+      "length_m": 546,
+      "terminates_at_candidate": true,
+      "note": "Mapped track spur ending at the candidate. `rough: false` is untrustworthy — no surface/smoothness tag. `highway=track` scores road_character 1.0."
+    },
+
+    "measured_of": "candidate",
+    "measured": {
+      "dist_water_m": 28.479604196996156,
+      "dist_terminus_m": 0,
+      "road_score": 1,
+      "slope_deg": 2.614182782436435,
+      "local_road_m": 12503.789940378516,
+      "dist_solitude_m": 824.0837457204344,
+      "dist_forest_m": 0,
+      "near_campsite": false
+    },
+
+    "scored_as": {
+      "rank": 2,
+      "distinct_rank": 2,
+      "total": 0.9703437960586476,
+      "degraded_features": [],
+      "weights_normalized": {
+        "road_end": 0.3125,
+        "water_proximity": 0.3125,
+        "road_character": 0.3125,
+        "remoteness": 0.03125,
+        "flatness": 0.015625,
+        "solitude": 0.015625
+      },
+      "normalized": {
+        "road_end": 1,
+        "water_proximity": 1,
+        "road_character": 1,
+        "flatness": 0.8692908608781782,
+        "remoteness": 0.4790087524842285,
+        "solitude": 0.27469458190681145
+      }
+    }
+  }
+]

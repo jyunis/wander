@@ -20,9 +20,28 @@ from pathlib import Path
 
 API = "http://localhost:9931"
 GT = Path(__file__).parent / "ground_truth_chippewa.json"
+# Sites visited in person (eval/README.md). Same core schema as the scraped set,
+# so the two concatenate — note `stars` must stay a STRING in both, since the
+# report sorts on it and a bare int would blow up the comparison.
+GT_FIELD = Path(__file__).parent / "ground_truth_field.json"
 
 # Known-good drive-in sites not in the guide list (add your own here).
 EXTRA: list[dict] = []
+
+
+def load_ground_truth():
+    """Scraped guide sites + field-verified sites + ad-hoc examples.
+
+    Field-verified entries are tagged so the report can mark them: they are worth
+    more than a scraped star rating (someone stood there), and they are the only
+    ones carrying a `deduction` — the reason a site fell short of 5 stars, which
+    is where missing features show up.
+    """
+    sites = json.load(open(GT)) + EXTRA
+    if GT_FIELD.exists():
+        for s in json.load(open(GT_FIELD)):
+            sites.append({**s, "field_verified": True})
+    return sites
 
 
 def meters(lat1, lon1, lat2, lon2):
@@ -53,22 +72,22 @@ def main():
     args = ap.parse_args()
     bbox = [float(x) for x in args.bbox.split(",")]
 
-    gt = json.load(open(GT)) + EXTRA
+    gt = load_ground_truth()
     known = [s for s in gt if s["access"] == "DRIVE" and in_bbox(s, bbox)]
-    print(f"bbox {bbox}: {len(known)} known-good DRIVE-IN sites in scope")
+    n_field = sum(1 for s in known if s.get("field_verified"))
+    print(f"bbox {bbox}: {len(known)} known-good DRIVE-IN sites in scope"
+          + (f" ({n_field} field-verified)" if n_field else ""))
 
     body = {"bbox": bbox}
     if args.weights:
         body["weights"] = json.loads(args.weights)
-    run = post_json("/score", body)
-    rid = run["id"]
-    while run["status"] in ("pending", "running"):
-        time.sleep(1)
-        run = get_json(f"/runs/{rid}")
-    gj = get_json(f"/runs/{rid}/geojson")
+    # Scoring went synchronous + ephemeral (TLC-15): POST /score/view returns the
+    # ranked GeoJSON directly. The old async POST /score + poll /runs/{id} path is
+    # gone, which left this harness 405-ing.
+    gj = post_json("/score/view", body)
     feats = gj["features"]
     n = len(feats)
-    print(f"run {rid}: {gj['run']['candidate_count']} scored, "
+    print(f"{gj['run']['candidate_count']} scored, "
           f"{gj['run']['distinct_count']} distinct sites\n")
 
     # Match each known site to the BEST-RANKED candidate within MATCH_M — the
@@ -83,18 +102,21 @@ def main():
             if meters(s["lat"], s["lon"], f["geometry"]["coordinates"][1],
                       f["geometry"]["coordinates"][0]) <= MATCH_M
         ]
+        tag = "✓" if s.get("field_verified") else " "  # ✓ = someone stood there
         if not near:
-            print(f"  {s['stars']:>2}* {s['code']:<5} {s['name'][:22]:<22} "
+            print(f" {tag}{s['stars']:>2}* {s['code']:<5} {s['name'][:22]:<22} "
                   f"no candidate within {MATCH_M:.0f} m")
             continue
         best = min(near, key=lambda f: f["properties"]["rank"])
         p = best["properties"]
         pct = 100 * p["rank"] / n
         pcts.append(pct)
-        print(f"  {s['stars']:>2}* {s['code']:<5} {s['name'][:22]:<22} "
+        print(f" {tag}{s['stars']:>2}* {s['code']:<5} {s['name'][:22]:<22} "
               f"best-within-{MATCH_M:.0f}m: rank {p['rank']:>4}/{n} (top {pct:4.1f}%) "
               f"road={p.get('road_score')} remote_km={(p.get('local_road_m') or 0)/1000:.1f} "
               f"distinct={p['distinct']}")
+        if s.get("deduction"):
+            print(f"        └─ lost a star to: {s['deduction']}")
     pcts.sort()
     med = pcts[len(pcts) // 2] if pcts else float("nan")
     print(f"\nMETRIC  median rank-percentile of known-good sites: {med:.1f}% "
