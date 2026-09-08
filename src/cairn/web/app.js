@@ -1569,15 +1569,59 @@ function toggleLayer(layer, on) {
 }
 
 // --- land overlays ---------------------------------------------------------
+// The Land drawer is hidden until GET /overlays answers. That listing is
+// static for the life of the server, so: (1) reveal the drawer immediately from
+// the last response this browser saw, then reconcile with the live one; and
+// (2) retry a failed fetch with backoff rather than leaving the drawer hidden
+// for the whole session (a 502 mid-deploy or a backgrounded mobile tab used to
+// do exactly that).
+const LAND_LAYERS_KEY = "cairn.overlays.v1";
+const LAND_FETCH_RETRIES = [1000, 3000, 8000]; // ms before attempts 2..4
+
 async function initLandOverlays() {
-  let data;
+  let cached = null;
   try {
-    data = await (await fetch("/overlays")).json();
+    cached = JSON.parse(localStorage.getItem(LAND_LAYERS_KEY) || "null");
   } catch {
-    return; // overlays unavailable — leave the Land section hidden
+    cached = null;
   }
+  if (cached && Array.isArray(cached.layers) && cached.layers.length) {
+    applyLandOverlays(cached);
+  }
+  const data = await fetchLandOverlays();
+  if (!data) return; // gave up — the cached drawer (if any) stays as-is
+  const same = cached && JSON.stringify(cached.layers) === JSON.stringify(data.layers);
+  if (!same) applyLandOverlays(data);
+  try {
+    localStorage.setItem(LAND_LAYERS_KEY, JSON.stringify(data));
+  } catch {
+    /* quota / private mode — the drawer still works, just no head start next time */
+  }
+}
+
+// GET /overlays with retries; null once every attempt has failed.
+async function fetchLandOverlays() {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const r = await fetch("/overlays");
+      if (r.ok) return await r.json();
+    } catch {
+      /* network error — fall through to retry */
+    }
+    if (attempt >= LAND_FETCH_RETRIES.length) return null;
+    await new Promise((res) => setTimeout(res, LAND_FETCH_RETRIES[attempt]));
+  }
+}
+
+// (Re)build the Land drawer from an /overlays payload. Re-applying keeps any
+// toggles the user already switched on (the cached layer list normally matches
+// the live one; if a layer vanished server-side its toggle just goes away).
+function applyLandOverlays(data) {
   overlayDefs = data.layers || [];
-  if (!overlayDefs.length) return;
+  if (!overlayDefs.length) {
+    $("land-drawer").hidden = true;
+    return;
+  }
   $("land-disclaimer").textContent = data.disclaimer || "";
   buildLandToggles();
   $("land-drawer").hidden = false; // reveal the Land drawer (expanded by default)
@@ -1591,7 +1635,9 @@ function buildLandToggles() {
     const label = document.createElement("label");
     label.innerHTML = `<input type="checkbox" id="${id}"> ${def.title}`;
     host.appendChild(label);
-    label.querySelector("input").onchange = (e) => toggleOverlay(def.id, e.target.checked);
+    const input = label.querySelector("input");
+    input.checked = overlayActive.has(def.id); // survive a rebuild from the live listing
+    input.onchange = (e) => toggleOverlay(def.id, e.target.checked);
   });
 }
 

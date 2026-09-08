@@ -11,6 +11,8 @@ fine without it.
 
 from __future__ import annotations
 
+import asyncio
+import copy
 import json
 import os
 
@@ -91,12 +93,20 @@ class OverlayStore:
         self._path = settings.overlays_db_path
         self._max = settings.overlay_max_features
         self._db: aiosqlite.Connection | None = None
+        # Memoized `layers()` — see there for why it's safe to hold for the
+        # process lifetime.
+        self._layers_cache: list[dict] | None = None
+        self._layers_lock = asyncio.Lock()
 
     @classmethod
     async def open(cls, settings: Settings) -> "OverlayStore":
         store = cls(settings)
         if store._path is not None and os.path.exists(store._path):
             await store._connect()
+            # Warm the memoized listing now: a restart (deploy swap) is when the
+            # page cache is coldest, and the first page load shouldn't pay for
+            # the scans that gate the Land panel.
+            await store.layers()
         return store
 
     async def _connect(self) -> None:
@@ -111,6 +121,7 @@ class OverlayStore:
         if self._db is not None:
             await self._db.close()
             self._db = None
+        self._layers_cache = None
 
     @property
     def available(self) -> bool:
@@ -132,9 +143,26 @@ class OverlayStore:
 
     async def layers(self) -> list[dict]:
         """Available layers with geometry type, feature count + distinct
-        categories (legend) — unioned across the polygon and point tables."""
+        categories (legend) — unioned across the polygon and point tables.
+
+        Computed once per process and memoized. The DB is opened read-only and
+        a replaced file only takes effect on restart (the connection keeps the
+        old inode), so a process-lifetime cache is exactly as fresh as the open
+        connection. Uncached, the per-layer `DISTINCT category` scans touch
+        every row of the dense layers (ownership parcels, coverage hexes — a
+        few hundred thousand rows), which is ~0.3 s warm and seconds from a
+        cold page cache — and the Land panel in the UI stays hidden until this
+        answers."""
         if self._db is None:
             return []
+        if self._layers_cache is None:
+            async with self._layers_lock:
+                if self._layers_cache is None:
+                    self._layers_cache = await self._compute_layers()
+        return copy.deepcopy(self._layers_cache)
+
+    async def _compute_layers(self) -> list[dict]:
+        assert self._db is not None
         poly = await self._table_layer_counts("overlay_features")
         pts = await self._table_layer_counts("overlay_points")
         counts = {**poly, **pts}

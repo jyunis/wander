@@ -629,3 +629,27 @@ def test_api_overlays_endpoints_inert_without_db(tmp_path, monkeypatch):
         assert body["town"] is None
         assert all(v is None for v in body["resupply"].values())
     config_module._settings = None
+
+
+async def test_layers_listing_is_memoized(overlay_settings, monkeypatch):
+    """`layers()` hits the DB once per process: the Land panel is gated on it
+    and the uncached scans take seconds from a cold page cache."""
+    s = await OverlayStore.open(overlay_settings)
+    first = await s.layers()
+    assert first
+    calls = 0
+    real = s._compute_layers
+
+    async def counting():
+        nonlocal calls
+        calls += 1
+        return await real()
+
+    monkeypatch.setattr(s, "_compute_layers", counting)
+    second = await s.layers()
+    assert second == first
+    assert calls == 0
+    # Callers get a copy — mutating the result must not poison the cache.
+    second[0]["title"] = "mutated"
+    assert (await s.layers())[0]["title"] == first[0]["title"]
+    await s.close()
