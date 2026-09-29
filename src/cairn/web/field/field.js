@@ -12,6 +12,12 @@
   'use strict';
 
   const DATA_CACHE = 'wander-field-regions-v1';
+  // The build this page is running: the ?v= token the server stamped on our own
+  // script URL (api.py field_index). Compared with /field/version to offer an
+  // update — see checkForUpdate().
+  const PAGE_BUILD = (() => {
+    try { return new URL(document.currentScript.src).searchParams.get('v'); } catch { return null; }
+  })();
   const PMTILES_HEADER_LEN = 127;
 
   const $ = (id) => document.getElementById(id);
@@ -49,6 +55,8 @@
   // (the first fix lands before the map exists) while the button read "off".
   let following = false;
   let protocol = null;
+  let serverBuild = null; // the build the server is serving, when we last reached it
+  const updateAvailable = () => !!(serverBuild && PAGE_BUILD && serverBuild !== PAGE_BUILD);
 
   // iOS is the only platform where an un-installed PWA gets the flimsy storage
   // bucket, so it's the only one worth nagging. iPadOS lies and reports MacIntel.
@@ -1116,6 +1124,10 @@
     const totalCached = cachedList.reduce((n, r) => n + r.size_bytes, 0);
 
     const rows = {
+      Build: [
+        updateAvailable() ? `${PAGE_BUILD} — server has ${serverBuild}` : (PAGE_BUILD || '?'),
+        updateAvailable() ? 'w' : '',
+      ],
       'Land shapes (active)': [
         landIndex.length ? String(landIndex.length) : 'none', landIndex.length ? 'g' : 'w',
       ],
@@ -1155,13 +1167,23 @@
       : null;
     const sig = JSON.stringify([
       activeRegion?.id || null, activeSource, !!fix, !!fix && fixIsInsideRegion(), nRoads,
-      landIndex.length, here && [here.tone, here.text, here.wild],
+      landIndex.length, here && [here.tone, here.text, here.wild], updateAvailable(),
     ]);
     if (sig === lastChipsSig) return;
     lastChipsSig = sig;
 
     const host = $('chips');
     host.innerHTML = '';
+    if (updateAvailable()) {
+      const up = document.createElement('div');
+      up.className = 'chip warn';
+      up.innerHTML = '<span>🔄 New version of Wander Field</span>';
+      const btn = document.createElement('button');
+      btn.textContent = 'Update';
+      btn.onclick = applyUpdate;
+      up.appendChild(btn);
+      host.appendChild(up);
+    }
     if (!activeRegion) return;
 
     const src = document.createElement('div');
@@ -1261,10 +1283,64 @@
           const res = await fetch('/field/regions', { cache: 'no-store' });
           if (res.ok) serverRegions = (await res.json()).regions || [];
         } catch { /* unreachable — keep the catalogue we already hold */ }
+        await fetchServerBuild();
       }
       await refresh();
     } finally {
       syncing = false;
+    }
+  }
+
+  // --- updates ----------------------------------------------------------------
+  //
+  // An installed iPhone PWA is resumed from memory, not reloaded, and has no
+  // reload button — so a deploy can sit unseen for days while the phone runs the
+  // build it last cold-started with. The worker upgrades pages it gets to see
+  // (sw.js activate), but it only gets to see one when the browser re-checks
+  // sw.js. So on every foreground with a connection we ask the server which
+  // build it serves, and offer the update when it differs.
+
+  // The server's build, or null if we couldn't reach it. /field/version is never
+  // cached (by the worker or HTTP), so null really means "no server".
+  async function fetchServerBuild() {
+    try {
+      const res = await fetch('/field/version', { cache: 'no-store' });
+      if (!res.ok) return null;
+      serverBuild = (await res.json()).build || null;
+      return serverBuild;
+    } catch {
+      return null;
+    }
+  }
+
+  // Reload into the new build. The navigation is network-first in sw.js, so the
+  // reload itself fetches the new shell; nudging the worker to update as well
+  // lets it swap its precache now instead of on some later launch.
+  async function applyUpdate() {
+    if (downloading) return setStatus('warn', '⏳ Finish the download first, then update.');
+    setStatus('warn', '🔄 Updating…');
+    try {
+      const reg = await navigator.serviceWorker?.getRegistration();
+      await reg?.update();
+    } catch { /* the reload below still gets the new page */ }
+    location.reload();
+  }
+
+  async function checkForUpdate() {
+    const btn = $('update-check');
+    btn.disabled = true;
+    setStatus('warn', '↻ Checking for an update…');
+    try {
+      const build = await fetchServerBuild();
+      if (!build) {
+        return setStatus('bad', "⛔ Can't reach the Wander server — updates need home Wi-Fi or Tailscale.");
+      }
+      if (updateAvailable()) return applyUpdate();
+      setStatus('ok', `✅ Up to date (build ${PAGE_BUILD}).`);
+    } finally {
+      btn.disabled = false;
+      renderChips();
+      renderDiagnostics();
     }
   }
 
@@ -1297,6 +1373,7 @@
     $('diag-toggle').setAttribute('aria-expanded', String(!d.hidden));
     renderDiagnostics();
   };
+  $('update-check').onclick = checkForUpdate;
   $('follow').onclick = () => {
     if (fix) return setFollowing(!following);
     // No position yet — common on a desktop shortcut. Don't sit there dead:

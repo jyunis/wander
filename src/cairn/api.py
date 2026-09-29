@@ -1144,6 +1144,20 @@ _ASSET_TOKEN = _asset_token()
 _FIELD_TOKEN = _field_token()
 
 
+@app.get("/field/version", include_in_schema=False)
+async def field_version() -> Response:
+    """The field shell's current build token. The page compares it with the
+    token it was loaded with to offer an update: an installed iPhone PWA is
+    resumed from memory, never reloaded, so without this it can sit on an old
+    build indefinitely. `no-store`, and the worker never intercepts it — a cached
+    answer would say "up to date" with no connection to the server at all."""
+    return Response(
+        content=json.dumps({"build": _FIELD_TOKEN}),
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 if (_FIELD_DIR / "index.html").exists():
 
     @app.get("/field/", include_in_schema=False)
