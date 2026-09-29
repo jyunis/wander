@@ -114,6 +114,10 @@ self.addEventListener('fetch', (e) => {
   if (url.origin !== location.origin) return;
   if (!url.pathname.startsWith('/field/')) return;
 
+  // The update check must reach the server or fail — never be answered from
+  // cache, or an unreachable server would look like "you're up to date".
+  if (url.pathname === '/field/version') return;
+
   if (req.mode === 'navigate') {
     e.respondWith(networkFirst(req, './'));
     return;

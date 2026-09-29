@@ -379,3 +379,35 @@ def test_field_app_caches_roads_beside_the_archive_and_deletes_them_with_it():
     source = (_FIELD_DIR / "field.js").read_text()
     assert "loadSidecar(roadsUrl(region.id))" in source
     assert "cache.delete(roadsUrl(region.id))" in source
+
+
+# --- updates: an installed PWA is resumed, never reloaded --------------------
+
+
+def test_version_reports_the_build_the_shell_is_stamped_with(client):
+    """The page compares this with the ?v= on its own script to offer an
+    update, so the two must be the same token."""
+    res = client.get("/field/version")
+
+    assert res.status_code == 200
+    build = res.json()["build"]
+    assert f"./field.js?v={build}" in client.get("/field/").text
+    # A cached answer would read "up to date" with no server reachable.
+    assert res.headers["cache-control"] == "no-store"
+
+
+def test_service_worker_never_answers_the_version_check(client):
+    sw = client.get("/field/sw.js").text
+    assert "if (url.pathname === '/field/version') return;" in sw
+    # ...and it sits before any cache-first/network-first handling.
+    assert sw.index("'/field/version'") < sw.index("req.mode === 'navigate'")
+
+
+def test_field_app_offers_an_update_when_the_server_build_differs():
+    from cairn.api import _FIELD_DIR
+
+    source = (_FIELD_DIR / "field.js").read_text()
+    assert "searchParams.get('v')" in source  # PAGE_BUILD from our own script url
+    assert "fetch('/field/version'" in source
+    assert "serverBuild !== PAGE_BUILD" in source
+    assert "$('update-check').onclick = checkForUpdate" in source
