@@ -411,3 +411,14 @@ def test_field_app_offers_an_update_when_the_server_build_differs():
     assert "fetch('/field/version'" in source
     assert "serverBuild !== PAGE_BUILD" in source
     assert "$('update-check').onclick = checkForUpdate" in source
+
+
+def test_field_app_points_an_http_install_at_the_https_address():
+    """An iPhone gives an http:// page no Cache API and no service worker, so a
+    home-screen icon added from the http address silently can't hold a map (a
+    real re-install did exactly that). The page must say so and link https."""
+    from cairn.api import _FIELD_DIR
+
+    source = (_FIELD_DIR / "field.js").read_text()
+    assert "location.protocol === 'http:'" in source
+    assert "`https://${location.host}${location.pathname}`" in source
