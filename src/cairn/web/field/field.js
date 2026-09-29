@@ -1228,6 +1228,18 @@
   function renderStatus() {
     const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
     $('offline-badge').hidden = navigator.onLine;
+    // Over plain http an iPhone gives the page no Cache API and no service
+    // worker: nothing can be stored, so nothing works offline. That's exactly
+    // what happened when the home-screen icon was re-added from an http:// URL
+    // — say so, and hand over the https address to install from instead.
+    if (location.protocol === 'http:') {
+      const secure = `https://${location.host}${location.pathname}`;
+      const s = $('status');
+      s.className = 'bad';
+      s.innerHTML = '⛔ This is the insecure http:// address — iPhones won’t store offline maps here. ' +
+        `Open <a href="${esc(secure)}">${esc(secure)}</a> in Safari and Add to Home Screen from there.`;
+      return;
+    }
     if (!('caches' in window)) return setStatus('bad', '⛔ Offline storage unavailable — this page must be served over HTTPS.');
     if (!cachedIds.size) {
       return activeRegion

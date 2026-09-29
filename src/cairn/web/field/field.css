@@ -57,6 +57,7 @@ section h2 {
 #status { font-size: 15px; font-weight: 700; padding: 9px 11px; border-radius: 9px; }
 #status.ok   { background: rgba(63,156,90,.16);  color: var(--ok);   border: 1px solid rgba(63,156,90,.4); }
 #status.bad  { background: rgba(201,82,79,.16);  color: var(--bad);  border: 1px solid rgba(201,82,79,.4); }
+#status a { color: inherit; text-decoration: underline; word-break: break-all; }
 #status.warn { background: rgba(201,154,63,.14); color: var(--warn); border: 1px solid rgba(201,154,63,.4); }
 
 /* --- region list ---------------------------------------------------------- */
