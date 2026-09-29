@@ -28,6 +28,7 @@
   const outlineUrl = (id) => `/field/regions/${id}/outline.geojson`;
   const pinsUrl = (id) => `/field/regions/${id}/pins.geojson`;
   const roadsUrl = (id) => `/field/regions/${id}/roads.geojson`;
+  const landUrl = (id) => `/field/regions/${id}/land.geojson`;
   const EMPTY_FC = () => ({ type: 'FeatureCollection', features: [] });
 
   let map = null;
@@ -35,6 +36,9 @@
   let outlineData = null; // the active region's real boundary, if we have one
   let pinsData = null; // the active region's saved sites/campgrounds, if any
   let roadsData = null; // the active region's Wander roads (OSM ∪ MVUM), if any
+  let landData = null; // the active region's land: parcels + forest/park/wilderness
+  let landIndex = []; // landData's polygons with bboxes, for point-in-polygon
+  let tapPoint = null; // where the land card was asked for, as [lon, lat]
   let selectedPinId = null; // the pin whose card is open, for the selection ring
   let selectedRoadId = null; // the road whose card is open, for its highlight
   let downloading = false;
@@ -130,6 +134,20 @@
   const selectedRoadFilter = (id) =>
     ['all', LINES(), ['==', ['get', 'osm_id'], id == null ? -1 : id]];
 
+  // Land: whose ground this is. `kind`/`cls`/`public` are decided server-side
+  // (cairn.field.land_class). A PARCEL says who owns it and is filled; a
+  // BOUNDARY (national/state forest, park) is only a line around land that
+  // still has private inholdings, so it is outlined and never filled — a green
+  // wash over a whole forest would claim the inholdings too. Colors follow the
+  // online Land panel.
+  const LAND_COLOR = ['match', ['get', 'cls'],
+    'federal', '#3a6ea5', 'state', '#2e8b57', 'county', '#8a5fb0',
+    'tax_forfeit', '#ff7a00', 'county_forest', '#4d9e2a', 'tribal', '#0f9b8e',
+    'national_forest', '#1f7a1f', 'state_forest', '#6b8e23',
+    'national_park', '#7b4ea3', 'state_park', '#b5651d', 'wilderness', '#10b3c4',
+    '#8a8a8a'];
+  const LAND = (kind) => ['all', POLYGONS(), ['==', ['get', 'kind'], kind]];
+
   const insideBbox = ([w, s, e, n], lon, lat) => lon >= w && lon <= e && lat >= s && lat <= n;
 
   const fixIsInsideRegion = () =>
@@ -223,6 +241,8 @@
         outline: { type: 'geojson', data: outlineData || { type: 'FeatureCollection', features: [] } },
         pins: { type: 'geojson', data: pinsData || EMPTY_FC() },
         wroads: { type: 'geojson', data: roadsData || EMPTY_FC() },
+        wland: { type: 'geojson', data: landData || EMPTY_FC() },
+        tap: { type: 'geojson', data: tapFeature() },
       },
       layers: [
         { id: 'bg', type: 'background', paint: { 'background-color': '#eae6da' } },
@@ -252,6 +272,16 @@
               '#e2ddce'],
             'fill-opacity': 0.5,
           },
+        },
+        // Land fills sit under the water and roads, so lakes stay blue and a
+        // road across county land still reads as a road.
+        {
+          id: 'land-parcel', type: 'fill', source: 'wland', filter: LAND('parcel'),
+          paint: { 'fill-color': LAND_COLOR, 'fill-opacity': 0.22 },
+        },
+        {
+          id: 'land-wild', type: 'fill', source: 'wland', filter: LAND('wilderness'),
+          paint: { 'fill-color': LAND_COLOR, 'fill-opacity': 0.12 },
         },
         {
           id: 'water', type: 'fill', source: 'pm', 'source-layer': 'water',
@@ -296,6 +326,20 @@
           id: 'boundaries', type: 'line', source: 'pm', 'source-layer': 'boundaries',
           filter: LINES(),
           paint: { 'line-color': '#9b86a8', 'line-width': 0.8, 'line-dasharray': [3, 2], 'line-opacity': 0.6 },
+        },
+        {
+          id: 'land-parcel-edge', type: 'line', source: 'wland', filter: LAND('parcel'),
+          paint: { 'line-color': LAND_COLOR, 'line-width': 1, 'line-opacity': 0.55 },
+        },
+        {
+          id: 'land-boundary', type: 'line', source: 'wland', filter: LAND('boundary'),
+          paint: { 'line-color': LAND_COLOR, 'line-width': 1.6, 'line-opacity': 0.8,
+            'line-dasharray': [4, 2] },
+        },
+        {
+          id: 'land-wild-edge', type: 'line', source: 'wland', filter: LAND('wilderness'),
+          paint: { 'line-color': LAND_COLOR, 'line-width': 2.5, 'line-opacity': 0.9,
+            'line-dasharray': [2, 1.5] },
         },
         // Wander roads: above the basemap, below the mask (so nothing draws
         // outside the download) and below the pins. The highlight sits under
@@ -385,6 +429,12 @@
             'circle-opacity': 0,
           },
         },
+        // Where you asked "whose land is this?" — so the card has a place.
+        {
+          id: 'tap-pt', type: 'circle', source: 'tap', filter: POINTS(),
+          paint: { 'circle-radius': 6, 'circle-color': 'rgba(0,0,0,0)',
+            'circle-stroke-color': '#111', 'circle-stroke-width': 2.5 },
+        },
         {
           id: 'me-acc-fill', type: 'fill', source: 'meacc',
           paint: { 'fill-color': '#4a90d9', 'fill-opacity': 0.14 },
@@ -456,6 +506,7 @@
     for (const [url, source, set] of [
       [pinsUrl(region.id), 'pins', (d) => { pinsData = d; }],
       [roadsUrl(region.id), 'wroads', (d) => { roadsData = d; }],
+      [landUrl(region.id), 'wland', (d) => { setLand(d); }],
     ]) {
       try {
         const fresh = await fetch(url, { cache: 'no-store' });
@@ -464,7 +515,7 @@
         await cache.put(url, fresh);
         if (activeRegion?.id !== region.id) return; // switched away meanwhile
         set(data);
-        map?.getSource(source)?.setData(data);
+        map?.getSource(source)?.setData(source === 'wland' ? landData : data);
       } catch { /* keep what we have */ }
     }
     renderChips();
@@ -474,11 +525,14 @@
   async function showRegion(region) {
     const key = await registerSource(region);
     if (!key) return false;
-    [outlineData, pinsData, roadsData] = await Promise.all([
+    let land;
+    [outlineData, pinsData, roadsData, land] = await Promise.all([
       loadSidecar(outlineUrl(region.id)),
       loadSidecar(pinsUrl(region.id)),
       loadSidecar(roadsUrl(region.id)),
+      loadSidecar(landUrl(region.id)),
     ]);
+    setLand(land);
     const switching = !activeRegion || activeRegion.id !== region.id;
     // A card/ring from the old region has no meaning on the new one; clear it
     // before styleFor bakes the selection filter into the fresh style.
@@ -519,7 +573,10 @@
         if (pin) return openPinCard(pin.properties, pin.geometry && pin.geometry.coordinates);
         const road = hit('wr-hit');
         if (road) return openRoadCard(road.properties);
-        closeCard();
+        // Bare map: the first tap dismisses an open card; with none open, it
+        // asks "whose land is this?" — the onX question, answered from cache.
+        if (!$('pin-card').hidden) return closeCard();
+        openLandCard([e.lngLat.lng, e.lngLat.lat]);
       });
       for (const layer of ['pins-hit', 'wr-hit']) {
         map.on('mouseenter', layer, () => { map.getCanvas().style.cursor = 'pointer'; });
@@ -669,6 +726,7 @@
     await cache.delete(outlineUrl(region.id));
     await cache.delete(pinsUrl(region.id));
     await cache.delete(roadsUrl(region.id));
+    await cache.delete(landUrl(region.id));
     if (activeRegion?.id === region.id) { activeRegion = null; closeCard(); }
     refresh();
   }
@@ -862,6 +920,113 @@
     const card = $('pin-card');
     if (card) card.hidden = true;
     setSelected(null, null);
+    setTapPoint(null);
+  }
+
+  // --- land: whose ground is this? -------------------------------------------
+  //
+  // Answered on the device, from the cached land sidecar, for the GPS fix (the
+  // chip) and for any tapped point (the card). Plain ray casting: a region holds
+  // a dozen or so dissolved polygons, and a bbox check skips most of them.
+
+  function setLand(data) {
+    landData = data && Array.isArray(data.features) ? data : null;
+    landIndex = [];
+    for (const f of landData?.features || []) {
+      const g = f.geometry || {};
+      const polys = g.type === 'Polygon' ? [g.coordinates] : g.type === 'MultiPolygon' ? g.coordinates : [];
+      let w = 180, s = 90, e = -180, n = -90;
+      for (const poly of polys) {
+        for (const [x, y] of poly[0] || []) {
+          if (x < w) w = x; if (x > e) e = x; if (y < s) s = y; if (y > n) n = y;
+        }
+      }
+      if (polys.length) landIndex.push({ bbox: [w, s, e, n], polys, props: f.properties || {} });
+    }
+  }
+
+  function inRing(ring, x, y) {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i];
+      const [xj, yj] = ring[j];
+      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+
+  // Every land polygon containing the point, in draw order (parcels last).
+  function landAt(lon, lat) {
+    return landIndex
+      .filter(({ bbox, polys }) => insideBbox(bbox, lon, lat) &&
+        polys.some((rings) => inRing(rings[0], lon, lat) && !rings.slice(1).some((h) => inRing(h, lon, lat))))
+      .map((l) => l.props);
+  }
+
+  const landName = (p) => (p.name ? `${p.what} · ${p.name}` : p.what);
+
+  // The one-line answer. Conservative on purpose: any "not public" parcel wins,
+  // then a public one; a forest BOUNDARY with no parcel under it is exactly
+  // where the private inholdings are, so it never reads as public.
+  function landVerdict(matches) {
+    const parcels = matches.filter((p) => p.kind === 'parcel');
+    const closed = parcels.find((p) => p.public === false);
+    const open = parcels.find((p) => p.public === true);
+    const varies = parcels.find((p) => p.public == null);
+    const boundary = matches.find((p) => p.kind === 'boundary');
+    const wild = matches.some((p) => p.kind === 'wilderness');
+    let v;
+    if (closed) v = { tone: 'bad', icon: '⛔', text: landName(closed) };
+    else if (open) v = { tone: 'ok', icon: '✅', text: 'Public · ' + landName(open) };
+    else if (varies) v = { tone: 'warn', icon: '⚠️', text: landName(varies) };
+    else if (boundary) {
+      v = { tone: 'warn', icon: '⚠️',
+        text: `Inside ${boundary.name || boundary.what}, but no public parcel on record — may be private` };
+    } else v = { tone: 'warn', icon: '⚪', text: 'No public-land record — treat as private' };
+    v.wild = wild;
+    v.feature = closed || open || varies || null;
+    return v;
+  }
+
+  function tapFeature() {
+    return tapPoint
+      ? { type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: tapPoint } }
+      : EMPTY_FC();
+  }
+
+  function setTapPoint(ll) {
+    tapPoint = ll;
+    map?.getSource('tap')?.setData(tapFeature());
+  }
+
+  function openLandCard(ll) {
+    const card = $('pin-card');
+    if (!card) return;
+    setSelected(null, null);
+    setTapPoint(ll);
+    const [lon, lat] = ll;
+    const parts = [`<div class="pc-head"><span class="pc-name">🗺 Land here</span>` +
+      `<button class="pc-close" title="Close">×</button></div>`];
+
+    if (!landIndex.length) {
+      parts.push('<div class="pc-note">No land data for this area — Wander only holds ownership for the states it has loaded.</div>');
+    } else {
+      const matches = landAt(lon, lat);
+      const v = landVerdict(matches);
+      parts.push(`<div class="pc-verdict ${v.tone}">${v.icon} ${esc(v.text)}</div>`);
+      if (v.wild) parts.push('<div class="pc-warn">🚫 Designated wilderness — no motor vehicles or bikes</div>');
+      // Everything that contains the point, most specific (parcels) first.
+      const rows = matches.slice().reverse().map((p) =>
+        `<div class="pc-row"><span>${esc(p.name || '—')}</span><b>${esc(p.what)}</b></div>`);
+      if (rows.length) parts.push(`<div class="pc-contribs">${rows.join('')}</div>`);
+    }
+    parts.push(`<div class="pc-meta">${lat.toFixed(5)}, ${lon.toFixed(5)}</div>`);
+    parts.push('<div class="pc-disc">From public land records (PAD-US / state GIS), not a survey. ' +
+      'It does not make camping legal — check the managing agency’s rules.</div>');
+
+    card.innerHTML = parts.join('');
+    card.hidden = false;
+    card.querySelector('.pc-close').onclick = closeCard;
   }
 
   // --- rendering ------------------------------------------------------------
@@ -951,6 +1116,9 @@
     const totalCached = cachedList.reduce((n, r) => n + r.size_bytes, 0);
 
     const rows = {
+      'Land shapes (active)': [
+        landIndex.length ? String(landIndex.length) : 'none', landIndex.length ? 'g' : 'w',
+      ],
       'Wander roads (active)': [
         roadsData ? `${roadsData.features.length}${roadsData.truncated ? ' — truncated' : ''}` : 'none cached',
         roadsData?.features?.length ? 'g' : 'w',
@@ -980,8 +1148,14 @@
     // Same reason as renderRegions: this runs on every GPS tick and every
     // foreground, and its "Show map" button shouldn't be swapped out mid-tap.
     const nRoads = roadsData?.features?.length || 0;
+    // Whose land the GPS fix is on — recomputed every tick, rendered only when
+    // the answer changes (the sig), so walking across a line flips the chip.
+    const here = fix && fixIsInsideRegion() && landIndex.length
+      ? landVerdict(landAt(fix.coords.longitude, fix.coords.latitude))
+      : null;
     const sig = JSON.stringify([
       activeRegion?.id || null, activeSource, !!fix, !!fix && fixIsInsideRegion(), nRoads,
+      landIndex.length, here && [here.tone, here.text, here.wild],
     ]);
     if (sig === lastChipsSig) return;
     lastChipsSig = sig;
@@ -1004,6 +1178,18 @@
       ? `🛣 ${nRoads.toLocaleString()} roads${roadsData.truncated ? ' (partial)' : ''}`
       : '🛣 No Wander roads here — basemap only';
     host.appendChild(roads);
+
+    if (!landIndex.length) {
+      const none = document.createElement('div');
+      none.className = 'chip warn';
+      none.textContent = '🗺 No land data for this area';
+      host.appendChild(none);
+    } else if (here) {
+      const land = document.createElement('div');
+      land.className = 'chip land ' + here.tone;
+      land.innerHTML = `<span>${here.icon} ${esc(here.text)}${here.wild ? ' · 🚫 wilderness' : ''}</span>`;
+      host.appendChild(land);
+    }
 
     if (fix && !fixIsInsideRegion()) {
       const warn = document.createElement('div');

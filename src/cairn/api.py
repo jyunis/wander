@@ -52,13 +52,16 @@ from cairn.errors import (
     ValidationError,
 )
 from cairn.export import trip_slug, trip_to_gpx, trip_to_kml
-from cairn.field import SUFFIX as PMTILES_SUFFIX
 from cairn.field import (
+    LAND_LAYERS,
+    LAND_SIMPLIFY_DEG,
     RegionStore,
+    land_feature_collection,
     outline_path,
     pins_feature_collection,
     roads_feature_collection,
 )
+from cairn.field import SUFFIX as PMTILES_SUFFIX
 from cairn.logging import configure
 from cairn.regionbuild import RegionBuilder, validate_request
 from cairn.roadmud import SOIL_GRID_FILENAME, SoilGrid
@@ -1056,6 +1059,28 @@ async def field_region_roads(region_id: str, request: Request):
     )
     return JSONResponse(
         content=roads_feature_collection(roads),
+        media_type="application/geo+json",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/field/regions/{region_id}/land.geojson")
+async def field_region_land(region_id: str, request: Request):
+    """Whose land it is, offline: public-ownership parcels plus forest / park /
+    wilderness polygons within the region, dissolved per name and classified
+    (`cairn.field.land_class`) so the page can answer "am I on public land"
+    for a GPS fix with no signal. Cached by the page beside the archive.
+
+    Display-only (TLC-3), and only as good as overlays.db: an area with no
+    parcel means no public-land RECORD (private, or outside the loaded states),
+    never a claim either way. Empty when overlays.db is absent."""
+    region = _region_store(request).get(region_id)
+    if region is None:
+        return JSONResponse(status_code=404, content={"error": "NotFound"})
+    overlays: OverlayStore = request.app.state.overlays
+    rows = await overlays.dissolved(LAND_LAYERS, Bbox(*region.bbox), LAND_SIMPLIFY_DEG)
+    return JSONResponse(
+        content=land_feature_collection(rows),
         media_type="application/geo+json",
         headers={"Cache-Control": "no-cache"},
     )

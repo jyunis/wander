@@ -110,6 +110,12 @@ button.link {
 .key.road { width: 18px; height: 0; border-top: 3px solid #e8710a; }
 .key.road.special { border-top-color: #8e44ad; }
 .key.road.private { border-top: 3px dotted #c0392b; }
+.key.land { width: 14px; height: 10px; border-radius: 2px; opacity: .8; }
+.key.land.federal { background: #3a6ea5; }
+.key.land.state { background: #2e8b57; }
+.key.land.county { background: #8a5fb0; }
+.key.land.tax { background: #ff7a00; }
+.key.land.tribal { background: #0f9b8e; }
 .key.dot {
   height: 12px; width: 12px; border-radius: 50%;
   background: #27c927; border: 1.5px solid #fff;
@@ -159,6 +165,14 @@ button.link {
    target with gloves on. */
 .pc-gmaps { display: block; text-align: center; }
 .pc-disc { margin-top: 10px; color: var(--muted); font-size: 11px; }
+/* Land card + GPS land chip */
+.pc-verdict { margin-top: 8px; font-size: 14px; font-weight: 700; }
+.pc-verdict.ok, .chip.land.ok { color: var(--ok); }
+.pc-verdict.warn { color: var(--warn); }
+.pc-verdict.bad, .chip.land.bad { color: var(--bad); }
+.chip.land { max-width: calc(100vw - 32px); }
+.chip.land.ok { border-color: rgba(63,156,90,.45); }
+.chip.land.bad { border-color: rgba(201,82,79,.5); }
 /* Road card (offline roads) */
 .pc-warn { color: var(--warn); font-size: 13px; font-weight: 600; }
 .pc-sub { color: var(--muted); font-weight: 400; }

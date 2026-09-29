@@ -15,6 +15,9 @@ import pytest
 from cairn.field import (
     InvalidPMTiles,
     RegionStore,
+    land_class,
+    land_feature,
+    land_feature_collection,
     mvum_info,
     pin_feature,
     pins_feature_collection,
@@ -159,6 +162,7 @@ def test_as_dict_is_the_wire_shape(tmp_path):
     assert payload["pins_url"] == "/field/regions/superior-nf/pins.geojson"
     # Same for roads: whether any were ingested is a cairn.db question.
     assert payload["roads_url"] == "/field/regions/superior-nf/roads.geojson"
+    assert payload["land_url"] == "/field/regions/superior-nf/land.geojson"
 
 
 # --- Wander content on the offline map (#45 W1) ------------------------------
@@ -303,3 +307,77 @@ def test_roads_feature_collection_carries_truncation():
     assert roads_feature_collection({"features": []}) == {
         "type": "FeatureCollection", "truncated": False, "features": [],
     }
+
+
+# --- Land on the offline map -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("layer", "category", "kind", "public"),
+    [
+        ("ownership", "Federal", "parcel", True),
+        ("ownership", "State", "parcel", True),
+        ("ownership", "County Fee", "parcel", True),
+        ("ownership", "Tax Forfeit", "parcel", True),
+        # Excluded from the public-land filter for the same reason (load_overlays).
+        ("ownership", "Tribal", "parcel", False),
+        ("ownership", "NGO", "parcel", None),
+        ("county_forest", None, "parcel", True),  # WI: the layer IS county-owned land
+        # Lines around land that still holds private inholdings: never public.
+        ("national_forest", None, "boundary", None),
+        ("state_forest", None, "boundary", None),
+        ("state_park", "State Park", "boundary", None),
+        ("wilderness", None, "wilderness", None),
+    ],
+)
+def test_land_class(layer, category, kind, public):
+    klass = land_class(layer, category)
+    assert klass["kind"] == kind
+    assert klass["public"] is public
+    assert klass["what"]
+
+
+def test_land_class_unknown_ownership_category_makes_no_claim():
+    assert land_class("ownership", "Easement")["public"] is None
+
+
+def _poly(*rings):
+    return {"type": "Polygon", "coordinates": [list(map(list, r)) for r in rings]}
+
+
+def test_land_feature_rounds_and_keeps_holes():
+    outer = [(0, 0), (0.0100001, 0), (0.01, 0.01), (0, 0.01), (0, 0)]
+    hole = [(0.002, 0.002), (0.004, 0.002), (0.004, 0.004), (0.002, 0.004), (0.002, 0.002)]
+    feat = land_feature("ownership", "State", "Cass", _poly(outer, hole))
+
+    rings = feat["geometry"]["coordinates"]
+    assert rings[0] == [[0, 0], [0.01, 0], [0.01, 0.01], [0, 0.01], [0, 0]]
+    assert len(rings) == 2
+    assert feat["properties"] == {
+        "layer": "ownership", "kind": "parcel", "cls": "state", "public": True,
+        "what": "State land", "name": "Cass", "category": "State",
+    }
+
+
+def test_land_feature_drops_a_polygon_that_collapses():
+    sliver = [(0, 0), (0.000001, 0), (0.000001, 0.000001), (0, 0)]
+    assert land_feature("ownership", "State", None, _poly(sliver)) is None
+
+
+def test_land_feature_boundary_carries_no_public_key():
+    square = [(0, 0), (1, 0), (1, 1), (0, 1), (0, 0)]
+    props = land_feature("national_forest", None, "Superior", _poly(square))["properties"]
+    assert "public" not in props
+    assert props["kind"] == "boundary"
+
+
+def test_land_feature_collection_draws_boundaries_under_parcels():
+    square = '{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,1],[0,0]]]}'
+    fc = land_feature_collection([
+        ("ownership", "State", "Cass", square),
+        ("wilderness", None, "BWCAW", square),
+        ("national_forest", None, "Superior", square),
+    ])
+    assert [f["properties"]["layer"] for f in fc["features"]] == [
+        "national_forest", "ownership", "wilderness",
+    ]
