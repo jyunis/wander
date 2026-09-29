@@ -58,12 +58,20 @@ def _fake_pmtiles(tmp_path, *, exit_code=0, stderr="", delay=0.0, dry_run_mb=2.2
     return script
 
 
+async def _roads_ok(self, bbox):  # noqa: ARG001 - stands in for RunService.ingest_roads
+    return 42
+
+
 @pytest.fixture
 def client_factory(tmp_path, monkeypatch):
     # Exists before any test writes into it (e.g. to plant a stale partial).
     (tmp_path / "regions").mkdir()
 
-    def _make(**fake_kw):
+    def _make(roads=None, **fake_kw):
+        # A region build also ingests the box's roads via Overpass/MVUM; never
+        # let a test reach the network for them. Patched on the class because
+        # the builder binds the service's method at startup.
+        monkeypatch.setattr("cairn.service.RunService.ingest_roads", roads or _roads_ok)
         monkeypatch.setenv("CAIRN_DATA_DIR", str(tmp_path))
         monkeypatch.setenv("CAIRN_PMTILES_BIN", str(_fake_pmtiles(tmp_path, **fake_kw)))
         config_module._settings = None
@@ -213,3 +221,58 @@ def _make_stub_build_url():
         return "https://build.protomaps.example/20260710.pmtiles"
 
     return _stub
+
+
+# --- the region's roads ride along with the extract --------------------------
+
+
+def test_a_built_region_reports_its_roads(client_factory, monkeypatch):
+    monkeypatch.setattr("cairn.regionbuild.find_build_url", _make_stub_build_url())
+    with client_factory() as client:
+        job = client.post("/field/regions", json={"name": "BWCA trip", "bbox": BOX}).json()
+        done = _drain(client, job["job_id"])
+
+        assert done["state"] == "done"
+        assert done["roads"] == {"state": "done", "count": 42}
+
+
+def test_a_roads_failure_still_lands_the_region(client_factory, monkeypatch):
+    """Roads are best effort: a basemap without them still navigates. The job
+    says so, so the UI can warn instead of pretending the area has no roads."""
+
+    async def roads_fail(self, bbox):  # noqa: ARG001
+        raise RuntimeError("overpass-api.de 504")
+
+    monkeypatch.setattr("cairn.regionbuild.find_build_url", _make_stub_build_url())
+    with client_factory(roads=roads_fail) as client:
+        job = client.post("/field/regions", json={"name": "BWCA trip", "bbox": BOX}).json()
+        done = _drain(client, job["job_id"])
+
+        assert done["state"] == "done"
+        assert done["roads"] == {"state": "error", "error": "overpass-api.de 504"}
+        assert [r["id"] for r in client.get("/field/regions").json()["regions"]] == ["bwca-trip"]
+
+
+def test_a_region_is_not_listed_until_its_roads_are_in(client_factory, monkeypatch):
+    """The phone caches the roads sidecar the first time it shows a region. If
+    the region were listed while roads were still ingesting, a phone could cache
+    an empty sidecar and carry it into the woods."""
+    import asyncio
+
+    async def roads_slow(self, bbox):  # noqa: ARG001
+        await asyncio.sleep(1.0)
+        return 7
+
+    monkeypatch.setattr("cairn.regionbuild.find_build_url", _make_stub_build_url())
+    with client_factory(roads=roads_slow) as client:
+        job = client.post("/field/regions", json={"name": "BWCA trip", "bbox": BOX}).json()
+        time.sleep(0.4)  # the fake extract has finished; the roads haven't
+
+        mid = client.get(f"/field/jobs/{job['job_id']}").json()
+        assert mid["state"] == "running"
+        assert mid["roads"] == {"state": "running"}
+        assert client.get("/field/regions").json()["regions"] == []
+
+        done = _drain(client, job["job_id"])
+        assert done["roads"] == {"state": "done", "count": 7}
+        assert [r["id"] for r in client.get("/field/regions").json()["regions"]] == ["bwca-trip"]

@@ -53,7 +53,12 @@ from cairn.errors import (
 )
 from cairn.export import trip_slug, trip_to_gpx, trip_to_kml
 from cairn.field import SUFFIX as PMTILES_SUFFIX
-from cairn.field import RegionStore, outline_path, pins_feature_collection
+from cairn.field import (
+    RegionStore,
+    outline_path,
+    pins_feature_collection,
+    roads_feature_collection,
+)
 from cairn.logging import configure
 from cairn.regionbuild import RegionBuilder, validate_request
 from cairn.roadmud import SOIL_GRID_FILENAME, SoilGrid
@@ -114,9 +119,6 @@ async def lifespan(app: FastAPI):
     # Region extractor for the "download this area" picker. Sweep partials from a
     # killed run: they're named so the registry never lists them, but they'd sit
     # on disk forever.
-    region_builder = RegionBuilder(settings)
-    region_builder.sweep_partials()
-    app.state.region_builder = region_builder
     app.state.settings = settings
     app.state.store = store
     app.state.overlays = overlays
@@ -132,6 +134,13 @@ async def lifespan(app: FastAPI):
         store, settings, overpass=overpass, mvum=mvum, structures=structures,
         soil_grid=soil_grid,
     )
+    # Region extractor for the "download this area" picker; it also ingests the
+    # box's roads so they ride along to the phone. Sweep partials from a killed
+    # run: they're named so the registry never lists them, but they'd sit on
+    # disk forever.
+    region_builder = RegionBuilder(settings, roads=app.state.service.ingest_roads)
+    region_builder.sweep_partials()
+    app.state.region_builder = region_builder
     log.info(
         "cairn %s ready on %s:%s "
         "(mvum=%s structures=%s overlays=%s availability=%s usedirect=%s/%d mud_autotier=%s)",
@@ -1022,6 +1031,31 @@ async def field_region_pins(region_id: str, request: Request):
     places = await store.saved_places_in_bbox(*region.bbox)
     return JSONResponse(
         content=pins_feature_collection(places),
+        media_type="application/geo+json",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/field/regions/{region_id}/roads.geojson")
+async def field_region_roads(region_id: str, request: Request):
+    """The region's drivable roads (OSM ∪ MVUM ∪ MN DNR — what GET /roads
+    serves), slimmed for the phone and cached by the page beside the archive so
+    the roads are tappable with no signal: forest-road number, MVUM class and
+    season, surface, mud tier, private flag.
+
+    Reads what's been ingested for the region's bbox — building a region ingests
+    it, and so does scoring anywhere inside it. Display-only (TLC-3): the MVUM
+    says a road is open to *driving*, never that it's legal to camp beside it."""
+    region = _region_store(request).get(region_id)
+    if region is None:
+        return JSONResponse(status_code=404, content={"error": "NotFound"})
+    store: Store = request.app.state.store
+    settings = request.app.state.settings
+    roads = await store.get_roads_geojson(
+        Bbox(*region.bbox), max_features=settings.field_roads_max_features
+    )
+    return JSONResponse(
+        content=roads_feature_collection(roads),
         media_type="application/geo+json",
         headers={"Cache-Control": "no-cache"},
     )

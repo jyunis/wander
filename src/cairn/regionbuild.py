@@ -28,6 +28,7 @@ import re
 import time
 import unicodedata
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
@@ -37,6 +38,7 @@ import httpx
 from cairn.config import Settings
 from cairn.errors import ValidationError
 from cairn.field import SUFFIX, valid_region_id
+from cairn.store.types import Bbox
 
 log = logging.getLogger("cairn.regionbuild")
 
@@ -61,6 +63,9 @@ class BuildJob:
     state: str = "running"  # running | done | error
     bytes_written: int = 0
     error: str | None = None
+    # The region's roads, ingested alongside the extract: None until it starts,
+    # then {"state": running|done|error, "count"?: int, "error"?: str}.
+    roads: dict | None = None
     started_at: float = field(default_factory=time.time)
 
     def as_dict(self) -> dict:
@@ -72,6 +77,7 @@ class BuildJob:
             "bytes_written": self.bytes_written,
             "estimated_bytes": self.estimated_bytes,
             "error": self.error,
+            "roads": self.roads,
             "elapsed_s": round(time.time() - self.started_at, 1),
         }
 
@@ -232,8 +238,15 @@ class RegionBuilder:
     two at once just makes both slow. Single-user service (FC-1).
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        roads: Callable[[Bbox], Awaitable[int]] | None = None,
+    ) -> None:
         self._settings = settings
+        # Ingests a bbox's roads and returns how many it now holds
+        # (`RunService.ingest_roads`). None = build basemaps only.
+        self._roads = roads
         self._dir = Path(settings.regions_dir)
         self._jobs: dict[str, BuildJob] = {}
         self._lock = asyncio.Lock()
@@ -314,6 +327,9 @@ class RegionBuilder:
         log.info("region %s: %s", job.region_id, " ".join(cmd[1:]))
 
         progress = asyncio.create_task(self._track(job, tmp))
+        # Roads come from Overpass/MVUM, the tiles from Protomaps: independent
+        # hosts, so fetch both at once rather than making the user wait twice.
+        roads = asyncio.create_task(self._ingest_roads(job)) if self._roads else None
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
@@ -332,6 +348,12 @@ class RegionBuilder:
                 tail = (stderr or b"").decode(errors="replace").strip().splitlines()
                 raise RuntimeError(tail[-1] if tail else f"pmtiles exited {proc.returncode}")
 
+            # The phone caches the roads sidecar the first time it shows a region
+            # and never re-reads it offline — so the region must not be listed
+            # until its roads are in the store, or it would cache an empty set.
+            if roads is not None:
+                await roads
+
             # Only now is it a region: the registry must never see a partial file.
             tmp.replace(out)
             (self._dir / f"{job.region_id}{META_SUFFIX}").write_text(
@@ -348,6 +370,24 @@ class RegionBuilder:
         finally:
             progress.cancel()
             self._current = None
+
+    async def _ingest_roads(self, job: BuildJob) -> None:
+        """Best effort: a region without roads is still a basemap you can
+        navigate by, so a failure is reported on the job, never raised."""
+        job.roads = {"state": "running"}
+        try:
+            count = await asyncio.wait_for(
+                self._roads(Bbox(*job.bbox)),
+                timeout=self._settings.max_wallclock_async_seconds,
+            )
+            job.roads = {"state": "done", "count": count}
+            log.info("region %s: %d roads", job.region_id, count)
+        except TimeoutError:
+            job.roads = {"state": "error", "error": "timed out fetching roads"}
+            log.warning("region %s: roads timed out", job.region_id)
+        except Exception as exc:  # noqa: BLE001 - surfaced to the client on the job
+            job.roads = {"state": "error", "error": str(exc)}
+            log.warning("region %s: roads failed: %s", job.region_id, exc)
 
     async def _track(self, job: BuildJob, tmp: Path) -> None:
         """`pmtiles` prints a progress bar we'd rather not parse; the partial

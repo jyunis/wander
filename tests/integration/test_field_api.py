@@ -296,3 +296,86 @@ def test_field_pins_layer_declares_point_geometry(client):
     assert "['geometry-type'], 'Point'" in source
     block = source.split("id: 'pins'", 1)[1][:400]
     assert "filter:" in block, "pins layer has no geometry filter"
+
+
+# --- Roads on the offline map ------------------------------------------------
+
+
+@pytest.fixture
+def roads_client(tmp_path, monkeypatch):
+    """A region over the fake pipeline's synthetic roads, and a service backed by
+    the fake Overpass so scoring ingests them without touching the network."""
+    from cairn.service import RunService
+    from tests.fakes.pipeline import FakeOverpass, fake_terrain_factory, synthetic_elements
+
+    regions = tmp_path / "regions"
+    regions.mkdir()
+    h = bytearray(_archive())
+    # bbox (-0.01, -0.01, 0.03, 0.02): contains the fakes' TEST_BBOX.
+    struct.pack_into("<iiii", h, 102, -100000, -100000, 300000, 200000)
+    (regions / "synthetic.pmtiles").write_bytes(bytes(h))
+    monkeypatch.setenv("CAIRN_DATA_DIR", str(tmp_path))
+    config_module._settings = None
+    from cairn.api import app
+
+    with TestClient(app) as c:
+        app.state.service = RunService(
+            app.state.store, app.state.settings,
+            overpass=FakeOverpass(synthetic_elements()),
+            terrain_factory=fake_terrain_factory(slope_deg=3.0),
+        )
+        yield c
+    config_module._settings = None
+
+
+def test_roads_serves_the_regions_ingested_roads_slimmed(roads_client):
+    roads_client.post("/score/view", json={"bbox": [0.0, 0.0, 0.02, 0.012]})
+
+    res = roads_client.get("/field/regions/synthetic/roads.geojson")
+
+    assert res.status_code == 200
+    fc = res.json()
+    assert fc["type"] == "FeatureCollection"
+    assert fc["truncated"] is False
+    assert fc["features"]
+    feat = fc["features"][0]
+    assert feat["geometry"]["type"] == "LineString"
+    assert {"osm_id", "style", "label"} <= feat["properties"].keys()
+    # The phone copy never carries nulls.
+    assert all(v is not None for f in fc["features"] for v in f["properties"].values())
+
+
+def test_roads_is_empty_where_nothing_was_ingested(roads_client):
+    fc = roads_client.get("/field/regions/synthetic/roads.geojson").json()
+    assert fc == {"type": "FeatureCollection", "truncated": False, "features": []}
+
+
+def test_roads_is_served_as_cacheable_geojson(roads_client):
+    res = roads_client.get("/field/regions/synthetic/roads.geojson")
+    assert res.headers["content-type"].startswith("application/geo+json")
+    assert res.headers["cache-control"] == "no-cache"
+
+
+def test_roads_for_unknown_region_is_404(client):
+    assert client.get("/field/regions/nope/roads.geojson").status_code == 404
+
+
+def test_field_road_layers_declare_line_geometry():
+    """The roads source only holds LineStrings today, but the same MapLibre trap
+    applies the day it doesn't: every layer states the geometry it wants."""
+    from cairn.api import _FIELD_DIR
+
+    source = (_FIELD_DIR / "field.js").read_text()
+    for layer in ("wr-selected", "wr-plain", "wr-rough", "wr-private", "wr-hit"):
+        block = source.split(f"id: '{layer}'", 1)[1][:300]
+        assert "filter:" in block, f"{layer} has no geometry filter"
+
+
+def test_field_app_caches_roads_beside_the_archive_and_deletes_them_with_it():
+    """Roads are only useful offline if they're in the same cache as the tiles,
+    and a deleted region must not leave its roads behind."""
+    from cairn.api import _FIELD_DIR
+
+    source = (_FIELD_DIR / "field.js").read_text()
+    assert "loadSidecar(roadsUrl(region.id))" in source
+    assert "cache.delete(roadsUrl(region.id))" in source

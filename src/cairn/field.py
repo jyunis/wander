@@ -100,6 +100,8 @@ class Region:
             # reads only bytes off disk); the endpoint is the source of truth and
             # simply returns an empty FeatureCollection when nothing falls inside.
             "pins_url": f"/field/regions/{self.id}/pins{OUTLINE_SUFFIX}",
+            # Same reasoning: always advertised, empty where nothing is ingested.
+            "roads_url": f"/field/regions/{self.id}/roads{OUTLINE_SUFFIX}",
         }
         if outline_path(self.id) is not None:
             payload["outline_url"] = f"/field/regions/{self.id}/outline{OUTLINE_SUFFIX}"
@@ -253,4 +255,104 @@ def pins_feature_collection(places: list[dict]) -> dict:
     return {
         "type": "FeatureCollection",
         "features": [pin_feature(p) for p in places],
+    }
+
+
+# --- Roads on the offline map (display-only, TLC-3) ---------------------------
+# The basemap already draws OSM roads, but only as lines: no MVUM forest roads
+# OSM is missing, no state-forest roads, and nothing to tap. This sidecar
+# (`roads.geojson`) is Wander's own drivable-roads overlay (OSM ∪ MVUM ∪ MN DNR,
+# the same set GET /roads serves), slimmed for a phone and cached beside the
+# archive so "which spur do I take" still has an answer with no signal.
+#
+# Everything the card needs is decided HERE, not in field.js: the page stays a
+# dumb renderer, and the MVUM wording is unit-tested instead of living in two
+# copies of a regex.
+
+# ~1.1 m at the equator, less further north: finer than a phone GPS fix, and it
+# cuts the sidecar by roughly a third versus the store's full precision.
+_COORD_DP = 5
+
+
+def mvum_info(access: str | None) -> dict | None:
+    """The MVUM access string (e.g. "Roads open to all Vehicles, Seasonal") as
+    a plain-language class + season. Mirrors the online app's `mvumInfo`."""
+    if not access:
+        return None
+    low = access.lower()
+    season = "Seasonal" if "seasonal" in low else "Yearlong" if "yearlong" in low else None
+    special = False
+    if "all vehicles" in low:
+        klass = "Open to all vehicles"
+    elif "highway legal" in low:
+        klass = "Highway-legal vehicles only"
+    elif "special" in low:
+        klass, special = "Special designation", True
+    else:
+        klass = access
+    return {"class": klass, "season": season, "special": special}
+
+
+def road_style(props: dict) -> str:
+    """Which line the field map draws: private beats everything (you may not be
+    allowed on it), then MVUM special designation, then forest road, then any
+    other drivable way. Same precedence as the online overlay's colors."""
+    if props.get("private"):
+        return "private"
+    mv = mvum_info(props.get("mvum_access"))
+    if mv and mv["special"]:
+        return "special"
+    if props.get("forest_road"):
+        return "forest"
+    return "road"
+
+
+def road_feature(feature: dict) -> dict | None:
+    """One `/roads` feature → the slim field version, or None if it collapses
+    to a point once rounded. Null properties are dropped (they're most of them)."""
+    coords: list[list[float]] = []
+    for lon, lat in feature["geometry"]["coordinates"]:
+        pt = [round(lon, _COORD_DP), round(lat, _COORD_DP)]
+        if not coords or pt != coords[-1]:
+            coords.append(pt)
+    if len(coords) < 2:
+        return None
+
+    p = feature.get("properties") or {}
+    ref, name = p.get("ref"), p.get("name")
+    mv = mvum_info(p.get("mvum_access"))
+    # What the card is titled: a forest road is known by its number.
+    label = f"FR {ref}" if ref else (name or "Road")
+    props = {
+        "osm_id": p.get("osm_id"),
+        "style": road_style(p),
+        "label": label,
+        # Only a name that says something the label doesn't ("413" / "FR 413").
+        "name": name if name and name not in (ref, label) else None,
+        "highway": p.get("highway"),
+        "mvum_class": mv["class"] if mv else None,
+        "season": mv["season"] if mv else None,
+        "surface": p.get("surface"),
+        "mud_tier": p.get("mud_tier"),
+        "rough": bool(p.get("rough")) or None,
+        "private": bool(p.get("private")) or None,
+        # The raw OSM value only when it says more than "private" does.
+        "access": p.get("access") if p.get("private") and p.get("access") != "private" else None,
+    }
+    return {
+        "type": "Feature",
+        "geometry": {"type": "LineString", "coordinates": coords},
+        "properties": {k: v for k, v in props.items() if v is not None},
+    }
+
+
+def roads_feature_collection(roads: dict) -> dict:
+    """The field sidecar for a `/roads`-shaped FeatureCollection. `truncated`
+    rides along so the page can say the list is incomplete rather than let a
+    missing spur read as "there is no road here"."""
+    features = [f for f in (road_feature(x) for x in roads.get("features", [])) if f]
+    return {
+        "type": "FeatureCollection",
+        "truncated": bool(roads.get("truncated")),
+        "features": features,
     }

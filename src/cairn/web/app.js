@@ -4746,9 +4746,11 @@ function pollOfflineJob(jobId) {
     const pct = job.estimated_bytes ? Math.min(100, (job.bytes_written / job.estimated_bytes) * 100) : 0;
     fill.style.width = pct + "%";
 
+    const roads = job.roads || {};
     if (job.state === "running") {
       $("offline-status").textContent =
-        `Building ${job.name}… ${fmtMB(job.bytes_written)} of ~${fmtMB(job.estimated_bytes)} (${job.elapsed_s}s)`;
+        `Building ${job.name}… ${fmtMB(job.bytes_written)} of ~${fmtMB(job.estimated_bytes)}` +
+        (roads.state === "running" ? " · fetching roads" : "") + ` (${job.elapsed_s}s)`;
       return;
     }
     clearInterval(offlinePollTimer);
@@ -4760,8 +4762,16 @@ function pollOfflineJob(jobId) {
       $("offline-status").textContent = "Failed: " + job.error;
       return;
     }
+    // A region without roads is still a usable basemap, but say so: offline,
+    // "no road drawn here" must not be mistaken for "there is no road here".
+    const roadsNote =
+      roads.state === "done"
+        ? `, ${roads.count} roads`
+        : roads.state === "error"
+          ? `; ⚠ roads not included: ${esc(roads.error)}`
+          : "";
     $("offline-status").innerHTML =
-      `✅ ${esc(job.name)} is ready (${fmtMB(job.bytes_written)}). Open <a href="/field/" target="_blank" rel="noopener">Wander Field</a> and download it to your phone.`;
+      `✅ ${esc(job.name)} is ready (${fmtMB(job.bytes_written)}${roadsNote}). Open <a href="/field/" target="_blank" rel="noopener">Wander Field</a> and download it to your phone.`;
     $("offline-name").value = "";
     refreshOfflineRegions();
   }, 1000);
