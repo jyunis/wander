@@ -102,6 +102,7 @@ class Region:
             "pins_url": f"/field/regions/{self.id}/pins{OUTLINE_SUFFIX}",
             # Same reasoning: always advertised, empty where nothing is ingested.
             "roads_url": f"/field/regions/{self.id}/roads{OUTLINE_SUFFIX}",
+            "land_url": f"/field/regions/{self.id}/land{OUTLINE_SUFFIX}",
         }
         if outline_path(self.id) is not None:
             payload["outline_url"] = f"/field/regions/{self.id}/outline{OUTLINE_SUFFIX}"
@@ -356,3 +357,127 @@ def roads_feature_collection(roads: dict) -> dict:
         "truncated": bool(roads.get("truncated")),
         "features": features,
     }
+
+
+# --- Land on the offline map (display-only, TLC-3) ----------------------------
+# The offline answer to "whose land am I standing on" — the question onX is paid
+# for. A `land.geojson` sidecar per region: public-ownership parcels plus the
+# forest/park/wilderness polygons, dissolved and clipped server-side
+# (`OverlayStore.dissolved`), classified HERE so the page only paints and
+# point-tests.
+#
+# The distinction that matters: a PARCEL says who owns the ground; a BOUNDARY
+# (national/state forest, park) is a line drawn around land that still contains
+# private inholdings. Only a parcel may ever read as "public". An absent parcel
+# means "no public-land record" — private, or outside the data we hold — never
+# "public because it's inside the forest".
+
+# Every polygon layer the field map carries, in draw order (bottom first).
+LAND_LAYERS: tuple[str, ...] = (
+    "national_forest", "state_forest", "national_park", "state_park",
+    "county_forest", "ownership", "wilderness",
+)
+
+# Dissolve simplification, degrees: ~3 m — under a phone GPS fix, and it strips
+# most of the parcel-survey vertices a phone would otherwise download.
+LAND_SIMPLIFY_DEG = 0.00003
+
+_BOUNDARY_WHAT = {
+    "national_forest": "National forest boundary",
+    "state_forest": "State forest boundary",
+    "national_park": "National Park Service unit",
+    "state_park": "State park boundary",
+}
+
+# ownership category -> (cls, public, what). `public` is True (public land),
+# False (NOT open without permission) or None (access varies).
+_OWNERSHIP = {
+    "Federal": ("federal", True, "Federal land"),
+    "State": ("state", True, "State land"),
+    "County": ("county", True, "County land"),
+    "County Fee": ("county", True, "County land"),
+    "Tax Forfeit": ("tax_forfeit", True, "Tax-forfeit land (county-managed)"),
+    "Tribal": ("tribal", False, "Tribal land — not public without permission"),
+    "NGO": ("ngo", None, "Conservation land (NGO) — access varies"),
+}
+
+
+def land_class(layer: str, category: str | None) -> dict:
+    """What one land polygon means on the field map:
+    `kind` parcel | boundary | wilderness, the paint `cls`, `public`
+    (True / False / None = varies or not a claim), and a plain `what`."""
+    if layer == "ownership":
+        cls, public, what = _OWNERSHIP.get(category or "", ("other", None, category or "Land"))
+        return {"kind": "parcel", "cls": cls, "public": public, "what": what}
+    if layer == "county_forest":
+        # WI county forests: the layer IS the county-owned land, not a boundary.
+        return {"kind": "parcel", "cls": "county_forest", "public": True,
+                "what": "County forest (county-owned)"}
+    if layer == "wilderness":
+        return {"kind": "wilderness", "cls": "wilderness", "public": None,
+                "what": "Designated wilderness — no motor vehicles"}
+    return {"kind": "boundary", "cls": layer, "public": None,
+            "what": _BOUNDARY_WHAT.get(layer, layer.replace("_", " ").capitalize())}
+
+
+def _round_ring(ring: list) -> list[list[float]] | None:
+    out: list[list[float]] = []
+    for lon, lat, *_ in ring:
+        pt = [round(lon, _COORD_DP), round(lat, _COORD_DP)]
+        if not out or pt != out[-1]:
+            out.append(pt)
+    if len(out) < 4:  # a closed ring needs 3 distinct corners + the closure
+        return None
+    if out[0] != out[-1]:
+        out.append(out[0])
+    return out
+
+
+def _round_polygons(geom: dict) -> list[list[list[list[float]]]]:
+    """Polygon/MultiPolygon → rounded polygons (outer ring first). A polygon
+    whose outer ring collapses is dropped; a collapsed hole is just omitted."""
+    if geom.get("type") == "Polygon":
+        polys = [geom.get("coordinates") or []]
+    elif geom.get("type") == "MultiPolygon":
+        polys = geom.get("coordinates") or []
+    else:
+        return []
+    out = []
+    for rings in polys:
+        if not rings:
+            continue
+        outer = _round_ring(rings[0])
+        if outer is None:
+            continue
+        out.append([outer, *(r for r in map(_round_ring, rings[1:]) if r)])
+    return out
+
+
+def land_feature(layer: str, category: str | None, name: str | None, geom: dict) -> dict | None:
+    """One dissolved land row → a field Feature, or None if nothing survives
+    rounding. `name` is whatever the source calls it — a unit ("Bayfield County
+    Forest") or, for MN parcels, just the county ("Itasca") — so the card shows
+    it beside `what`, never instead of it."""
+    polys = _round_polygons(geom)
+    if not polys:
+        return None
+    props = {"layer": layer, **land_class(layer, category), "name": name, "category": category}
+    geometry = (
+        {"type": "Polygon", "coordinates": polys[0]}
+        if len(polys) == 1
+        else {"type": "MultiPolygon", "coordinates": polys}
+    )
+    return {"type": "Feature", "geometry": geometry,
+            "properties": {k: v for k, v in props.items() if v is not None}}
+
+
+def land_feature_collection(rows: list[tuple]) -> dict:
+    """The field land sidecar from `OverlayStore.dissolved` rows, in LAND_LAYERS
+    draw order so parcels paint over the boundaries they sit in."""
+    order = {layer: i for i, layer in enumerate(LAND_LAYERS)}
+    features = []
+    for layer, category, name, gj in sorted(rows, key=lambda r: order.get(r[0], len(order))):
+        feat = land_feature(layer, category, name, json.loads(gj) if isinstance(gj, str) else gj)
+        if feat:
+            features.append(feat)
+    return {"type": "FeatureCollection", "features": features}

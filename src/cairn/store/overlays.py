@@ -254,6 +254,38 @@ class OverlayStore:
             "disclaimer": DISCLAIMER,
         }
 
+    async def dissolved(
+        self, layers: tuple[str, ...], bbox: Bbox, tolerance: float
+    ) -> list[tuple[str, str | None, str | None, str]]:
+        """Polygon `layers` within `bbox`, DISSOLVED per (layer, category, name)
+        and clipped to it: `[(layer, category, name, geojson)]`, polygons only.
+
+        For the offline field map, which downloads a region's land once. The
+        parcel layers are thousands of adjoining parcels that differ only by id
+        (MN names each by its county), so a trip box of ~800 parcels becomes ~10
+        shapes — a fraction of the bytes, and no parcel seams drawn across a
+        forest. `tolerance` (degrees) simplifies the dissolved outline,
+        topology-preserving so no part is dropped. `CollectionExtract(…, 3)`
+        keeps only the polygon parts of what the clip returns (a clip along a
+        shared edge can also yield lines/points). No feature cap: the union is
+        what bounds the size. Display-only (TLC-3)."""
+        if self._db is None or not layers:
+            return []
+        b = bbox.normalized()
+        frame = (b.min_lon, b.min_lat, b.max_lon, b.max_lat)
+        marks = ",".join("?" * len(layers))
+        cur = await self._db.execute(
+            "SELECT layer, category, name, AsGeoJSON(CollectionExtract("
+            "  ST_SimplifyPreserveTopology("
+            "    ST_Intersection(ST_Union(geom), BuildMbr(?, ?, ?, ?, 4326)), ?), 3)) "
+            f"FROM overlay_features WHERE layer IN ({marks}) AND ROWID IN ("
+            "  SELECT ROWID FROM SpatialIndex WHERE f_table_name='overlay_features' "
+            "  AND f_geometry_column='geom' AND search_frame=BuildMbr(?, ?, ?, ?, 4326)) "
+            "GROUP BY layer, category, name",
+            (*frame, tolerance, *layers, *frame),
+        )
+        return [(lyr, cat, name, gj) for lyr, cat, name, gj in await cur.fetchall() if gj]
+
     async def get_shape(self, layer: str, name: str) -> dict | None:
         """The FULL outline of one named polygon shape (forest/park) for the
         discovery highlight + zoom-to-extent — NOT bbox-clipped like `query`.
