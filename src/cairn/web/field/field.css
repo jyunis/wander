@@ -106,6 +106,10 @@ button.link {
 .key { display: inline-block; width: 22px; vertical-align: middle; margin-right: 6px; }
 .key.box { height: 12px; border: 1.5px dashed var(--accent); border-radius: 2px; }
 .key.line { height: 0; border-top: 2px solid #5f9e5f; }
+/* Road keys match ROAD_COLOR in field.js. */
+.key.road { width: 18px; height: 0; border-top: 3px solid #e8710a; }
+.key.road.special { border-top-color: #8e44ad; }
+.key.road.private { border-top: 3px dotted #c0392b; }
 .key.dot {
   height: 12px; width: 12px; border-radius: 50%;
   background: #27c927; border: 1.5px solid #fff;
@@ -155,6 +159,12 @@ button.link {
    target with gloves on. */
 .pc-gmaps { display: block; text-align: center; }
 .pc-disc { margin-top: 10px; color: var(--muted); font-size: 11px; }
+/* Road card (offline roads) */
+.pc-warn { color: var(--warn); font-size: 13px; font-weight: 600; }
+.pc-sub { color: var(--muted); font-weight: 400; }
+.mud-firm { color: var(--ok); }
+.mud-variable { color: var(--warn); }
+.mud-soft { color: var(--bad); }
 
 /* --- map controls --------------------------------------------------------- */
 

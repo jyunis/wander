@@ -146,25 +146,8 @@ class RunService:
                 clip_vertex_threshold=self._s.ingest_clip_vertex_threshold,
             )
 
-            # 4b: USFS MVUM forest roads (fills OSM's forest-road gaps). Best
-            # effort — degrade to OSM-only if MVUM is unavailable (TLC-10).
-            mvum_provenance: dict | None = None
-            if self._mvum is not None:
-                try:
-                    mvum = await self._mvum.fetch(b)
-                    mvum_count = await ingest_mvum(
-                        self._store, mvum.features, chunk_size=self._s.ingest_chunk_size
-                    )
-                    mvum_provenance = {
-                        "source": "usfs_mvum",
-                        "cache_key": mvum.cache_key,
-                        "fetched_at": mvum.fetched_at,
-                        "from_cache": mvum.from_cache,
-                        "road_count": mvum_count,
-                    }
-                except MvumError as exc:
-                    log.warning("MVUM unavailable, OSM-only roads: %s", exc)
-                    mvum_provenance = {"source": "usfs_mvum", "error": str(exc)}
+            # 4b: USFS MVUM forest roads (fills OSM's forest-road gaps).
+            mvum_provenance = await self._ingest_mvum(b)
 
             # 4c: USA Structures buildings (fills OSM's rural building gaps so
             # the no-camping-near-houses setback works). Best effort (TLC-10).
@@ -297,6 +280,57 @@ class RunService:
         except Exception as exc:  # unexpected — still surface, never swallow
             log.exception("run %d crashed", run_id)
             await self._store.fail_run(run_id, f"InternalError: {exc}")
+
+    async def _ingest_mvum(self, b: Bbox) -> dict | None:
+        """USFS MVUM forest roads for `b` → provenance, or None if MVUM is off.
+        Best effort — degrade to OSM-only if MVUM is unavailable (TLC-10)."""
+        if self._mvum is None:
+            return None
+        try:
+            mvum = await self._mvum.fetch(b)
+            mvum_count = await ingest_mvum(
+                self._store, mvum.features, chunk_size=self._s.ingest_chunk_size
+            )
+        except MvumError as exc:
+            log.warning("MVUM unavailable, OSM-only roads: %s", exc)
+            return {"source": "usfs_mvum", "error": str(exc)}
+        return {
+            "source": "usfs_mvum",
+            "cache_key": mvum.cache_key,
+            "fetched_at": mvum.fetched_at,
+            "from_cache": mvum.from_cache,
+            "road_count": mvum_count,
+        }
+
+    # --- roads for an offline region (display-only — TLC-3) -----------------
+
+    async def ingest_roads(self, bbox: Bbox) -> int:
+        """Ingest the roads a score of `bbox` would (Overpass + MVUM), then tier
+        them for mud, without scoring anything. Returns the drivable ways now
+        stored in `bbox`.
+
+        The field map's roads sidecar reads the store, and the store only holds
+        roads where something ingested them. Building an offline region calls
+        this so a box drawn somewhere never scored doesn't download as a map with
+        no tappable roads. The tiering is awaited, not fire-and-forget, so the
+        sidecar the phone caches already carries mud tiers.
+
+        Raises on an Overpass failure; the caller decides that a region without
+        roads is still worth having."""
+        b = bbox.normalized()
+        if b.area_km2() > self._s.max_bbox_area_km2:
+            raise BboxTooLarge(b.area_km2(), self._s.max_bbox_area_km2)
+        osm = await self._overpass.fetch(b)
+        await ingest_osm(
+            self._store, osm.elements, chunk_size=self._s.ingest_chunk_size,
+            clip_bbox=b,
+            clip_buffer_m=self._s.ingest_clip_buffer_m,
+            clip_vertex_threshold=self._s.ingest_clip_vertex_threshold,
+        )
+        await self._ingest_mvum(b)
+        if self._soil_grid is not None:
+            await self._tier_new_roads(b)
+        return len(await self._store.drivable_way_tags(b))
 
     # --- road mud-susceptibility auto-tier (display-only — TLC-3) -----------
 

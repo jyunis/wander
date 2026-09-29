@@ -110,6 +110,10 @@ class Settings(BaseSettings):
     # by scripts/build_region.py or the in-app "download this area" picker).
     # Re-derivable like overlays.db; absent → the field view offers no regions.
     regions_dir: Path | None = None
+    # Cap on a region's offline roads sidecar. Far above the viewport overlay's
+    # cap because a region is fetched once, whole, not per pan: a trip-sized
+    # Bayfield box is ~1.1k roads / ~0.4 MB. Over it the sidecar says truncated.
+    field_roads_max_features: int = 30_000
 
     # --- Region builder (M4) -----------------------------------------------
     # `pmtiles` is baked into the image, pinned + checksummed (see Dockerfile).

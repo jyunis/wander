@@ -15,9 +15,13 @@ import pytest
 from cairn.field import (
     InvalidPMTiles,
     RegionStore,
+    mvum_info,
     pin_feature,
     pins_feature_collection,
     read_header,
+    road_feature,
+    road_style,
+    roads_feature_collection,
     valid_region_id,
 )
 
@@ -153,6 +157,8 @@ def test_as_dict_is_the_wire_shape(tmp_path):
     # has any features is the endpoint's business (needs a cairn.db read the
     # registry doesn't do), so it can't be gated on a file check like outline.
     assert payload["pins_url"] == "/field/regions/superior-nf/pins.geojson"
+    # Same for roads: whether any were ingested is a cairn.db question.
+    assert payload["roads_url"] == "/field/regions/superior-nf/roads.geojson"
 
 
 # --- Wander content on the offline map (#45 W1) ------------------------------
@@ -199,3 +205,101 @@ def test_pins_feature_collection_is_a_featurecollection():
     assert fc["type"] == "FeatureCollection"
     assert len(fc["features"]) == 1
     assert pins_feature_collection([]) == {"type": "FeatureCollection", "features": []}
+
+
+# --- Roads on the offline map ------------------------------------------------
+
+
+def _road(coords=((-91.4, 47.6), (-91.39, 47.61)), **props):
+    base = {
+        "osm_id": 7, "highway": "track", "name": None, "ref": None,
+        "forest_road": False, "rough": False, "mvum_access": None,
+        "access": None, "private": False, "surface": None, "mud_tier": None,
+    }
+    return {
+        "type": "Feature",
+        "geometry": {"type": "LineString", "coordinates": [list(c) for c in coords]},
+        "properties": {**base, **props},
+    }
+
+
+@pytest.mark.parametrize(
+    ("access", "expected"),
+    [
+        ("Roads open to all Vehicles, Seasonal",
+         {"class": "Open to all vehicles", "season": "Seasonal", "special": False}),
+        ("Roads open to Highway Legal Vehicles only, Yearlong",
+         {"class": "Highway-legal vehicles only", "season": "Yearlong", "special": False}),
+        ("Special Designation", {"class": "Special designation", "season": None, "special": True}),
+        ("Something new", {"class": "Something new", "season": None, "special": False}),
+    ],
+)
+def test_mvum_info_reads_class_and_season(access, expected):
+    assert mvum_info(access) == expected
+
+
+def test_mvum_info_is_none_off_the_mvum():
+    assert mvum_info(None) is None
+    assert mvum_info("") is None
+
+
+def test_road_style_precedence():
+    """Private wins even on a forest road: that's the one you may not drive."""
+    assert road_style({"private": True, "forest_road": True}) == "private"
+    assert road_style({"forest_road": True, "mvum_access": "Special Designation"}) == "special"
+    assert road_style({"forest_road": True}) == "forest"
+    assert road_style({}) == "road"
+
+
+def test_road_feature_names_a_forest_road_by_its_number_and_reads_the_mvum():
+    props = road_feature(_road(
+        ref="203", name="203", forest_road=True, surface="gravel", mud_tier="Soft",
+        mvum_access="Roads open to all Vehicles, Seasonal",
+    ))["properties"]
+
+    assert props["label"] == "FR 203"
+    assert "name" not in props  # the name is just the ref again
+    # ...or just the label again (MVUM names are often "FR 203" themselves).
+    assert "name" not in road_feature(_road(ref="203", name="FR 203"))["properties"]
+    named = road_feature(_road(ref="203", name="Moose Lake Rd"))["properties"]
+    assert named["name"] == "Moose Lake Rd"
+    assert props["style"] == "forest"
+    assert props["mvum_class"] == "Open to all vehicles"
+    assert props["season"] == "Seasonal"
+    assert props["surface"] == "gravel"
+    assert props["mud_tier"] == "Soft"
+
+
+def test_road_feature_drops_empty_properties():
+    """Most properties are null on most roads; the sidecar is a phone download."""
+    props = road_feature(_road())["properties"]
+    assert props == {"osm_id": 7, "style": "road", "label": "Road", "highway": "track"}
+
+
+def test_road_feature_keeps_access_only_when_it_says_more_than_private():
+    assert "access" not in road_feature(_road(private=True, access="private"))["properties"]
+    props = road_feature(_road(private=True, access="permit"))["properties"]
+    assert props["private"] is True
+    assert props["access"] == "permit"
+    assert props["style"] == "private"
+
+
+def test_road_feature_rounds_coordinates_and_drops_repeats():
+    feat = road_feature(_road(coords=(
+        (-91.4000001, 47.6000001), (-91.4000002, 47.6000002), (-91.3912345678, 47.6123456789),
+    )))
+    assert feat["geometry"]["coordinates"] == [[-91.4, 47.6], [-91.39123, 47.61235]]
+
+
+def test_road_feature_that_collapses_to_a_point_is_dropped():
+    assert road_feature(_road(coords=((-91.4, 47.6), (-91.4000001, 47.6000001)))) is None
+
+
+def test_roads_feature_collection_carries_truncation():
+    fc = roads_feature_collection({"truncated": True, "features": [_road()]})
+    assert fc["type"] == "FeatureCollection"
+    assert fc["truncated"] is True
+    assert len(fc["features"]) == 1
+    assert roads_feature_collection({"features": []}) == {
+        "type": "FeatureCollection", "truncated": False, "features": [],
+    }

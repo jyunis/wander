@@ -307,3 +307,25 @@ async def test_tlc4_wallclock_bound_is_honored(store, settings):
     run = await store.get_run(run_id)
     assert run.status == "failed"
     assert "WallClockExceeded" in run.failure_reason
+
+
+# --- roads for an offline region (Wander Field) ------------------------------
+
+
+async def test_ingest_roads_stores_roads_without_scoring(store, settings):
+    """A region drawn somewhere never scored still gets roads: ingest persists
+    them (and nothing else run-shaped) so the field sidecar can serve them."""
+    svc = _svc(store, settings)
+    assert await store.drivable_way_tags(TEST_BBOX) == {}
+
+    count = await svc.ingest_roads(TEST_BBOX)
+
+    assert count > 0
+    assert count == len(await store.drivable_way_tags(TEST_BBOX))
+    assert await store.list_runs() == []
+
+
+async def test_ingest_roads_refuses_a_box_over_the_score_cap(store, settings):
+    svc = _svc(store, settings)
+    with pytest.raises(BboxTooLarge):
+        await svc.ingest_roads(Bbox(0.0, 0.0, 1.0, 1.0))  # ~12,300 km²

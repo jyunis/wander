@@ -27,12 +27,16 @@
   const metaUrl = (id) => `/field/regions/${id}.meta.json`; // cache key only; never fetched
   const outlineUrl = (id) => `/field/regions/${id}/outline.geojson`;
   const pinsUrl = (id) => `/field/regions/${id}/pins.geojson`;
+  const roadsUrl = (id) => `/field/regions/${id}/roads.geojson`;
+  const EMPTY_FC = () => ({ type: 'FeatureCollection', features: [] });
 
   let map = null;
   let activeRegion = null;
   let outlineData = null; // the active region's real boundary, if we have one
   let pinsData = null; // the active region's saved sites/campgrounds, if any
+  let roadsData = null; // the active region's Wander roads (OSM ∪ MVUM), if any
   let selectedPinId = null; // the pin whose card is open, for the selection ring
+  let selectedRoadId = null; // the road whose card is open, for its highlight
   let downloading = false;
   let upgradeDeferred = false; // a new build landed while we were downloading
   let activeSource = null; // 'offline' (from the cached blob) | 'stream' (over the wire)
@@ -105,6 +109,26 @@
   // Matches only the pin whose card is open (or nothing, when id is null).
   const selectedFilter = (id) =>
     ['all', POINTS(), ['==', ['get', 'id'], id == null ? -1 : id]];
+
+  // Wander's own roads, over the basemap's. The basemap draws OSM roads as bare
+  // lines; these add the forest roads OSM is missing (MVUM, MN DNR) and are
+  // tappable for number/class/season/surface/mud. `style` is decided server-side
+  // (cairn.field.road_style): private > MVUM special > forest road > other.
+  // Colors follow the online overlay, darkened a step for a light topo.
+  const ROAD_COLOR = ['match', ['get', 'style'],
+    'private', '#c0392b', 'special', '#8e44ad', 'forest', '#e8710a', '#7d6b55'];
+  const ROAD_WIDTH = ['interpolate', ['linear'], ['zoom'],
+    10, ['match', ['get', 'style'], 'forest', 1.4, 1],
+    14, ['match', ['get', 'style'], 'forest', 3.5, 2.5],
+    17, ['match', ['get', 'style'], 'forest', 7, 5.5]];
+  const ROADS_MIN_ZOOM = 10; // below this they're a hairball over the basemap
+  // Mutually exclusive, so each road is drawn by exactly one of the three
+  // (line-dasharray can't be data-driven — see the GOTCHA in styleFor).
+  const ROAD_PRIVATE = () => ['all', LINES(), ['has', 'private']];
+  const ROAD_ROUGH = () => ['all', LINES(), ['!', ['has', 'private']], ['has', 'rough']];
+  const ROAD_PLAIN = () => ['all', LINES(), ['!', ['has', 'private']], ['!', ['has', 'rough']]];
+  const selectedRoadFilter = (id) =>
+    ['all', LINES(), ['==', ['get', 'osm_id'], id == null ? -1 : id]];
 
   const insideBbox = ([w, s, e, n], lon, lat) => lon >= w && lon <= e && lat >= s && lat <= n;
 
@@ -197,7 +221,8 @@
         bounds: { type: 'geojson', data: bboxPolygon(region.bbox) },
         mask: { type: 'geojson', data: maskPolygon(region.bbox) },
         outline: { type: 'geojson', data: outlineData || { type: 'FeatureCollection', features: [] } },
-        pins: { type: 'geojson', data: pinsData || { type: 'FeatureCollection', features: [] } },
+        pins: { type: 'geojson', data: pinsData || EMPTY_FC() },
+        wroads: { type: 'geojson', data: roadsData || EMPTY_FC() },
       },
       layers: [
         { id: 'bg', type: 'background', paint: { 'background-color': '#eae6da' } },
@@ -271,6 +296,41 @@
           id: 'boundaries', type: 'line', source: 'pm', 'source-layer': 'boundaries',
           filter: LINES(),
           paint: { 'line-color': '#9b86a8', 'line-width': 0.8, 'line-dasharray': [3, 2], 'line-opacity': 0.6 },
+        },
+        // Wander roads: above the basemap, below the mask (so nothing draws
+        // outside the download) and below the pins. The highlight sits under
+        // the tapped road so the road itself stays readable.
+        {
+          id: 'wr-selected', type: 'line', source: 'wroads', minzoom: ROADS_MIN_ZOOM,
+          filter: selectedRoadFilter(selectedRoadId),
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: { 'line-color': '#2f7fd6', 'line-opacity': 0.45,
+            'line-width': ['interpolate', ['linear'], ['zoom'], 10, 7, 14, 11, 17, 16] },
+        },
+        {
+          id: 'wr-plain', type: 'line', source: 'wroads', minzoom: ROADS_MIN_ZOOM,
+          filter: ROAD_PLAIN(),
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: { 'line-color': ROAD_COLOR, 'line-width': ROAD_WIDTH, 'line-opacity': 0.9 },
+        },
+        {
+          id: 'wr-rough', type: 'line', source: 'wroads', minzoom: ROADS_MIN_ZOOM,
+          filter: ROAD_ROUGH(),
+          paint: { 'line-color': ROAD_COLOR, 'line-width': ROAD_WIDTH, 'line-opacity': 0.9,
+            'line-dasharray': [2.5, 1.5] },
+        },
+        {
+          id: 'wr-private', type: 'line', source: 'wroads', minzoom: ROADS_MIN_ZOOM,
+          filter: ROAD_PRIVATE(),
+          layout: { 'line-cap': 'round' },
+          paint: { 'line-color': ROAD_COLOR, 'line-width': ROAD_WIDTH, 'line-opacity': 0.9,
+            'line-dasharray': [0.3, 2] },
+        },
+        // The tap target, like pins-hit: a thin road is a hard thing to hit.
+        {
+          id: 'wr-hit', type: 'line', source: 'wroads', minzoom: ROADS_MIN_ZOOM,
+          filter: LINES(),
+          paint: { 'line-color': '#000', 'line-opacity': 0, 'line-width': 22 },
         },
         // Everything you did not download, painted out. See maskPolygon().
         {
@@ -364,12 +424,14 @@
     return url;
   }
 
-  // Cached beside the archive, so the forest is still drawn on a dead battery of
-  // a signal. Absent outline = no outline layer; never a hard failure.
-  async function loadOutline(region) {
-    outlineData = null;
-    if (!('caches' in window)) return;
-    const url = outlineUrl(region.id);
+  // A region's sidecars (outline, pins, roads) are cached beside its archive, so
+  // they're still on the map with no signal. Cache first: an offline start must
+  // draw from what's on the device without waiting on a network that isn't
+  // there. Fetched (and cached) only when missing — `revalidateSidecars` keeps
+  // them fresh while there's signal. Absent = that layer draws nothing; never a
+  // hard failure.
+  async function loadSidecar(url) {
+    if (!('caches' in window)) return null;
     const cache = await caches.open(DATA_CACHE);
     let res = await cache.match(url);
     if (!res && navigator.onLine) {
@@ -381,45 +443,46 @@
         }
       } catch { /* nothing reachable — draw the map without it */ }
     }
-    if (res) {
-      try { outlineData = await res.json(); } catch { outlineData = null; }
-    }
+    if (!res) return null;
+    try { return await res.json(); } catch { return null; }
   }
 
-  // Your saved sites/campgrounds for this region (#45 W1). Cached beside the
-  // archive exactly like the outline, so the pins are still on the map with no
-  // signal. Absent/empty = no pins drawn; never a hard failure. The server
-  // inlines each pin's full score/campground payload, so the card reads from
-  // this one cached file — no per-pin fetch offline.
-  async function loadPins(region) {
-    pinsData = null;
-    if (!('caches' in window)) return;
-    const url = pinsUrl(region.id);
+  // On signal, re-pull the sidecars that change as you use the main app — pins
+  // (saved a site since downloading) and roads (scored somewhere new inside the
+  // region) — and swap them in live. A failure keeps the cached copy.
+  async function revalidateSidecars(region) {
+    if (!navigator.onLine || !('caches' in window)) return;
     const cache = await caches.open(DATA_CACHE);
-    let res = await cache.match(url);
-    if (!res && navigator.onLine) {
+    for (const [url, source, set] of [
+      [pinsUrl(region.id), 'pins', (d) => { pinsData = d; }],
+      [roadsUrl(region.id), 'wroads', (d) => { roadsData = d; }],
+    ]) {
       try {
         const fresh = await fetch(url, { cache: 'no-store' });
-        if (fresh.ok) {
-          await cache.put(url, fresh.clone());
-          res = fresh;
-        }
-      } catch { /* nothing reachable — draw the map without pins */ }
+        if (!fresh.ok) continue;
+        const data = await fresh.clone().json();
+        await cache.put(url, fresh);
+        if (activeRegion?.id !== region.id) return; // switched away meanwhile
+        set(data);
+        map?.getSource(source)?.setData(data);
+      } catch { /* keep what we have */ }
     }
-    if (res) {
-      try { pinsData = await res.json(); } catch { pinsData = null; }
-    }
+    renderChips();
+    renderDiagnostics();
   }
 
   async function showRegion(region) {
     const key = await registerSource(region);
     if (!key) return false;
-    await loadOutline(region);
-    await loadPins(region);
+    [outlineData, pinsData, roadsData] = await Promise.all([
+      loadSidecar(outlineUrl(region.id)),
+      loadSidecar(pinsUrl(region.id)),
+      loadSidecar(roadsUrl(region.id)),
+    ]);
     const switching = !activeRegion || activeRegion.id !== region.id;
     // A card/ring from the old region has no meaning on the new one; clear it
     // before styleFor bakes the selection filter into the fresh style.
-    if (switching) closePinCard();
+    if (switching) closeCard();
     const style = styleFor(key, region);
     const bounds = [[region.bbox[0], region.bbox[1]], [region.bbox[2], region.bbox[3]]];
 
@@ -444,23 +507,24 @@
       // A fix that arrived before the map existed has to be replayed, or the
       // dot never appears for someone standing still.
       map.once('load', drawFix);
-      // Tap a saved pin → its offline card (built entirely from the cached
-      // payload, zero network). These layer listeners live on the map, not the
-      // style, so they survive setStyle and only fire when the layer exists.
-      map.on('click', 'pins-hit', (e) => {
-        if (e.features && e.features[0]) {
-          const f = e.features[0];
-          openPinCard(f.properties, f.geometry && f.geometry.coordinates);
-        }
-      });
-      map.on('mouseenter', 'pins-hit', () => { map.getCanvas().style.cursor = 'pointer'; });
-      map.on('mouseleave', 'pins-hit', () => { map.getCanvas().style.cursor = ''; });
-      // Tap the map away from any pin → dismiss the card. The pin handler above
-      // still fires first for a hit, so an open just re-opens; a miss closes.
+      // One tap handler, so precedence is explicit: a saved pin beats the road
+      // it sits on (pins are usually AT a road end), a road beats bare map, and
+      // bare map dismisses the card. Both cards are built from cached data —
+      // zero network. The listener lives on the map, not the style, so it
+      // survives setStyle.
       map.on('click', (e) => {
-        if (!map.getLayer('pins-hit')) return;
-        if (!map.queryRenderedFeatures(e.point, { layers: ['pins-hit'] }).length) closePinCard();
+        const hit = (layer) => (map.getLayer(layer)
+          ? map.queryRenderedFeatures(e.point, { layers: [layer] })[0] : null);
+        const pin = hit('pins-hit');
+        if (pin) return openPinCard(pin.properties, pin.geometry && pin.geometry.coordinates);
+        const road = hit('wr-hit');
+        if (road) return openRoadCard(road.properties);
+        closeCard();
       });
+      for (const layer of ['pins-hit', 'wr-hit']) {
+        map.on('mouseenter', layer, () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; });
+      }
       window.fieldMap = map; // `window.map` resolves to the #map div, not this
     }
     if (switching) map.fitBounds(bounds, { padding: 20, duration: 0 });
@@ -468,6 +532,7 @@
     renderRegions();
     renderChips();
     renderStatus();
+    revalidateSidecars(region); // background; no-op offline
     return true;
   }
 
@@ -603,7 +668,8 @@
     await cache.delete(metaUrl(region.id));
     await cache.delete(outlineUrl(region.id));
     await cache.delete(pinsUrl(region.id));
-    if (activeRegion?.id === region.id) { activeRegion = null; closePinCard(); }
+    await cache.delete(roadsUrl(region.id));
+    if (activeRegion?.id === region.id) { activeRegion = null; closeCard(); }
     refresh();
   }
 
@@ -643,18 +709,24 @@
     try { return JSON.parse(p); } catch { return null; }
   }
 
-  // Move the selection ring to a pin (or clear it) without a full style reload.
-  function setSelectedPin(id) {
-    selectedPinId = id == null ? null : id;
+  // Move the selection ring to a pin / the highlight to a road (or clear them)
+  // without a full style reload. One card at a time, so selecting one clears
+  // the other.
+  function setSelected(pinId, roadId) {
+    selectedPinId = pinId == null ? null : pinId;
+    selectedRoadId = roadId == null ? null : roadId;
     if (map && map.getLayer('pins-selected')) {
       map.setFilter('pins-selected', selectedFilter(selectedPinId));
+    }
+    if (map && map.getLayer('wr-selected')) {
+      map.setFilter('wr-selected', selectedRoadFilter(selectedRoadId));
     }
   }
 
   function openPinCard(props, coords) {
     const card = $('pin-card');
     if (!card) return;
-    setSelectedPin(props.id);
+    setSelected(props.id, null);
     const lon = Array.isArray(coords) ? +coords[0] : null;
     const lat = Array.isArray(coords) ? +coords[1] : null;
     const hasLL = Number.isFinite(lat) && Number.isFinite(lon);
@@ -714,7 +786,7 @@
 
     card.innerHTML = parts.join('');
     card.hidden = false;
-    card.querySelector('.pc-close').onclick = closePinCard;
+    card.querySelector('.pc-close').onclick = closeCard;
 
     if (hasLL) {
       const ll = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
@@ -743,10 +815,53 @@
     }
   }
 
-  function closePinCard() {
+  // A road's card: what the MVUM / OSM say about it, from the cached sidecar.
+  // It answers "can I drive this, and will I regret it" — it does not route.
+  const MUD_CLASS = { Firm: 'firm', Variable: 'variable', Soft: 'soft' };
+
+  function openRoadCard(props) {
+    const card = $('pin-card');
+    if (!card) return;
+    setSelected(null, props.osm_id);
+    const icon = props.style === 'forest' || props.style === 'special' ? '🌲' : '🛣';
+    const parts = [];
+    parts.push(`<div class="pc-head"><span class="pc-name">${icon} ${esc(props.label || 'Road')}</span>` +
+      `<button class="pc-close" title="Close">×</button></div>`);
+    const sub = [props.name, props.highway].filter(Boolean).map(esc);
+    if (sub.length) parts.push(`<div class="pc-meta">${sub.join('<span class="dot">·</span>')}</div>`);
+
+    const rows = [];
+    if (props.private) {
+      const raw = props.access ? ` <span class="pc-sub">(${esc(props.access)})</span>` : '';
+      rows.push(`<div class="pc-warn">🔒 Private — no public access${raw}</div>`);
+    }
+    if (props.mvum_class) {
+      rows.push(`<div class="pc-row"><span>MVUM</span><b>${esc(props.mvum_class)}` +
+        `${props.season ? ' · ' + esc(props.season) : ''}</b></div>`);
+    }
+    if (props.surface) rows.push(`<div class="pc-row"><span>Surface</span><b>${esc(props.surface)}</b></div>`);
+    if (props.mud_tier) {
+      rows.push(`<div class="pc-row"><span>Mud when wet</span>` +
+        `<b class="mud-${MUD_CLASS[props.mud_tier] || ''}">${esc(props.mud_tier)}</b></div>`);
+    }
+    if (props.rough) rows.push('<div class="pc-warn">⚠ Rough — high clearance</div>');
+    if (rows.length) parts.push(`<div class="pc-contribs">${rows.join('')}</div>`);
+
+    // The MVUM says a road is open to DRIVING; dispersed-camping corridors and
+    // dates live only on the MVUM itself.
+    parts.push(props.mvum_class
+      ? '<div class="pc-disc">Open to driving as shown on the MVUM — check the MVUM for camping corridors and dates.</div>'
+      : '<div class="pc-disc">Reference only — not a claim it’s open or legal to camp.</div>');
+
+    card.innerHTML = parts.join('');
+    card.hidden = false;
+    card.querySelector('.pc-close').onclick = closeCard;
+  }
+
+  function closeCard() {
     const card = $('pin-card');
     if (card) card.hidden = true;
-    setSelectedPin(null);
+    setSelected(null, null);
   }
 
   // --- rendering ------------------------------------------------------------
@@ -836,6 +951,10 @@
     const totalCached = cachedList.reduce((n, r) => n + r.size_bytes, 0);
 
     const rows = {
+      'Wander roads (active)': [
+        roadsData ? `${roadsData.features.length}${roadsData.truncated ? ' — truncated' : ''}` : 'none cached',
+        roadsData?.features?.length ? 'g' : 'w',
+      ],
       'Regions offline': [cachedIds.size ? `${cachedIds.size} (${fmtBytes(totalCached)})` : 'none', cachedIds.size ? 'g' : 'r'],
       'Installed to Home Screen': standalone ? ['yes', 'g'] : ['no — install for durable storage', 'w'],
       'Storage persisted()': persisted ? ['granted', 'g'] : ['not granted', 'w'],
@@ -860,8 +979,9 @@
   function renderChips() {
     // Same reason as renderRegions: this runs on every GPS tick and every
     // foreground, and its "Show map" button shouldn't be swapped out mid-tap.
+    const nRoads = roadsData?.features?.length || 0;
     const sig = JSON.stringify([
-      activeRegion?.id || null, activeSource, !!fix, !!fix && fixIsInsideRegion(),
+      activeRegion?.id || null, activeSource, !!fix, !!fix && fixIsInsideRegion(), nRoads,
     ]);
     if (sig === lastChipsSig) return;
     lastChipsSig = sig;
@@ -875,6 +995,15 @@
     src.className = 'chip' + (offline ? ' ok' : '');
     src.textContent = offline ? '📴 Offline copy' : '📡 Streaming — not downloaded';
     host.appendChild(src);
+
+    // Say when there are no tappable roads, so a bare basemap doesn't pass for
+    // "Wander checked and there's nothing here" — it means nothing was ingested.
+    const roads = document.createElement('div');
+    roads.className = 'chip' + (nRoads ? '' : ' warn');
+    roads.textContent = nRoads
+      ? `🛣 ${nRoads.toLocaleString()} roads${roadsData.truncated ? ' (partial)' : ''}`
+      : '🛣 No Wander roads here — basemap only';
+    host.appendChild(roads);
 
     if (fix && !fixIsInsideRegion()) {
       const warn = document.createElement('div');
