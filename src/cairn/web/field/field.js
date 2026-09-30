@@ -1372,12 +1372,82 @@
     if (!map && serverRegions.length && navigator.onLine) await showRegion(serverRegions[0]);
   }
 
-  $('toggle').onclick = () => {
-    const sheet = $('sheet');
-    const min = sheet.classList.toggle('min');
-    $('toggle').textContent = min ? 'show' : 'hide';
-    $('toggle').setAttribute('aria-expanded', String(!min));
+  // --- bottom sheet -----------------------------------------------------------
+  //
+  // Three resting heights — peek (just the title row: the map, nearly full
+  // screen), half, and full — plus wherever a drag holds it in between. Dragged
+  // by its top (handle + title row), never by its body, so scrolling the list
+  // and moving the sheet can't fight over the same finger. A fling goes to the
+  // next height in that direction; a slow drag settles on the nearest; a tap
+  // toggles peek ↔ half (it replaced the old "hide" button).
+  const sheet = $('sheet');
+  const sheetTop = $('sheet-top');
+  const sheetBody = $('sheet-body');
+  const SNAPS = ['peek', 'half', 'full'];
+  const FLING = 0.45; // px/ms — faster than this and it's a flick, not a placement
+  let snap = 'half';
+  let drag = null;
+
+  function snapHeights() {
+    const vh = window.innerHeight;
+    const padBottom = parseFloat(getComputedStyle(sheet).paddingBottom) || 0;
+    const peek = sheetTop.offsetHeight + padBottom;
+    // Never taller than what's in it: a short list shouldn't open onto blank.
+    const content = peek + sheetBody.offsetHeight;
+    const full = Math.max(peek, Math.min(vh * 0.9, content));
+    const half = Math.max(peek, Math.min(vh * 0.45, full));
+    return { peek, half, full };
+  }
+
+  function setSnap(name) {
+    snap = name;
+    sheet.dataset.snap = name;
+    sheet.style.height = snapHeights()[name] + 'px';
+    if (name === 'peek') sheet.scrollTop = 0;
+  }
+
+  sheetTop.addEventListener('pointerdown', (e) => {
+    if (e.button > 0 || e.target.closest('button')) return; // Update stays a button
+    drag = { y0: e.clientY, y: e.clientY, t: performance.now(), v: 0,
+      h0: sheet.getBoundingClientRect().height, moved: false };
+    sheetTop.setPointerCapture(e.pointerId);
+    sheet.classList.add('dragging');
+  });
+  sheetTop.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const now = performance.now();
+    drag.v = (e.clientY - drag.y) / Math.max(1, now - drag.t); // + = downward
+    drag.y = e.clientY;
+    drag.t = now;
+    const dy = e.clientY - drag.y0;
+    if (Math.abs(dy) > 5) drag.moved = true;
+    const { peek, full } = snapHeights();
+    sheet.style.height = Math.max(peek, Math.min(full, drag.h0 - dy)) + 'px';
+  });
+  const endDrag = () => {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    sheet.classList.remove('dragging');
+    if (!d.moved) return setSnap(snap === 'peek' ? 'half' : 'peek');
+    const hs = snapHeights();
+    const h = sheet.getBoundingClientRect().height;
+    const byHeight = SNAPS.slice().sort((a, b) => hs[a] - hs[b]);
+    let target;
+    if (d.v < -FLING) target = byHeight.find((s) => hs[s] > h + 1) || byHeight[byHeight.length - 1];
+    else if (d.v > FLING) target = byHeight.slice().reverse().find((s) => hs[s] < h - 1) || byHeight[0];
+    else target = byHeight.reduce((best, s) => (Math.abs(hs[s] - h) < Math.abs(hs[best] - h) ? s : best));
+    setSnap(target);
   };
+  sheetTop.addEventListener('pointerup', endDrag);
+  sheetTop.addEventListener('pointercancel', endDrag);
+  // Rotation, or the list growing/shrinking (regions arrive, Diagnostics opens):
+  // re-measure so the resting height still fits what's in the sheet.
+  window.addEventListener('resize', () => setSnap(snap));
+  if ('ResizeObserver' in window) {
+    new ResizeObserver(() => { if (!drag) setSnap(snap); }).observe(sheetBody);
+  }
+  setSnap(snap);
   $('diag-toggle').onclick = () => {
     const d = $('diag');
     d.hidden = !d.hidden;

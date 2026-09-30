@@ -422,3 +422,17 @@ def test_field_app_points_an_http_install_at_the_https_address():
     source = (_FIELD_DIR / "field.js").read_text()
     assert "location.protocol === 'http:'" in source
     assert "`https://${location.host}${location.pathname}`" in source
+
+
+def test_sheet_is_dragged_by_its_top_not_its_body():
+    """The sheet's body scrolls; only the pinned top moves the sheet. If the
+    drag zone lost touch-action:none, iOS would scroll the page instead of
+    delivering the pointer moves, and the sheet would stop following a finger."""
+    from cairn.api import _FIELD_DIR
+
+    css = (_FIELD_DIR / "field.css").read_text()
+    js = (_FIELD_DIR / "field.js").read_text()
+    top = css.split(".sheet-top {", 1)[1].split("}", 1)[0]
+    assert "touch-action: none" in top and "position: sticky" in top
+    assert "sheetTop.addEventListener('pointerdown'" in js
+    assert "e.target.closest('button')" in js  # the Update button stays a button

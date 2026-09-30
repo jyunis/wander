@@ -27,15 +27,19 @@
 <!-- A tapped saved pin's card (M3), built from its cached payload — no network. -->
 <div id="pin-card" hidden></div>
 
-<div id="sheet">
-  <div class="grip" id="grip">
-    <h1>🧭 Wander Field</h1>
-    <div class="grip-actions">
-      <button id="update-check" title="Check for a newer version of Wander Field">↻ Update</button>
-      <button id="toggle" aria-expanded="true">hide</button>
+<div id="sheet" data-snap="half">
+  <!-- Drag this (handle + title row) to move the sheet; tap it to peek/half. -->
+  <div id="sheet-top" class="sheet-top" role="button" aria-label="Drag to resize; tap to show or hide">
+    <div class="handle"></div>
+    <div class="grip">
+      <h1>🧭 Wander Field</h1>
+      <div class="grip-actions">
+        <button id="update-check" title="Check for a newer version of Wander Field">↻ Update</button>
+      </div>
     </div>
   </div>
 
+  <div id="sheet-body">
   <div id="status" class="warn">Checking…</div>
 
   <section>
@@ -73,6 +77,7 @@
   <p class="hint disclaimer">
     Reference only — does not establish legality. Check current rules before you camp.
   </p>
+  </div>
 </div>
 
 <script src="./vendor/maplibre-gl.js"></script>
