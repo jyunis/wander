@@ -28,20 +28,38 @@ html, body {
 
 /* --- sheet ---------------------------------------------------------------- */
 
+/* A real bottom sheet: its HEIGHT is set by field.js (peek / half / full, or
+   wherever a drag has it), anchored to the bottom, and its contents scroll
+   inside whatever height it has. Height, not transform, so the scrollable area
+   always ends at the bottom of the screen instead of running off it. */
 #sheet {
   position: fixed;
   left: 0; right: 0; bottom: 0;
   z-index: 5;
+  height: 45vh; /* until field.js measures the snap points */
   background: var(--panel);
   border-top: 1px solid var(--line);
-  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
-  max-height: 68vh;
+  border-radius: 14px 14px 0 0;
+  padding: 0 12px calc(10px + env(safe-area-inset-bottom));
   overflow: auto;
-  transition: transform .2s;
+  overscroll-behavior: contain;
+  transition: height .24s cubic-bezier(.2, .8, .2, 1);
 }
-#sheet.min { transform: translateY(calc(100% - 46px)); }
+#sheet.dragging { transition: none; }
 
-.grip { display: flex; align-items: center; justify-content: space-between; margin: -2px 0 8px; }
+/* The drag zone stays put while the body scrolls under it. touch-action:none
+   hands the gesture to our pointer handlers instead of the page scroll. */
+.sheet-top {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--panel);
+  padding-top: 7px;
+  touch-action: none;
+  cursor: grab;
+  user-select: none; -webkit-user-select: none;
+}
+.handle { width: 40px; height: 5px; border-radius: 3px; background: #3a4757; margin: 0 auto 7px; }
+
+.grip { display: flex; align-items: center; justify-content: space-between; padding-bottom: 8px; }
 .grip h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .02em; }
 /* Kept in the header so it's reachable without scrolling the sheet. */
 .grip-actions { display: flex; gap: 6px; }
