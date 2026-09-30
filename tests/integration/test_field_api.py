@@ -436,3 +436,19 @@ def test_sheet_is_dragged_by_its_top_not_its_body():
     assert "touch-action: none" in top and "position: sticky" in top
     assert "sheetTop.addEventListener('pointerdown'" in js
     assert "e.target.closest('button')" in js  # the Update button stays a button
+
+
+def test_sheet_swipes_like_an_ios_sheet():
+    """Fingers go through touch events decided on the FIRST move: iOS cancels a
+    pointer drag once it calls the gesture a scroll, and ignores preventDefault
+    after the first touchmove. Swipe-to-close from the body needs both."""
+    from cairn.api import _FIELD_DIR
+
+    js = (_FIELD_DIR / "field.js").read_text()
+    assert "sheet.addEventListener('touchmove'" in js
+    assert "}, { passive: false });" in js  # else preventDefault is a no-op
+    # Body drags only when the list can't use the gesture.
+    assert "(dy > 0 && atTop) || (dy < 0 && notFull)" in js
+    css = (_FIELD_DIR / "field.css").read_text()
+    handle = css.split(".handle {", 1)[1].split("}", 1)[0]
+    assert "rgba(231, 237, 243" in handle  # a light pill, visible on the dark panel

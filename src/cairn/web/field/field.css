@@ -57,7 +57,9 @@ html, body {
   cursor: grab;
   user-select: none; -webkit-user-select: none;
 }
-.handle { width: 40px; height: 5px; border-radius: 3px; background: #3a4757; margin: 0 auto 7px; }
+/* The grab handle: a light pill, as on any iOS sheet. It was #3a4757 on the
+   dark panel — there, but nobody could see it. */
+.handle { width: 44px; height: 5px; border-radius: 3px; background: rgba(231, 237, 243, .5); margin: 2px auto 8px; }
 
 .grip { display: flex; align-items: center; justify-content: space-between; padding-bottom: 8px; }
 .grip h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .02em; }
