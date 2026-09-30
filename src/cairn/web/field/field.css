@@ -46,6 +46,10 @@ html, body {
   transition: height .24s cubic-bezier(.2, .8, .2, 1);
 }
 #sheet.dragging { transition: none; }
+/* Minimized = just the handle strip above the home indicator. The title row and
+   the body come back the moment a drag starts (.dragging) or it snaps open. */
+#sheet[data-snap="peek"]:not(.dragging) .grip { display: none; }
+#sheet[data-snap="peek"]:not(.dragging) #sheet-body { visibility: hidden; }
 
 /* The drag zone stays put while the body scrolls under it. touch-action:none
    hands the gesture to our pointer handlers instead of the page scroll. */
