@@ -1124,6 +1124,10 @@
     const totalCached = cachedList.reduce((n, r) => n + r.size_bytes, 0);
 
     const rows = {
+      'Map source': [
+        !activeRegion ? '—' : activeSource === 'offline' ? 'offline copy' : 'streaming (not downloaded)',
+        activeSource === 'offline' ? 'g' : 'w',
+      ],
       Build: [
         updateAvailable() ? `${PAGE_BUILD} — server has ${serverBuild}` : (PAGE_BUILD || '?'),
         updateAvailable() ? 'w' : '',
@@ -1167,6 +1171,7 @@
       : null;
     const sig = JSON.stringify([
       activeRegion?.id || null, activeSource, !!fix, !!fix && fixIsInsideRegion(), nRoads,
+      !!roadsData?.truncated,
       landIndex.length, here && [here.tone, here.text, here.wild], updateAvailable(),
     ]);
     if (sig === lastChipsSig) return;
@@ -1186,20 +1191,24 @@
     }
     if (!activeRegion) return;
 
-    const src = document.createElement('div');
-    const offline = activeSource === 'offline';
-    src.className = 'chip' + (offline ? ' ok' : '');
-    src.textContent = offline ? '📴 Offline copy' : '📡 Streaming — not downloaded';
-    host.appendChild(src);
+    // Chips are for what's WRONG, not for reassurance: the map is the point.
+    // "Offline copy" and a road count said nothing actionable, so they live in
+    // Diagnostics; only their warning forms show here.
+    if (activeSource !== 'offline') {
+      const src = document.createElement('div');
+      src.className = 'chip warn';
+      src.textContent = '📡 Streaming — not downloaded';
+      host.appendChild(src);
+    }
 
-    // Say when there are no tappable roads, so a bare basemap doesn't pass for
-    // "Wander checked and there's nothing here" — it means nothing was ingested.
-    const roads = document.createElement('div');
-    roads.className = 'chip' + (nRoads ? '' : ' warn');
-    roads.textContent = nRoads
-      ? `🛣 ${nRoads.toLocaleString()} roads${roadsData.truncated ? ' (partial)' : ''}`
-      : '🛣 No Wander roads here — basemap only';
-    host.appendChild(roads);
+    // No tappable roads: a bare basemap must not pass for "Wander checked and
+    // there's nothing here" — it means nothing was ingested for this area.
+    if (!nRoads || roadsData?.truncated) {
+      const roads = document.createElement('div');
+      roads.className = 'chip warn';
+      roads.textContent = nRoads ? '🛣 Road list incomplete for this area' : '🛣 No Wander roads here — basemap only';
+      host.appendChild(roads);
+    }
 
     if (!landIndex.length) {
       const none = document.createElement('div');
