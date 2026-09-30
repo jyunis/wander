@@ -1172,7 +1172,7 @@
     const sig = JSON.stringify([
       activeRegion?.id || null, activeSource, !!fix, !!fix && fixIsInsideRegion(), nRoads,
       !!roadsData?.truncated,
-      landIndex.length, here && [here.tone, here.text, here.wild], updateAvailable(),
+      landIndex.length, here && [here.tone, here.text, here.wild], updateAvailable(), note,
     ]);
     if (sig === lastChipsSig) return;
     lastChipsSig = sig;
@@ -1222,16 +1222,36 @@
       host.appendChild(land);
     }
 
-    if (fix && !fixIsInsideRegion()) {
-      const warn = document.createElement('div');
-      warn.className = 'chip warn';
-      warn.innerHTML = "<span>Outside the downloaded area</span>";
-      const back = document.createElement('button');
-      back.textContent = 'Show map';
-      back.onclick = showActiveRegion;
-      warn.appendChild(back);
-      host.appendChild(warn);
+    if (note) {
+      const n = document.createElement('div');
+      n.className = 'chip warn';
+      n.textContent = note;
+      host.appendChild(n);
     }
+  }
+
+  // A chip that says something once and goes away — for answers to a tap,
+  // rather than a standing state (which is what the other chips are).
+  let note = null;
+  let noteTimer = null;
+  function flashNote(text, ms = 4500) {
+    note = text;
+    clearTimeout(noteTimer);
+    noteTimer = setTimeout(() => { note = null; renderChips(); }, ms);
+    renderChips();
+  }
+
+  // Kilometres from the GPS fix to the nearest edge of the downloaded area.
+  function kmToRegion() {
+    const [w, s, e, n] = activeRegion.bbox;
+    const lon = fix.coords.longitude;
+    const lat = fix.coords.latitude;
+    const lon2 = Math.min(Math.max(lon, w), e);
+    const lat2 = Math.min(Math.max(lat, s), n);
+    const rad = Math.PI / 180;
+    const a = Math.sin(((lat2 - lat) * rad) / 2) ** 2 +
+      Math.cos(lat * rad) * Math.cos(lat2 * rad) * Math.sin(((lon2 - lon) * rad) / 2) ** 2;
+    return 6371 * 2 * Math.asin(Math.sqrt(a));
   }
 
   function renderStatus() {
@@ -1537,6 +1557,14 @@
   };
   $('update-check').onclick = checkForUpdate;
   $('follow').onclick = () => {
+    // Outside the download there's no map to follow you across — flying there
+    // just shows the dark mask. Say where you are instead of going. (This
+    // replaced a standing "Outside the downloaded area" chip, which was on
+    // permanently whenever you weren't in the forest — i.e. at home.)
+    if (fix && activeRegion && !fixIsInsideRegion() && !following) {
+      const km = kmToRegion();
+      return flashNote(`📍 You're ${km < 10 ? km.toFixed(1) : Math.round(km)} km from ${activeRegion.name} — no map where you are`);
+    }
     if (fix) return setFollowing(!following);
     // No position yet — common on a desktop shortcut. Don't sit there dead:
     // explain, and actively ask for one so a granted permission starts the dot.
