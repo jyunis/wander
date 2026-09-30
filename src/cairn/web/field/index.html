@@ -30,7 +30,10 @@
 <div id="sheet">
   <div class="grip" id="grip">
     <h1>🧭 Wander Field</h1>
-    <button id="toggle" aria-expanded="true">hide</button>
+    <div class="grip-actions">
+      <button id="update-check" title="Check for a newer version of Wander Field">↻ Update</button>
+      <button id="toggle" aria-expanded="true">hide</button>
+    </div>
   </div>
 
   <div id="status" class="warn">Checking…</div>
@@ -64,7 +67,6 @@
 
   <section>
     <button id="diag-toggle" class="link" aria-expanded="false">▸ Diagnostics</button>
-    <button id="update-check" class="link">↻ Check for update</button>
     <div id="diag" hidden></div>
   </section>
 

@@ -43,6 +43,8 @@ html, body {
 
 .grip { display: flex; align-items: center; justify-content: space-between; margin: -2px 0 8px; }
 .grip h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .02em; }
+/* Kept in the header so it's reachable without scrolling the sheet. */
+.grip-actions { display: flex; gap: 6px; }
 .grip button {
   background: none; border: 1px solid var(--line); color: var(--muted);
   border-radius: 8px; padding: 4px 10px; font-size: 12px;
