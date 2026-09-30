@@ -1396,12 +1396,22 @@
   let snap = 'half';
   let drag = null; // an active drag: { y0, y, t, v, h0 }
 
+  const handle = sheet.querySelector('.handle');
+  const grip = sheet.querySelector('.grip');
+  let gripH = 36; // the title row's height, remembered while it's hidden at peek
+
   function snapHeights() {
     const vh = window.innerHeight;
     const padBottom = parseFloat(getComputedStyle(sheet).paddingBottom) || 0;
-    const peek = sheetTop.offsetHeight + padBottom;
+    // Minimized: the handle strip, plus the home-indicator inset (at least
+    // 10px on a phone without one). The sheet's padding is 10px + that inset.
+    const handleZone = handle.offsetTop + handle.offsetHeight + 6;
+    const peek = handleZone + Math.max(padBottom - 10, 10);
     // Never taller than what's in it: a short list shouldn't open onto blank.
-    const content = peek + sheetBody.offsetHeight;
+    // (Measured as if the title row were showing: it is whenever it's open.)
+    if (grip.offsetHeight) gripH = grip.offsetHeight;
+    const topH = handleZone + gripH;
+    const content = topH + padBottom + sheetBody.offsetHeight;
     const full = Math.max(peek, Math.min(vh * 0.9, content));
     const half = Math.max(peek, Math.min(vh * 0.45, full));
     return { peek, half, full };
