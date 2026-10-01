@@ -19,6 +19,9 @@ const SHELL_URLS = [
   './vendor/maplibre-gl.js',
   './vendor/maplibre-gl.css',
   './vendor/pmtiles.js',
+  // Road-label glyphs. URL-encoded exactly as MapLibre requests them
+  // ({fontstack} = "Noto Sans Medium"), so the cache match is exact.
+  './vendor/fonts/Noto%20Sans%20Medium/0-255.pbf',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/apple-touch-icon.png',

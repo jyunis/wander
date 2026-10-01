@@ -452,3 +452,19 @@ def test_sheet_swipes_like_an_ios_sheet():
     css = (_FIELD_DIR / "field.css").read_text()
     handle = css.split(".handle {", 1)[1].split("}", 1)[0]
     assert "rgba(231, 237, 243" in handle  # a light pill, visible on the dark panel
+
+
+def test_road_labels_draw_offline_from_vendored_glyphs(client):
+    """Labels need glyph PBFs; fetched from a CDN they'd vanish with no signal.
+    The style must point at the vendored font, the worker must precache it at
+    the exact URL MapLibre requests, and the server must serve it."""
+    from cairn.api import _FIELD_DIR
+
+    js = (_FIELD_DIR / "field.js").read_text()
+    assert "glyphs: GLYPHS" in js
+    assert "/field/vendor/fonts/{fontstack}/{range}.pbf" in js
+    assert "LABEL_FONT = ['Noto Sans Medium']" in js
+    sw = client.get("/field/sw.js").text
+    assert "'./vendor/fonts/Noto%20Sans%20Medium/0-255.pbf'" in sw
+    res = client.get("/field/vendor/fonts/Noto%20Sans%20Medium/0-255.pbf")
+    assert res.status_code == 200 and len(res.content) > 10_000

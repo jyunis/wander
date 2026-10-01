@@ -233,13 +233,22 @@
 
   // --- map ------------------------------------------------------------------
 
-  // A no-label style. GOTCHA: `glyphs`/`sprite` must be OMITTED, not set to
+  // GOTCHA: `glyphs`/`sprite` must be a real string or OMITTED, never
   // undefined — MapLibre's style validation rejects `undefined` ("string
   // expected"), aborts the style load, and never registers the source. The map
-  // then renders as a blank canvas with no error in the console.
+  // then renders as a blank canvas with no error in the console. (There's no
+  // sprite: the style draws no icons.)
+  //
+  // Glyphs are VENDORED (vendor/fonts, precached by sw.js) so road labels draw
+  // with no signal. Absolute URL: MapLibre doesn't resolve a relative one.
+  // Only Latin-1 ships; see vendor/fonts/README.md.
+  const GLYPHS = `${location.origin}/field/vendor/fonts/{fontstack}/{range}.pbf`;
+  const LABEL_FONT = ['Noto Sans Medium'];
+
   function styleFor(sourceKey, region) {
     return {
       version: 8,
+      glyphs: GLYPHS,
       sources: {
         pm: { type: 'vector', url: `pmtiles://${sourceKey}` },
         me: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
@@ -377,6 +386,28 @@
           layout: { 'line-cap': 'round' },
           paint: { 'line-color': ROAD_COLOR, 'line-width': ROAD_WIDTH, 'line-opacity': 0.9,
             'line-dasharray': [0.3, 2] },
+        },
+        // Road names along the line: "FR 413" for a forest road, else its
+        // name. Unnamed roads carry the label "Road" — never drawn. From z12,
+        // where they start to fit; collision keeps them from piling up.
+        {
+          id: 'wr-label', type: 'symbol', source: 'wroads', minzoom: 12,
+          filter: ['all', LINES(), ['!=', ['get', 'label'], 'Road']],
+          layout: {
+            'symbol-placement': 'line',
+            'text-field': ['get', 'label'],
+            'text-font': LABEL_FONT,
+            'text-size': ['interpolate', ['linear'], ['zoom'], 12, 10.5, 16, 13],
+            'symbol-spacing': 280,
+            'text-max-angle': 35,
+            'text-padding': 4,
+          },
+          paint: {
+            'text-color': ['match', ['get', 'style'], 'forest', '#8a3f00', 'special', '#5e2a75',
+              'private', '#8c2a20', '#3b3127'],
+            'text-halo-color': 'rgba(250, 248, 240, 0.92)',
+            'text-halo-width': 1.6,
+          },
         },
         // The tap target, like pins-hit: a thin road is a hard thing to hit.
         {
@@ -1524,7 +1555,7 @@
     if (e.pointerType !== 'mouse' || e.button > 0 || e.target.closest('button')) return;
     startDrag(e.clientY);
     drag.moved = false;
-    sheetTop.setPointerCapture(e.pointerId);
+    try { sheetTop.setPointerCapture(e.pointerId); } catch { /* drag still tracks without capture */ }
   });
   sheetTop.addEventListener('pointermove', (e) => {
     if (!drag || e.pointerType !== 'mouse') return;
