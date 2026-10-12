@@ -2,13 +2,12 @@
 
 Wander finds **dispersed campsites you can drive a teardrop trailer to**. You
 draw a box over public land, and it scores the terrain, water, and roads to
-rank candidate spots. Once you've picked a few, you download the area so you
+rank candidate spots. Once you've picked a few, you can download the area so you
 can navigate there with no cell signal.
 
 <img width="700" alt="Wander Screenshot" src="https://github.com/user-attachments/assets/db62eabb-03e2-4455-a55f-9ef4552f6daf" />
 
-
-It's a hobby project I use to plan real trips. It runs as one container on my
+It's a hobby project I've used to plan actual camping trips. It runs as one container on my
 home server and is only reachable from my LAN and tailnet.
 
 > **Physical suitability only.** Wander does **not** verify land ownership or
@@ -21,7 +20,7 @@ home server and is only reachable from my LAN and tailnet.
 
 ## How the scoring works
 
-1. **Candidates come from the land, not from a list.** OpenStreetMap roads and
+1. **Candidates come from the land.** OpenStreetMap roads and
    tracks are pulled from Overpass, then supplemented with USFS MVUM forest
    roads, which OSM often lacks. The candidates are points along those roads,
    with extra weight on spur ends ("drive to the end of the road").
@@ -30,7 +29,7 @@ home server and is only reachable from my LAN and tailnet.
    water, road character (forest-road class), road-network remoteness,
    solitude, and trail proximity. Each feature maps to `[0, 1]` through a shape
    defined as data (trapezoid, decay, linear), not code.
-3. **Weighted ranking (MCDA).** Weights and presets are versioned in the
+3. **Weighted ranking** Weights and presets are versioned in the
    database. Every run records which scoring-config version produced it, and a
    change adds a new version rather than editing an old one, so old rankings
    stay explainable.
@@ -40,13 +39,6 @@ home server and is only reachable from my LAN and tailnet.
 [`eval/`](eval/README.md) holds ground truth: 76 sites from a public campsite
 guide, plus sites I've verified in person. `validate.py` reports where the
 known-good sites land in a run's ranking.
-
-The first baseline was humbling: the guide's 5★ forest-road site ranked
-223/262, so the ranking had essentially no correlation with quality. That
-drove the road-character and spur-end features. After retuning, the first
-site I verified in person ranked #2 of its run, with the three heavily
-weighted features at their maximum. The eval README covers why one point
-confirms a model but can't retune it.
 
 ## Wander Field: plan online, navigate offline
 
@@ -95,13 +87,6 @@ docker build -t wander:dev .
 docker run --rm -v "$PWD/tests:/app/tests" -v "$PWD/scripts:/app/scripts" \
     -v "$PWD/eval:/app/eval" --entrypoint uv wander:dev run --extra dev pytest -q
 ```
-
-## How it's built
-
-I built Wander with Claude Code agents working in parallel worktrees, against
-written architecture and contract docs. The `TLC-n` and `FC-n` identifiers in
-comments point to those invariants and feature contracts. The commit history
-is kept as it happened.
 
 ## License
 
