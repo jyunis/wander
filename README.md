@@ -5,6 +5,9 @@ draw a box over public land, and it scores the terrain, water, and roads to
 rank candidate spots. Once you've picked a few, you download the area so you
 can navigate there with no cell signal.
 
+<img width="700" alt="Wander Screenshot" src="https://github.com/user-attachments/assets/db62eabb-03e2-4455-a55f-9ef4552f6daf" />
+
+
 It's a hobby project I use to plan real trips. It runs as one container on my
 home server and is only reachable from my LAN and tailnet.
 
