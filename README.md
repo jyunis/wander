@@ -1,4 +1,4 @@
-# Wander 🪨
+# Wander
 
 Wander finds dispersed campsites you can drive to (and some you can't). You
 draw a box over public land, and it scores the terrain, water, and roads to
