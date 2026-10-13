@@ -1,6 +1,6 @@
 # Wander 🪨
 
-Wander finds **dispersed campsites you can drive a teardrop trailer to**. You
+Wander finds dispersed campsites you can drive to (and some you can't). You
 draw a box over public land, and it scores the terrain, water, and roads to
 rank candidate spots. Once you've picked a few, you can download the area so you
 can navigate there with no cell signal.
