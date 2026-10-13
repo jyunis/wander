@@ -7,8 +7,7 @@ can navigate there with no cell signal.
 
 <img width="700" alt="Wander Screenshot" src="https://github.com/user-attachments/assets/db62eabb-03e2-4455-a55f-9ef4552f6daf" />
 
-It's a hobby project I've used to plan actual camping trips. It runs as one container on my
-home server and is only reachable from my LAN and tailnet.
+It's a hobby project I've used to plan actual camping trips.
 
 > **Physical suitability only.** Wander does **not** verify land ownership or
 > whether camping is legal. It never claims a site is legal to camp, so check
